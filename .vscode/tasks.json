@@ -1,0 +1,23 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Build cc784nir.bin",
+      "type": "shell",
+      "command": "sjasmplus",
+      "args": [
+        "--fullpath",
+        "--lst=cc784nir.lst",
+        "cc784nir.asm"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}/src/stock"
+      },
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": "$zx-macroasm-sjasmplus"
+    }
+  ]
+}
