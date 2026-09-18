@@ -5,7 +5,21 @@
 ;  See CC784NIR_annotated.asm for the listing with addresses/hex and full notes.
 ; ============================================================================
         DEVICE NONE
+
+; ORIGINAL=1 (default) reproduces the dump byte for byte.
+; ORIGINAL=0 applies the fixes for B1/B2/B5/B6/B7 (see CC784_firmware.md §10).
+; Every patch is size-neutral in place; spill-over code lives in the free ROM
+; above DEMO_MESSAGE so no existing address moves.
+;   sjasmplus -DORIGINAL=0 cc784nir.asm
+    IFNDEF ORIGINAL
+ORIGINAL             equ 1
+    ENDIF
+
+    IF ORIGINAL
         OUTPUT "cc784nir.bin"
+    ELSE
+        OUTPUT "cc784nir_patched.bin"
+    ENDIF
 
 FRAMEBUF             equ 0x4040
 FRAMEBUF_ROW1        equ 0x4096
@@ -120,11 +134,30 @@ PORT_ROW0            equ 0x48
 PORT_STROBE          equ 0x80
 PORT_IN              equ 0xc0
 
+; ---- Stack / message-store geometry -----------------------------------------
+; Stock: SP=0x403F leaves only 64 bytes before 0x4000, which is ROM - pushes
+; below it are swallowed and the matching pops read ROM back.  Worst observed
+; demand is ~120 bytes (B4 query chain ~40 + tick6_service with rx_consume ~40
+; + int/NMI frames), hence bug B1.  Patched: 256-byte stack at 0x5DF0..0x5EEF,
+; carved off the top of the message store so nothing else has to move.
+    IF ORIGINAL
+STACK_TOP            equ 0x403f
+STORE_TOP            equ 0x5eef      ; last usable message-store byte
+    ELSE
+STACK_TOP            equ 0x5ef0      ; first PUSH lands at 0x5EEE
+STORE_TOP            equ 0x5def
+    ENDIF
+; ir_init derives these three from STORE_TOP; keep them in step or the store
+; scans, the "100 KEYS LEFT" warning and the B4 '1' memory report disagree.
+STORE_WARN           equ STORE_TOP-100            ; 0x5E8B stock
+STORE_SIZE_INIT      equ STORE_TOP-MSG_STORE+1    ; 0x1B0E stock
+STORE_TEXT_FREE      equ STORE_SIZE_INIT-301      ; 0x19E1 stock (301 = framing)
+
         org 0x0000
 
 ; ---- RESET: cold start: set SP, run init routines, EI, jump to main loop
 RESET:
-        LD SP,0x403f                     ; 0000
+        LD SP,STACK_TOP                  ; 0000
         CALL init_vars                   ; 0003
         CALL ir_init                     ; 0006
         CALL ir_init2                    ; 0009
@@ -197,6 +230,11 @@ L_0092:
         RETI                             ; 0098
 
 ; ---- main_loop: Main loop: if PKT_READY process packet, else init/render/effect step, then loop.
+;      The PKT_READY test runs ONCE on entry - L_00a7 below never falls back
+;      to 0x009A. Re-entry only happens via fx_end_of_channel (0x0F5E) at the
+;      end of a display cycle, or the BA wait-for-key spin at 0x0A49. That is
+;      why NETCC sets PKT_FLAG=0x80: deferred packets wait for the current
+;      channel to finish, which can be many seconds.
 main_loop:
         LD A,(PKT_READY)                 ; 009a
         AND A                            ; 009d
@@ -207,6 +245,8 @@ main_loop:
 L_00a7:
         CALL render_next_char            ; 00a7
         CALL effect_step                 ; 00aa
+        ; LD A,(nn) sets no flags, so this JR tests effect_step's exit flags,
+        ; not RENDER_DONE. A is loaded for whatever runs after the branch.
         LD A,(RENDER_DONE)               ; 00ad
         JR nz,L_00a7                     ; 00b0
         XOR A                            ; 00b2
@@ -1012,9 +1052,21 @@ L_055f:
         CPL                              ; 05c0
         CP C                             ; 05c1
         JR z,L_05cc                      ; 05c2
+    IF ORIGINAL
+        ; B5/B7: defaults to address 0 (which the menu itself refuses to set),
+        ; and stores 0x00 in BOTH bytes - CPL(00)=FF != 00, so the pair never
+        ; validates and this path re-runs on every single boot.
         LD A,0                           ; 05c4
         LD (MY_ADDRESS),A                ; 05c6
         LD (MY_ADDRESS_INV),A            ; 05c9
+    ELSE
+        ; MY_ADDRESS_INV is MY_ADDRESS+1, so one 16-bit store does both:
+        ; L=0x01 -> address 1 (NETCC's default), H=0xFE -> its complement.
+        LD HL,0xfe01                     ; 05c4
+        LD (MY_ADDRESS),HL               ; 05c7
+        NOP                              ; 05ca
+        NOP                              ; 05cb
+    ENDIF
 
 L_05cc:
         LD HL,INIT_DATA                  ; 05cc
@@ -2351,7 +2403,7 @@ fx_end_of_channel:
         XOR A                            ; 0f57
         LD (PAUSE_FLAG),A                ; 0f58
         CALL demo_scroll                 ; 0f5b
-        LD SP,0x403f                     ; 0f5e
+        LD SP,STACK_TOP                  ; 0f5e
         JP main_loop                     ; 0f61
 
 ; ---- fx_wipe_back
@@ -3093,23 +3145,37 @@ L_141e:
         DJNZ L_141e                      ; 1421
         RET                              ; 1423
 
-; ---- ir_init
+; ---- ir_init: misnomer - this is the message-store init. Sets the store
+;      ceiling and its three derived constants, writes the 0xDA store
+;      terminator at the ceiling, then zeroes 0x5EF0..0x5FFF (PKT_READY,
+;      PKT_BUF and the parser state, i.e. the whole top page of RAM).
+;      0x43DE = ceiling-100, the "100 KEYS LEFT" trip point (used at 0x2601).
+;      0x43DC = free text bytes, the scan bound used by init_vars2 at 0x0481.
 ir_init:
         LD A,0xff                        ; 1424
         LD (RX_MSGFLAG),A                ; 1426
-        LD HL,0x5eef                     ; 1429
+        LD HL,STORE_TOP                  ; 1429
         LD (STORE_LIMIT),HL              ; 142c
         LD (STORE_END),HL                ; 142f
-        LD HL,0x5e8b                     ; 1432
+        LD HL,STORE_WARN                 ; 1432
         LD (0x43de),HL                   ; 1435
-        LD HL,0x19e1                     ; 1438
+        LD HL,STORE_TEXT_FREE            ; 1438
         LD (0x43dc),HL                   ; 143b
-        LD HL,0x1b0e                     ; 143e
+        LD HL,STORE_SIZE_INIT            ; 143e
         LD (STORE_SIZE),HL               ; 1441
+    IF ORIGINAL
         LD HL,0x5eef                     ; 1444
         LD (HL),0xda                     ; 1447
         INC HL                           ; 1449
         LD BC,0x0110                     ; 144a
+    ELSE
+        ; P1: the terminator no longer sits one below the area to be zeroed,
+        ; so set HL/BC for the clear and write the 0xDA out of line. Same
+        ; 9 bytes, so L_144d stays at 0x144D.
+        LD BC,0x0110                     ; 1444
+        LD HL,0x5ef0                     ; 1447
+        CALL patch_store_term            ; 144a
+    ENDIF
 
 L_144d:
         LD (HL),0                        ; 144d
@@ -4031,7 +4097,7 @@ L_19c2:
 
 ; ---- menu_enter: Enter the on-sign editor/menu (MENU_ACTIVE=FF), SP reset
 menu_enter:
-        LD SP,0x403f                     ; 19ca
+        LD SP,STACK_TOP                  ; 19ca
         LD A,0xff                        ; 19cd
         LD (MENU_ACTIVE),A               ; 19cf
         EI                               ; 19d2
@@ -4064,7 +4130,7 @@ key_handler:
         LD (0x43d7),A                    ; 1a0a
 
 L_1a0d:
-        LD SP,0x403f                     ; 1a0d
+        LD SP,STACK_TOP                  ; 1a0d
         LD A,0xff                        ; 1a10
         LD (MENU_ACTIVE),A               ; 1a12
         EI                               ; 1a15
@@ -4470,7 +4536,7 @@ L_1cea:
         LD (MENU_FLAG),A                 ; 1ceb
 
 L_1cee:
-        LD SP,0x403f                     ; 1cee
+        LD SP,STACK_TOP                  ; 1cee
         XOR A                            ; 1cf1
         LD (MENU_ACTIVE),A               ; 1cf2
         LD (0x433b),A                    ; 1cf5
@@ -6412,7 +6478,7 @@ pkt_process:
         AND 3                            ; 2a6b
         JR nz,pkt_process                ; 2a6d
         DI                               ; 2a6f
-        LD SP,0x403f                     ; 2a70
+        LD SP,STACK_TOP                  ; 2a70
         LD A,(CTRL_LATCH_SHADOW)         ; 2a73
         OR 15                            ; 2a76
         LD (CTRL_LATCH_SHADOW),A         ; 2a78
@@ -6506,7 +6572,15 @@ pkt_insert_text:
         CP 3                             ; 2b1a
         JR nz,L_2b22                     ; 2b1c
         DEC HL                           ; 2b1e
+    IF ORIGINAL
+        ; B6: assembler typo - opcode 0x32 (LD (nn),A) where 0x22 (LD (nn),HL)
+        ; was meant. A is 3 here (the CP above matched), so instead of backing
+        ; the cursor off the 0x03 terminator it stamps 0x03 into the cursor's
+        ; low byte and the next insert lands at a random spot in the channel.
         LD (STORE_CURSOR),A              ; 2b1f
+    ELSE
+        LD (STORE_CURSOR),HL             ; 2b1f
+    ENDIF
 
 L_2b22:
         LD HL,(STORE_END)                ; 2b22
@@ -6521,7 +6595,16 @@ L_2b22:
         LD HL,(STORE_TMP)                ; 2b34
         LD (STORE_END),HL                ; 2b37
         CALL store_make_room             ; 2b3a
+    IF ORIGINAL
+        ; B7: the tail is shifted from STORE_LIMIT rather than STORE_END, so
+        ; every inserted byte moves the whole remaining store (~6.9 KB) with
+        ; interrupts off instead of just the live text. STORE_END was bumped
+        ; at 0x2B37, so it is already the new end-of-store and everything
+        ; above it is dead space.
         LD HL,(STORE_LIMIT)              ; 2b3d
+    ELSE
+        LD HL,(STORE_END)                ; 2b3d
+    ENDIF
         LD (MOVE_DST),HL                 ; 2b40
         DEC HL                           ; 2b43
         LD (MOVE_SRC),HL                 ; 2b44
@@ -6547,7 +6630,7 @@ L_2b61:
 
 ; ---- pkt_process_done: clear PKT_READY/PKT_STATE, re-init and return to main loop
 pkt_process_done:
-        LD SP,0x403f                     ; 2b68
+        LD SP,STACK_TOP                  ; 2b68
         XOR A                            ; 2b6b
         LD (PKT_READY),A                 ; 2b6c
         LD (PKT_STATE),A                 ; 2b6f
@@ -6555,7 +6638,14 @@ pkt_process_done:
         LD (0x433b),A                    ; 2b75
         LD HL,SEQ_LIST                   ; 2b78
         LD (SEQ_PTR),HL                  ; 2b7b
+    IF ORIGINAL
         CALL sub_2b84                    ; 2b7e
+    ELSE
+        ; B2: cmd_17_set_time clears CLK_RUN before fetching its five argument
+        ; bytes; a short packet exits here through pkt_next_byte and the clock
+        ; never restarts. Restoring it on the way out covers every early exit.
+        CALL patch_clk_restore           ; 2b7e
+    ENDIF
         JP L_000f                        ; 2b81
 
 sub_2b84:
@@ -6613,6 +6703,10 @@ cmd_0E_delete_text:
         JP L_2b61                        ; 2bd8
 
 ; ---- cmd_B4_query: B4 n: '0' rom id, '1' memory, '2' nop, '3' dump
+;      B1: the EI below plus the query -> tx_send_frame -> tx_send_byte ->
+;      tx_try_queue chain (~40 bytes deep) leaves too little of the stock
+;      64-byte stack for an interrupt frame + tick6_service + rx_consume.
+;      Fixed by the 256-byte stack when ORIGINAL=0; nothing here changes.
 cmd_B4_query:
         CALL clear_framebuf              ; 2bdb
         CALL sub_2b84                    ; 2bde
@@ -6664,7 +6758,13 @@ cmd_16_back_idx:
         LD (CUR_CHAR),A                  ; 2c2d
         JP pkt_insert_text               ; 2c30
 
-; ---- cmd_17_set_time: 17 h h m m a: 4 ASCII digits -> CLK_H10..CLK_M1, a=Y/y -> AM else PM. (Bug: stops clock if packet ends early)
+; ---- cmd_17_set_time: 17 h h m m a: 4 ASCII digits -> CLK_H10..CLK_M1, a=Y/y -> AM else PM.
+;      B2: CLK_RUN is cleared here but restored only at 0x2C59, and every
+;      pkt_next_byte below can jump straight to pkt_process_done on a short
+;      packet - NETCC's "status query" 17 32 does exactly that and stops the
+;      clock. Fixed in pkt_process_done when ORIGINAL=0.
+;      Unlike the menu's time editor (0x1D14..0x1D8A) this path does not reset
+;      NMI_COUNT, so the new time starts up to one second out of phase.
 cmd_17_set_time:
         XOR A                            ; 2c33
         LD (CLK_RUN),A                   ; 2c34
@@ -7212,5 +7312,32 @@ DEMO_MESSAGE:
         db ". CUSTOM GRAPHICS ",0xa2,0xa3,0xa5,0xaa,0xab,"..... OR YOUR OWN LOGO..... "
         db 0xbe,"TINY PRICE          ",0x10,"LARGE  IMPACT!!",0x03,0xdb,"CURRENT TEST  "
         db 0x10,0x17,0x17,0x17,0x17,0x17,0x17,0x17," ",0x03   ; 3c1f
+
+; ============================================================================
+;  Patch spill-over. 0x3C21..0x7FFF is 0xFF in the dump; code placed here
+;  cannot shift any stock address. Only assembled when ORIGINAL=0.
+; ============================================================================
+    IF !ORIGINAL
+
+; ---- patch_store_term: write the 0xDA store terminator at STORE_LIMIT.
+;      Called from ir_init, which needs HL/BC left pointing at the RAM page
+;      it is about to clear.
+patch_store_term:
+        PUSH HL
+        LD HL,(STORE_LIMIT)
+        LD (HL),0xda
+        POP HL
+        RET
+
+; ---- patch_clk_restore: restart the clock, then tail into sub_2b84.
+;      Replaces the CALL sub_2b84 in pkt_process_done so a packet that ends
+;      mid-cmd_17 cannot leave CLK_RUN at 0. The menu's own time editor does
+;      the same thing at 0x1D8A.
+patch_clk_restore:
+        LD A,0xff
+        LD (CLK_RUN),A
+        JP sub_2b84
+
+    ENDIF
 
         ds 0x8000-$,0xff        ; unused upper half of the 27C256
