@@ -2,7 +2,8 @@
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "Build cc784nir.bin",
+      "label": "Build stock ROM",
+      "detail": "Reassembles the untouched reconstruction. Must stay byte-identical to the EPROM dump.",
       "type": "shell",
       "command": "sjasmplus",
       "args": [
@@ -13,6 +14,37 @@
       "options": {
         "cwd": "${workspaceFolder}/src/stock"
       },
+      "group": "build",
+      "problemMatcher": "$zx-macroasm-sjasmplus"
+    },
+    {
+      "label": "Verify stock ROM is byte-identical",
+      "detail": "Regression test for any edit to src/stock: the image must still md5 to c021af146a50b93a22d13535201b7eaa.",
+      "type": "shell",
+      "command": "test \"$(md5 -q cc784nir.bin)\" = c021af146a50b93a22d13535201b7eaa && echo 'OK: byte-identical to the dump' || { echo 'FAIL: stock ROM no longer matches the dump'; exit 1; }",
+      "options": {
+        "cwd": "${workspaceFolder}/src/stock"
+      },
+      "dependsOn": "Build stock ROM",
+      "group": "test",
+      "presentation": {
+        "reveal": "always",
+        "clear": true
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Build patched ROM",
+      "type": "shell",
+      "command": "sjasmplus",
+      "args": [
+        "--fullpath",
+        "--lst=cc784nir_patched.lst",
+        "cc784nir.asm"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}/src/patched"
+      },
       "group": {
         "kind": "build",
         "isDefault": true
@@ -20,20 +52,19 @@
       "problemMatcher": "$zx-macroasm-sjasmplus"
     },
     {
-      "label": "Build cc784nir_patched.bin",
+      "label": "Diff stock vs patched source",
+      "detail": "The diff is the changelog: everything outside the patches is kept identical on purpose.",
       "type": "shell",
-      "command": "sjasmplus",
-      "args": [
-        "--fullpath",
-        "-DORIGINAL=0",
-        "--lst=cc784nir_patched.lst",
-        "cc784nir.asm"
-      ],
+      "command": "diff -u stock/cc784nir.asm patched/cc784nir.asm; true",
       "options": {
         "cwd": "${workspaceFolder}/src"
       },
-      "group": "build",
-      "problemMatcher": "$zx-macroasm-sjasmplus"
+      "group": "test",
+      "presentation": {
+        "reveal": "always",
+        "clear": true
+      },
+      "problemMatcher": []
     },
     {
       "label": "M27C256 -- verify erased",
@@ -46,7 +77,7 @@
         "-b"
       ],
       "options": {
-        "cwd": "${workspaceFolder}/src"
+        "cwd": "${workspaceFolder}/src/patched"
       },
       "presentation": {
         "reveal": "always",
@@ -66,9 +97,9 @@
         "cc784nir_patched.bin"
       ],
       "options": {
-        "cwd": "${workspaceFolder}/src"
+        "cwd": "${workspaceFolder}/src/patched"
       },
-      "dependsOn": "Build cc784nir_patched.bin",
+      "dependsOn": "Build patched ROM",
       "presentation": {
         "reveal": "always",
         "clear": true
@@ -88,9 +119,9 @@
         "cc784nir_patched.bin"
       ],
       "options": {
-        "cwd": "${workspaceFolder}/src"
+        "cwd": "${workspaceFolder}/src/patched"
       },
-      "dependsOn": "Build cc784nir_patched.bin",
+      "dependsOn": "Build patched ROM",
       "presentation": {
         "reveal": "always",
         "clear": true

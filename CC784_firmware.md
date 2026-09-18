@@ -4,7 +4,8 @@ Color Cells CC784NIR LED message display. Firmware in ST M27C256B (32 KB, code
 in `0x0000–0x3C20`, rest `0xFF`). Hand-written Z80 assembly, ROM ID string
 `78409O1702930205` (read as: model 784, rev 09, 17-02-93, build 0205).
 
-Companion files: `cc784nir.asm` (reassembles byte-identical with sjasmplus),
+Companion files: `src/stock/cc784nir.asm` (reassembles byte-identical with
+sjasmplus) and `src/patched/cc784nir.asm` (the §11 fixes),
 `CC784NIR_annotated.asm` (listing with addresses/hex and comments),
 `CC784_protocol.md` (wire protocol), `cc784.py` / `cc784_esphome.py` (tools),
 `CC784_hardware.md` (board).
@@ -293,16 +294,16 @@ simulating both loops: the resulting store is byte-identical.
 
 ## 11. Patches
 
-Applied in `src/cc784nir.asm` behind an `ORIGINAL` flag. `ORIGINAL=1` (the
-default) still assembles byte-identical to the dump; `ORIGINAL=0` applies the
-fixes. Every patch is size-neutral in place and the two spill-over subroutines
-live at `3C21`, in the `0xFF` fill above `DEMO_MESSAGE`, so no stock address
-moves. 55 bytes differ between the two images.
+Applied in `src/patched/cc784nir.asm`. `src/stock/cc784nir.asm` is the
+untouched reconstruction and is frozen — annotations may be added, code must
+not change. Every patch is size-neutral in place and the two spill-over
+subroutines live at `3C21`, in the `0xFF` fill above `DEMO_MESSAGE`, so no
+stock address moves and the per-line address comments stay valid. 55 bytes
+differ between the two images.
 
-```
-sjasmplus cc784nir.asm                 # -> cc784nir.bin          (stock)
-sjasmplus -DORIGINAL=0 cc784nir.asm    # -> cc784nir_patched.bin  (fixed)
-```
+`diff src/stock/cc784nir.asm src/patched/cc784nir.asm` is the authoritative
+changelog: everything outside the patches is kept identical on purpose, so any
+other difference is drift and should be reconciled.
 
 ### Applied
 
@@ -377,14 +378,18 @@ sjasmplus -DORIGINAL=0 cc784nir.asm    # -> cc784nir_patched.bin  (fixed)
 
 ```
 git clone --recurse-submodules https://github.com/z00m128/sjasmplus && make
-sjasmplus cc784nir.asm                # -> cc784nir.bin, byte-identical to the dump
-sjasmplus -DORIGINAL=0 cc784nir.asm   # -> cc784nir_patched.bin, §11 fixes applied
+cd src/stock   && sjasmplus cc784nir.asm   # -> cc784nir.bin
+cd src/patched && sjasmplus cc784nir.asm   # -> cc784nir_patched.bin
 ```
-`cc784nir.bin` must stay at md5 `c021af146a50b93a22d13535201b7eaa`; that is the
-regression test for every edit to the source.
+Or the `Build stock ROM` / `Build patched ROM` tasks. `src/stock/cc784nir.bin`
+must stay at md5 `c021af146a50b93a22d13535201b7eaa` — that is the regression
+test for every edit to the stock source, and the `Verify stock ROM is
+byte-identical` task asserts it.
+
 For a W27C512 in the 27C256 socket, program the 32 KB image twice
 (`cat cc784nir.bin cc784nir.bin > w27c512.bin`): the board ties pin 1 (A15)
-high so the upper half is what runs.
+high so the upper half is what runs. An AT28C256 needs two socket bodges
+instead — see `CC784_hardware.md` §2 and `AT28C256.md`.
 
 ## 13. What is still unknown in the firmware
 

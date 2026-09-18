@@ -64,5 +64,5 @@ venv-*/
 !.vscode/tasks.json
 
 # Assembler output
-src/*.bin
+src/**/*.bin
 *.lst
