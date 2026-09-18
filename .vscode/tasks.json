@@ -18,6 +18,84 @@
         "isDefault": true
       },
       "problemMatcher": "$zx-macroasm-sjasmplus"
+    },
+    {
+      "label": "Build cc784nir_patched.bin",
+      "type": "shell",
+      "command": "sjasmplus",
+      "args": [
+        "--fullpath",
+        "-DORIGINAL=0",
+        "--lst=cc784nir_patched.lst",
+        "cc784nir.asm"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}/src"
+      },
+      "group": "build",
+      "problemMatcher": "$zx-macroasm-sjasmplus"
+    },
+    {
+      "label": "M27C256 -- verify erased",
+      "detail": "Blank check. Must pass before programming; if it fails, back under the UV lamp for another 15 min.",
+      "type": "shell",
+      "command": "minipro",
+      "args": [
+        "-p",
+        "M27C256B@DIP28",
+        "-b"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}/src"
+      },
+      "presentation": {
+        "reveal": "always",
+        "clear": true
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "M27C256 -- program",
+      "detail": "Writes the patched 32 K image and verifies. Requires a UV-erased chip.",
+      "type": "shell",
+      "command": "minipro",
+      "args": [
+        "-p",
+        "M27C256B@DIP28",
+        "-w",
+        "cc784nir_patched.bin"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}/src"
+      },
+      "dependsOn": "Build cc784nir_patched.bin",
+      "presentation": {
+        "reveal": "always",
+        "clear": true
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "AT28C256-15PU -- program",
+      "detail": "Same image as the M27C256; the two socket bodges make the part electrically a 27C256. -u clears software data protection first. NOTE: pin 27 (/WE) to VCC and pin 1 (A14) to Z80 pin 4 before this chip goes in the sign.",
+      "type": "shell",
+      "command": "minipro",
+      "args": [
+        "-p",
+        "AT28C256",
+        "-u",
+        "-w",
+        "cc784nir_patched.bin"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}/src"
+      },
+      "dependsOn": "Build cc784nir_patched.bin",
+      "presentation": {
+        "reveal": "always",
+        "clear": true
+      },
+      "problemMatcher": []
     }
   ]
 }

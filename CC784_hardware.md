@@ -41,17 +41,39 @@ Confidence key as in the firmware notes: **[H]** verified, **[M]** inferred,
 | — | barrel jack | 9 V **AC** in (supplied PSU: 9 V AC, 4.2 A transformer) |
 | — | piezo/speaker near SK2 | beeper (`07` command) |
 
-## 2. Memory and I/O decoding [M]
+## 2. Memory and I/O decoding [M, except the ROM socket which is H]
 
 Consistent with the firmware and an LS139:
 - Memory: A15/A14 → `00` ROM (`0000–3FFF`), `01` RAM (`4000–5FFF`), `10`
-  control latch write at `8000`. Note the ROM select stops at `3FFF`, so a
-  28C256/28C64-style substitute with `/WE` on pin 27 would see A14 low and
-  self-corrupt — use a **W27C512** (27C512 pinout, pin 1 = A15 tied high →
-  program both halves) instead.
+  control latch write at `8000`.
 - I/O: A7/A6 → `40` (column clock), `80` (strobe), `C0` (input mux read);
   `48–4F` = `40` group with A3 set, row in A0–A2, used by `OTIR` for the 86
   column bytes of one row.
+
+### ROM socket wiring [H — traced on the board]
+
+- **Pins 1 (VPP) and 28 (VCC) are both on the 5 V net**, joined by a visible
+  trace. Nothing on the board can drive VPP, so any substitute that expects an
+  address line on pin 1 has to have that pin lifted.
+- **A14 reaches the EPROM on pin 27 through a factory bodge wire from Z80
+  pin 4.** The PCB does not route it. That fits a layout originally cut for a
+  2764/27128, where pin 27 is `/PGM` and gets tied high; fitting a 27C256
+  needed a real A14, hence the wire. ROM `/CE` is only asserted when A14 = 0,
+  so the chip is permanently confined to its lower 16 K — which is why the
+  upper half of the dump is `0xFF`.
+
+Substitutes, given the above:
+- **W27C512** — pin 1 is A15 and sits on 5 V, so the upper half runs; program
+  the 32 K image twice.
+- **AT28C256 / 28C64** — pin 1 is A14 and pin 27 is `/WE`, i.e. both swapped
+  relative to the 27C256. Straight substitution is destructive: board A14 lands
+  on `/WE` and goes low on every ROM fetch. Two bodges make it exact:
+  lift **pin 27** and jumper it to VCC (writes permanently disabled), and lift
+  **pin 1** and run it to A14 (Z80 pin 4). With both done the part is
+  electrically a 27C256 and takes the ordinary 32 K image unchanged — `/CE`
+  only asserts when A14 = 0, so nothing above the chip's own `3FFF` is ever
+  addressed. Skipping the pin 1 bodge leaves A14 stuck high on the VPP net;
+  that needs the low 16 K duplicated into both halves instead.
 
 ## 3. Timebase [H for the arithmetic, M for the wiring]
 
@@ -126,11 +148,15 @@ pack off-board; CR2032 **with a series diode** (do not charge a lithium
 primary); or a 0.47–1 F 5.5 V supercap in the existing charge path.
 Without a battery the sign boots with address 0 and an empty store.
 
-## 8. Factory bodge wires [L]
+## 8. Factory bodge wires [L, except as noted]
 
 Several (yellow/green/white on top, red/white/black underneath), original.
-Endpoints not yet recorded. One white wire lands near the DB9 area. Likely a
-decoding or timing fix absorbed in a later PCB revision.
+One white wire lands near the DB9 area. Likely a decoding or timing fix
+absorbed in a later PCB revision.
+
+Identified so far:
+- **Z80 pin 4 (A14) → ROM socket pin 27 (A14)** [H] — see §2. Consistent with
+  a layout cut for a 2764/27128 and later populated with a 27C256.
 
 ## 9. Open questions (ordered by value), with how to answer each
 
