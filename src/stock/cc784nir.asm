@@ -1122,9 +1122,10 @@ L_05cc:
         RET
 
 ; ---- INIT_DATA: four RAM images that init_vars LDIRs into place, annotated
-;      with the address each entry lands on. dw entries holding a ROM address
-;      must stay symbolic - moving code before them would silently break the
-;      serial engine. +12..+17 and +72 are copied nowhere: dead bytes.
+;      with the address each entry lands on. The dw entries naming a ROM
+;      label hold an address as DATA - they must stay symbolic, or moving
+;      code before them silently breaks the serial engine with no build
+;      error. +12..+17 and +72 are copied nowhere: dead bytes.
 INIT_DATA:
 ; -- +00 -> 4198 (FB_COLPTR), 10 bytes
         dw FRAMEBUF_ROW1      ; 4198 FB_COLPTR
@@ -1207,13 +1208,13 @@ INIT_DATA:
         db 0x00               ; 4253 
         db 0x00               ; 4254 
         db 0x00               ; 4255 RX_COUNT
-        dw 0x4a00             ; 4256 RX_TIMING_PTR
-        db 0x16               ; 4258 
-        dw 0x164a             ; 4259 
+        db 0x00               ; 4256 RX_TIMING_PTR
+        dw RX_TIMING          ; +69 -> 4257
+        dw RX_TIMING          ; +6b -> 4259
         db 0x00               ; 425b 
-        dw 0x2b00             ; 425c RX_STATE
-        dw 0x2b16             ; 425e VAR_425E
-        db 0x16   ; +72 dead
+        db 0x00               ; 425c RX_STATE
+        dw rx_st_wait_start   ; +6f -> 425d
+        dw rx_st_wait_start   ; +71 -> 425f
 ; -- +73 -> 4336 (VAR_4336), 36 bytes
         db 0x00               ; 4336 VAR_4336
         db 0x00               ; 4337 SHIFT_STATE
@@ -1233,14 +1234,14 @@ INIT_DATA:
         db 0x00               ; 434b TX_TICKS
         db 0x00               ; 434c TX_SHIFT
         db 0x00               ; 434d TX_STATUS
-        dw 0x1654             ; 434e TX_TIMING_PTR
+        dw TX_TIMING          ; +8b -> 434e
         db 0x00               ; 4350 
         db 0x01               ; 4351 
         db 0x00               ; 4352 
         db 0x00               ; 4353 
         db 0x00               ; 4354 
         db 0x00               ; 4355 
-        dw 0x1654             ; 4356 
+        dw TX_TIMING          ; +93 -> 4356
         db 0xff               ; 4358 VAR_4358
         db 0xff               ; 4359 DISP_ENABLE
 

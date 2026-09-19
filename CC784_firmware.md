@@ -360,10 +360,18 @@ simulating both loops: the resulting store is byte-identical.
 
 Applied in `src/patched/cc784nir.asm`. `src/stock/cc784nir.asm` is the
 untouched reconstruction and is frozen — annotations may be added, code must
-not change. Every patch is size-neutral in place and the two spill-over
-subroutines live at `3C21`, in the `0xFF` fill above `DEMO_MESSAGE`, so no
-stock address moves and the per-line address comments stay valid. 55 bytes
-differ between the two images.
+not change.
+
+The patches were originally squeezed into size-neutral slots, with two
+spill-over subroutines parked at `3C21` in the `0xFF` fill, so that no stock
+address moved. That constraint is gone: every ROM address referenced from code
+or data is now a label or label-relative expression (§1), so the assembler
+recomputes everything and code may be inserted freely. Both patches are
+therefore written inline, which removed the two helpers along with their
+`CALL`/`RET` and register saves. Patched addresses now differ from stock above
+`144A` — that is expected and harmless.
+
+Patched image md5 `2aa8640c33a4145e18f2a9f50d1e5c0a`.
 
 `diff src/stock/cc784nir.asm src/patched/cc784nir.asm` is the authoritative
 changelog: everything outside the patches is kept identical on purpose, so any
