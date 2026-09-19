@@ -10,6 +10,11 @@ sjasmplus) and `src/patched/cc784nir.asm` (the §11 fixes),
 `CC784_protocol.md` (wire protocol), `cc784.py` / `cc784_esphome.py` (tools),
 `CC784_hardware.md` (board).
 
+**Branches:** `main` carries the untouched reconstruction in `src/stock/` only.
+`src/patched/`, the burning tasks and everything in §11 live on `wip`. These
+notes are kept identical on both branches, so findings never diverge — only the
+trees differ.
+
 Confidence key: **[H]** traced instruction by instruction and/or verified on
 hardware; **[M]** structure understood, details inferred; **[L]** hypothesis.
 
