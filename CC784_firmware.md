@@ -38,7 +38,9 @@ I/O ports: `IN C0` (input mux), `OUT 40` (column shift clock), `OUT 48–4F`
 
 Data blocks in ROM: `INIT_DATA 0601`, `RX_TIMING 164A`, `TX_TIMING 1654`,
 `DEC_TABLE 18E8`, `IR_KEY_TABLE 2427`, `FG_IDX_TABLE 2718`, `BG_IDX_TABLE 2722`,
-`IGNORE_TABLE 2D57`, `GLYPH_PTR_TABLE 2D61`, `MENU_STRINGS 2FF3`, `FONT 3135`
+`IGNORE_TABLE 2D57`, `ATTR_LABEL_TABLE 2D62` (editor label tables and their
+strings run to `2FF2`; previously mislabelled `GLYPH_PTR_TABLE` — it holds no
+glyph pointers and was never referenced), `MENU_STRINGS 2FF3`, `FONT 3135`
 (8 bytes/glyph: 7 columns + width), `CHARSET_* 382D–396E`, `DEMO_MESSAGE 396F`.
 
 ## 2. Execution architecture [H]
@@ -174,13 +176,44 @@ D0 D0 <text ch 0> 03   D0 D1 <text ch 1> 03  …  D9 D9 <text ch 99> 03   DA
   `03`) must follow `09 dd` before any text. NETCC always sends `0E`.
 - Typo at `2B1F` confirmed — see bug B6.
 
-## 7. Rendering [M]
+## 7. Rendering [M for behaviour, **H for the names**]
+
+### Attribute bytes — the sign's own names [H]
+
+`ATTR_LABEL_TABLE` (`2D62`, indexed `+2*attr`) and `ATTR_LABEL_TABLE_B0`
+(`2EC2`, indexed `+2*(attr−B0)`) map each attribute byte to the string the
+on-sign editor displays for it. These are the firmware's own words, not
+inferred, which settles several earlier guesses:
+
+| Byte | Name | Byte | Name | Byte | Name |
+|---|---|---|---|---|---|
+| `01` | SPEED | `13` | ITALIC | `1F` | MAGIC |
+| `03` | END | `14` | FLASH | `B0` | REM |
+| `04` | SEQ MSG? | `15` | COLOR | `B8` | DRAW |
+| `06` | **HALT** | `16` | BGRND | `B9` | **THIN** |
+| `07` | BEEP | `18` | **LEFT** | `BA` | WAIT |
+| `09` | PROG MSG? | `19` | **PAUSE** | `BB` | **HOLD** |
+| `0F` | **RIGHT** | `1A` | UP | `BC` | RAINBOW |
+| `10` | BIG | `1B` | DOWN | `BD` | **MAGIC OFF** |
+| `11` | NORM | `1D` | **SHIFT** | `BE` | TINY |
+| `12` | BOLD | `1E` | **GRAPH** | | |
+
+Bold entries correct or replace earlier guesses. Previously `06` was read as
+"pause" and `19` as "jump" — they are in fact HALT and PAUSE; `0F`/`18` are
+RIGHT/LEFT rather than "wipe back"/"crawl"; `BB` was "extra effect (unnamed)"
+and is HOLD; `BD` was "restart" and is MAGIC OFF. `B9` (THIN), `1D` (SHIFT)
+and `1E` (GRAPH) were not previously listed. `10`–`16`, `1A`, `1B`, `1F`, `B0`,
+`BA`, `BC` and `BE` are confirmed as they stood.
+
+Related tables in the same block: `COLOUR_NAME_TABLE` (`2E62`) gives the 16
+foreground names then the four background names repeated four times;
+`SPEED_STR_TABLE` (`2F42`) gives `S0`–`S7`; `MSG_TOP_TABLE` (`2F02`) gives
+"TOP OF MSG 1–10" and "TOP DEMO MSG".
+
+### Behaviour [M]
 
 `render_next_char` walks the store from `STORE_CURSOR`; `attr_dispatch`
-handles: `10` large, `11` normal, `12` bold, `13` italic, `14` flash, `1F`
-magic, `06` pause, `07` beep, `03` end of channel, `18` crawl, `19` jump, `1A`
-wipe up, `1B` wipe down, `0F` wipe back, `BB` extra effect (unnamed), `BD`
-restart, `BE` tiny-font mode. `attr_colour_speed` handles `80–8F` foreground
+dispatches on the bytes above. `attr_colour_speed` handles `80–8F` foreground
 (`0x80 | red<<2 | green`; names in `MENU_STRINGS`: BLACK D-GRE M-GRE GREEN
 D-RED D-YEL D-LIM LIME M-RED D-ORA M-YEL LEMON RED ORANGE GOLD YELLOW), `90–9F`
 background, `A0–AF` second colour range, `F0–F7` speed. `B0` remark (skip to
@@ -393,7 +426,13 @@ instead — see `CC784_hardware.md` §2 and `AT28C256.md`.
 
 ## 13. What is still unknown in the firmware
 
-- Exact behaviour of effects `BB`, `BE` (tiny mode is confirmed by the demo
-  text), `BD`, and background codes `94–9F`.
+- Exact *behaviour* of `BB` (HOLD), `BD` (MAGIC OFF), `B9` (THIN), `1D` (SHIFT)
+  and `1E` (GRAPH). All five are now named from `ATTR_LABEL_TABLE` (§7), but
+  named is not the same as traced — what HOLD holds, or how GRAPH differs from
+  `B8` DRAW, is still open.
+- Background codes `94–9F`. `COLOUR_NAME_TABLE` shows only four distinct
+  background names (B-BLK, B-RED, B-YEL, B-GRE) repeated four times across the
+  16 slots, so `94–9F` may simply alias `90–93`. Untested on hardware.
 - The IR carrier frequency (module part number not yet read; 38 or 40 kHz).
-- Full menu/editor semantics (only structurally read).
+- Full menu/editor semantics (only structurally read), though the label tables
+  now give every function key its name.
