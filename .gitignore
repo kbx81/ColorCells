@@ -60,5 +60,9 @@ venv-*/
 # mypy
 .mypy_cache/
 
-.vscode/
+.vscode/*
 !.vscode/tasks.json
+
+# Assembler output
+src/**/*.bin
+*.lst

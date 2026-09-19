@@ -4,10 +4,16 @@ Color Cells CC784NIR LED message display. Firmware in ST M27C256B (32 KB, code
 in `0x0000–0x3C20`, rest `0xFF`). Hand-written Z80 assembly, ROM ID string
 `78409O1702930205` (read as: model 784, rev 09, 17-02-93, build 0205).
 
-Companion files: `cc784nir.asm` (reassembles byte-identical with sjasmplus),
+Companion files: `src/stock/cc784nir.asm` (reassembles byte-identical with
+sjasmplus) and `src/patched/cc784nir.asm` (the §11 fixes),
 `CC784NIR_annotated.asm` (listing with addresses/hex and comments),
 `CC784_protocol.md` (wire protocol), `cc784.py` / `cc784_esphome.py` (tools),
 `CC784_hardware.md` (board).
+
+**Branches:** `main` carries the untouched reconstruction in `src/stock/` only.
+`src/patched/`, the burning tasks and everything in §11 live on `wip`. These
+notes are kept identical on both branches, so findings never diverge — only the
+trees differ.
 
 Confidence key: **[H]** traced instruction by instruction and/or verified on
 hardware; **[M]** structure understood, details inferred; **[L]** hypothesis.
@@ -20,11 +26,11 @@ hardware; **[M]** structure understood, details inferred; **[L]** hypothesis.
 |---|---|
 | `0000–3C20` | ROM code + data |
 | `3C21–7FFF` | unused (`0xFF`) — free for patches |
-| `4000–403F` | **stack** (64 bytes, grows down from `403F`; below `4000` is ROM) |
+| `4000–403F` | **stack** (64 bytes, grows down from `403F`; below `4000` is ROM) — see B1; the patched build moves it to `5DF0–5EEF` and leaves this free |
 | `4040–4197` | `FRAMEBUF` — 4 × 86 bytes |
 | `4198–41A1` | frame-buffer pointers/temps |
 | `41A2–41F7` | `TXBUF` — reply frame buffer (len byte + up to 0x55 data) |
-| `41F8–43E1` | variables (see `equ` block in the source) |
+| `41F8–43E1` | variables (see `equ` block in the source; `VAR_xxxx` names are honest placeholders for locations whose purpose is not yet established, not abbreviations) |
 | `43CB/43CC` | `MY_ADDRESS` / its complement (RAM-validity check at boot) |
 | `43E2–5EF0` | `MSG_STORE` — message store (see §6); `STORE_LIMIT` at `43D8` |
 | `5EF0` | `PKT_READY` flag |
@@ -37,7 +43,9 @@ I/O ports: `IN C0` (input mux), `OUT 40` (column shift clock), `OUT 48–4F`
 
 Data blocks in ROM: `INIT_DATA 0601`, `RX_TIMING 164A`, `TX_TIMING 1654`,
 `DEC_TABLE 18E8`, `IR_KEY_TABLE 2427`, `FG_IDX_TABLE 2718`, `BG_IDX_TABLE 2722`,
-`IGNORE_TABLE 2D57`, `GLYPH_PTR_TABLE 2D61`, `MENU_STRINGS 2FF3`, `FONT 3135`
+`IGNORE_TABLE 2D57`, `ATTR_LABEL_TABLE 2D62` (editor label tables and their
+strings run to `2FF2`; previously mislabelled `GLYPH_PTR_TABLE` — it holds no
+glyph pointers and was never referenced), `MENU_STRINGS 2FF3`, `FONT 3135`
 (8 bytes/glyph: 7 columns + width), `CHARSET_* 382D–396E`, `DEMO_MESSAGE 396F`.
 
 ## 2. Execution architecture [H]
@@ -57,7 +65,10 @@ Data blocks in ROM: `INIT_DATA 0601`, `RX_TIMING 164A`, `TX_TIMING 1654`,
   to `NMI_PER_SEC`(=60) → seconds → minutes → 12-hour clock with `CLK_PM`.
 - **`main_loop`** (`009A`): if `PKT_READY` → `pkt_process`; else render/effect
   step; loop. The rendering engine (`render_next_char`, `attr_dispatch`, `fx_*`)
-  runs here.
+  runs here. Note the `PKT_READY` test runs **once, on entry** — the inner loop
+  at `00A7` never falls back to `009A`. Re-entry is via `fx_end_of_channel`
+  (`0F5E`, end of a display cycle) or `JP RESET`/`L_000F`. The `JR nz` at `00B0`
+  tests `effect_step`'s flags, not `RENDER_DONE`: `LD A,(nn)` sets no flags.
 
 Timing: one display row refresh is an `OTIR` of 86 bytes (~1,900 T). Serial
 bit = 4.33 tick6 = 3.33 ms.
@@ -119,7 +130,23 @@ to `main_loop` (never returns to the caller — this is why immediate-mode
 processing "works" for normal packets).
 
 Query replies (`tx_send_frame 178D`): `B1 MY_ADDRESS len data cksum(data)` —
-note: **no flag byte** in replies. `'3'` sends `B1 addr <5 ASCII digits> <store…DA> cksum(store)`.
+note: **no flag byte** in replies, and `len` is a single binary byte.
+
+`'3'` (dump) cannot use that path — the store exceeds 255 bytes — so it sends
+`B1 addr <5 ASCII decimal digits = data length> <data…DA> cksum(data)`.
+Captured on hardware **[H]**, 100 empty channels plus three short messages:
+
+```
+06  B1 01 30 30 33 31 35  <315 bytes>  25
+│   │  │  └─ "00315", the length as ASCII, not a binary byte
+│   │  └─ MY_ADDRESS
+│   └─ frame start          (checksum = 8-bit sum of the 315 data bytes)
+└─ the ACK for the query frame itself, when addressed rather than broadcast
+```
+
+`data` is `MSG_STORE` verbatim through its `DA`, so a cleared store with three
+messages is 300 framing bytes + text + 1. Remember the two-byte channel markers
+(§6) when parsing: `D4 D2` is channel 42, not channels 4 and 2.
 
 ## 6. Message store format [H]
 
@@ -140,27 +167,68 @@ D0 D0 <text ch 0> 03   D0 D1 <text ch 1> 03  …  D9 D9 <text ch 99> 03   DA
 - **Channel 100 (`0x64`) is the ROM demo message**: `chan_select` returns
   `DEMO_MESSAGE` and `cmd_09` sets `CHAN_LOCK` so inserts are refused. The
   default sequence plays channel 100, hence the demo after a clear.
+- `store_finalize` (`1C38`) is what maintains `STORE_END`: it `CPIR`s from
+  `MSG_STORE` for the `DA` and stores its address. `STORE_END` is therefore the
+  position of the store terminator, not one past the last text byte.
 - `pkt_insert_text`: `store_make_room` advances `STORE_CURSOR`, then `LDDR`
   shifts everything from the cursor **up to `STORE_LIMIT`** (not just to
   `STORE_END`) by one byte and writes the character. ~6 900 byte moves per
   inserted byte with interrupts off (≈20–40 ms); a 250-byte chunk takes
-  seconds. Shifting only to `STORE_END` would be ~50× faster (patch candidate).
+  seconds. See bug B8 — fixed by a two-byte operand change.
 - **Cursor seating quirk:** `09 dd` alone leaves the cursor on the marker's
   first byte, so a following insert would split the marker. `0E` (re-seats
   at the marker's last byte and deletes old text) or `B3` (seats before the
   `03`) must follow `09 dd` before any text. NETCC always sends `0E`.
-- Suspected typo at `2B1F`: `LD (STORE_CURSOR),A` (opcode `32`) where
-  `LD (STORE_CURSOR),HL` (`22`) was intended — writes the byte `03` into the
-  cursor's low byte if the cursor is on a `03`. Rarely reached with the
-  standard command sequences.
+- Typo at `2B1F` confirmed — see bug B6.
 
-## 7. Rendering [M]
+## 7. Rendering [M for behaviour, **H for the names**]
+
+### Attribute bytes — the sign's own names [H]
+
+`ATTR_LABEL_TABLE` (`2D62`, indexed `+2*attr`) and `ATTR_LABEL_TABLE_B0`
+(`2EC2`, indexed `+2*(attr−B0)`) map each attribute byte to the string the
+on-sign editor displays for it. These are the firmware's own words, not
+inferred, which settles several earlier guesses:
+
+| Byte | Name | Byte | Name | Byte | Name |
+|---|---|---|---|---|---|
+| `01` | SPEED | `13` | ITALIC | `1F` | MAGIC |
+| `03` | END | `14` | FLASH | `B0` | REM |
+| `04` | SEQ MSG? | `15` | COLOR | `B8` | DRAW |
+| `06` | **HALT** | `16` | BGRND | `B9` | **THIN** |
+| `07` | BEEP | `18` | **LEFT** | `BA` | WAIT |
+| `09` | PROG MSG? | `19` | **PAUSE** | `BB` | **HOLD** |
+| `0F` | **RIGHT** | `1A` | UP | `BC` | RAINBOW |
+| `10` | BIG | `1B` | DOWN | `BD` | **MAGIC OFF** |
+| `11` | NORM | `1D` | **SHIFT** | `BE` | TINY |
+| `12` | BOLD | `1E` | **GRAPH** | | |
+
+Bold entries correct or replace earlier guesses. Previously `06` was read as
+"pause" and `19` as "jump" — they are in fact HALT and PAUSE; `0F`/`18` are
+RIGHT/LEFT rather than "wipe back"/"crawl"; `BB` was "extra effect (unnamed)"
+and is HOLD; `BD` was "restart" and is MAGIC OFF. `B9` (THIN), `1D` (SHIFT)
+and `1E` (GRAPH) were not previously listed. `10`–`16`, `1A`, `1B`, `1F`, `B0`,
+`BA`, `BC` and `BE` are confirmed as they stood.
+
+Related tables in the same block: `COLOUR_NAME_TABLE` (`2E62`) gives the 16
+foreground names then the four background names repeated four times;
+`SPEED_STR_TABLE` (`2F42`) gives `S0`–`S7`; `MSG_TOP_TABLE` (`2F02`) gives
+"TOP OF MSG 1–10" and "TOP DEMO MSG".
+
+**`B8` DRAW vs `1E` GRAPH [H — from the sign's owner]:** GRAPH selects a
+*built-in* graphic (apparently just further glyphs); DRAW takes user-defined
+artwork as a string of hex values and paints it **column by column**.
+
+**The model name is the geometry:** the panel is **7 rows × 84 columns** —
+CC**784**. The firmware carries 86 bytes per row, not 84 (`FRAMEBUF` is
+4 × 86 = 344, the `0x0158` constant; one row refresh is an `OTIR` of 86), and
+`sub_2B84` clocks 85 zeros to flush the LS164 chain. So there are one or two
+positions of slack beyond the visible 84.
+
+### Behaviour [M]
 
 `render_next_char` walks the store from `STORE_CURSOR`; `attr_dispatch`
-handles: `10` large, `11` normal, `12` bold, `13` italic, `14` flash, `1F`
-magic, `06` pause, `07` beep, `03` end of channel, `18` crawl, `19` jump, `1A`
-wipe up, `1B` wipe down, `0F` wipe back, `BB` extra effect (unnamed), `BD`
-restart, `BE` tiny-font mode. `attr_colour_speed` handles `80–8F` foreground
+dispatches on the bytes above. `attr_colour_speed` handles `80–8F` foreground
 (`0x80 | red<<2 | green`; names in `MENU_STRINGS`: BLACK D-GRE M-GRE GREEN
 D-RED D-YEL D-LIM LIME M-RED D-ORA M-YEL LEMON RED ORANGE GOLD YELLOW), `90–9F`
 background, `A0–AF` second colour range, `F0–F7` speed. `B0` remark (skip to
@@ -244,51 +312,140 @@ frame, which gets no ACK). ~0.3 s is safe.
 
 ### B5 — default address after RAM loss is 0 **[H]**
 NETCC's default is address 1; a sign with dead/absent battery answers only to
-0 or `*`. Not a bug per se, but a support trap.
+0 or `*`. The on-sign menu explicitly *refuses* to set 0 (`1FED`), so address 0
+is only ever reachable through this path. Not a bug per se, but a support trap.
 
-## 11. Suggested patches (all small; keep original bytes under `IF ORIGINAL`)
+### B6 — `pkt_insert_text` corrupts `STORE_CURSOR` at `2B1F` **[H]**
+`LD (STORE_CURSOR),A` (opcode `32`) where `LD (STORE_CURSOR),HL` (`22`) was
+meant. Reached when the cursor sits on a channel's `03` terminator: `A` is `3`
+there (the `CP 3` just matched), so instead of backing the cursor off the
+terminator it stamps `03` into the cursor's **low byte** and the next insert
+lands at a random offset inside the store. Not reachable from the standard
+`09 dd` / `0E` / `B3` sequences, which never leave the cursor on an `03`.
 
-Build with sjasmplus; add new code after `DEMO_MESSAGE` (`3C21+`) and reach it
-with `CALL`/`JP` from patched sites so existing addresses don't move.
+### B7 — `MY_ADDRESS_INV` is not a complement on the reset path **[H]**
+`init_vars` (`05C4`) writes `00` to *both* `MY_ADDRESS` and `MY_ADDRESS_INV`,
+but the validity test is `CPL(MY_ADDRESS_INV) == MY_ADDRESS` — and `CPL(00)`
+is `FF`, not `00`. The pair therefore never validates, so this path re-runs on
+every boot. Harmless in the stock ROM (it rewrites the same 0), but it means
+the "RAM is intact" check is permanently failing after a battery loss. The
+menu path (`1FF2`) does it correctly: `LD (MY_ADDRESS),A / CPL / LD (…INV),A`.
 
-1. **Relocate the stack** (fixes B1). Change the three `LD SP,0x403F` (reset
-   `0000`, `pkt_process`, `menu_enter`) to `LD SP,0x5EF0` and lower the value
-   stored to `STORE_LIMIT` by 256 so the message store cannot grow into the new
-   stack. Alternative with no store cost: `LD SP,0x5EF1` is not safe (packet
-   buffer), so reduce `STORE_LIMIT`.
-2. **Always defer processing** (fixes B3). In `pkt_st_cksum` replace the
-   `CP 80 / JP z,pkt_process` with NOPs — `PKT_READY` is already set and
-   `main_loop` will pick it up.
-3. **Restore the clock** (fixes B2). In `cmd_17_set_time`, set `CLK_RUN` back
-   to `FF` on the early-exit path (or move the `CLK_RUN=0` to after all five
-   bytes are fetched).
-4. **Send ACK after processing** (mitigates B4). Move the `06` transmit from
-   `pkt_st_cksum` to `pkt_process_done` (broadcast still silent). This lets a
-   sender stream frames at full rate with no padding. Requires care: the ACK
-   must not be sent for NAK'd frames (keep the NAK in `pkt_st_cksum`).
-5. **Default address 1** (B5). One byte in `init_vars`' RAM-invalid path.
-6. Optional: remove the dead `IX/IY` guard and unreachable subs
-   (`sub_1B91`, `fx_138B` path), and the mid-code strings.
+### B8 — every inserted byte shifts the whole store, not just the live text **[H]**
+`pkt_insert_text` sets `MOVE_DST` from `STORE_LIMIT` (`2B3D`) although
+`STORE_END` was just updated at `2B37` and everything above it is dead space.
+The `LDDR` therefore moves ~6.9 KB per inserted character with interrupts off,
+so a 250-byte message takes seconds. Shifting to `STORE_END` instead moves
+only `STORE_END − STORE_CURSOR + 1` bytes — 174 for channel 42 in an empty
+store, i.e. ~39× fewer; for channel 0 it is ~6900× fewer. Verified by
+simulating both loops: the resulting store is byte-identical.
 
-Test plan after patching: `cc784.py -a 0 --unsafe id` should return
-`B1 00 10 "78409O1702930205" 4A`-style frame cleanly ten times in a row;
-`dump` should show the store; `time` then `17` alone should not stop the clock.
+## 11. Patches
+
+Applied in `src/patched/cc784nir.asm`. `src/stock/cc784nir.asm` is the
+untouched reconstruction and is frozen — annotations may be added, code must
+not change. Every patch is size-neutral in place and the two spill-over
+subroutines live at `3C21`, in the `0xFF` fill above `DEMO_MESSAGE`, so no
+stock address moves and the per-line address comments stay valid. 55 bytes
+differ between the two images.
+
+`diff src/stock/cc784nir.asm src/patched/cc784nir.asm` is the authoritative
+changelog: everything outside the patches is kept identical on purpose, so any
+other difference is drift and should be reconciled.
+
+### Applied
+
+1. **Relocate the stack** (fixes B1). `STACK_TOP` `403F` → `5EF0`, giving a
+   256-byte stack at `5DF0–5EEF` carved off the top of the message store.
+   There are **seven** `LD SP,403F` sites, not three: reset `0000`,
+   `fx_end_of_channel` `0F5E`, `menu_enter` `19CA`, `key_handler` `1A0D`,
+   `1CEE`, `pkt_process` `2A70`, `pkt_process_done` `2B68`. Worst-case demand
+   is ~120 bytes (query chain ~40 + `tick6_service`/`rx_consume` ~40 + INT and
+   NMI frames), so 256 is comfortable. `ir_init`'s four store constants all
+   shift down by `0x100` together (`STORE_TOP` `5DEF`, warn `5D8B`,
+   `STORE_SIZE` `1A0E`, free-text bound `18E1`); the `0xDA` store terminator
+   had to move out of line (`patch_store_term`) because it is no longer one
+   byte below the `5EF0–5FFF` page that `ir_init` zeroes.
+2. **Restore the clock** (fixes B2). `pkt_process_done`'s `CALL sub_2b84`
+   becomes `CALL patch_clk_restore`, which sets `CLK_RUN=FF` and tail-jumps to
+   `sub_2b84`. This covers every early exit, not just `cmd_17`'s.
+   `cmd_17_set_time` itself cannot be fixed in place: `pkt_next_byte` reads the
+   caller's stack frame (`POP IX/DE/IY`), so no helper can be interposed.
+3. **Fix the cursor store** (fixes B6). `32` → `22` at `2B1F`.
+4. **Default address 1 + valid complement** (fixes B5 and B7).
+   `LD A,0 / LD (MY_ADDRESS),A / LD (…INV),A` → `LD HL,FE01 /
+   LD (MY_ADDRESS),HL / NOP / NOP`. `MY_ADDRESS_INV` is `MY_ADDRESS+1`, so one
+   16-bit store writes both, and `FE` is a genuine complement of `01`.
+5. **Shift only the live store** (fixes B8). `LD HL,(STORE_LIMIT)` →
+   `LD HL,(STORE_END)` at `2B3D` — a two-byte operand change.
+
+### Rejected
+
+- **Always defer processing** (proposed for B3) — *regression*. `main_loop`
+  tests `PKT_READY` only on entry at `009A`; the `L_00A7` render loop never
+  falls back to it. Re-entry happens only via `fx_end_of_channel` (`0F5E`) or
+  the `BA` wait-for-key spin (`0A49`), so a deferred packet waits for the
+  current channel to finish — potentially many seconds after its ACK, during
+  which `02DD` refuses every further `B1`. Immediate mode is what makes NETCC
+  responsive. B3 stands as documented, but patch 1 removes its only known
+  trigger: `pkt_process` resets SP on entry and `pkt_process_done` resets it
+  again before jumping to `L_000F`, so the abandoned interrupt frame is
+  harmless as long as the stack is large enough.
+- **Send ACK after processing** (proposed for B4) — *regression*. Zero-length
+  frames are ACKed in `pkt_st_cksum` but never set `PKT_READY`, so they would
+  lose their ACK entirely; and a valid ACK would be delayed by the whole
+  insert, which is exactly the interval the sender is trying to measure.
+  Padding after each ACK remains the right mitigation. B8 shrinks the window
+  it has to cover by one to three orders of magnitude.
+- **Remove dead code** — moves every address after the deletion and invalidates
+  the per-line address comments the source is verified against.
+
+### Verified on hardware, 2026-09-18 (patched EPROM, ESPHome serial bridge)
+
+- **B1** — ten immediate-mode (`flag=80`) `B4 '0'` queries on one connection,
+  all ten byte-identical: `06 B1 01 10 "78409O1702930205" 58`. A following
+  `B4 '1'` was unchanged, so nothing was corrupted. On stock firmware this
+  sequence garbled replies, emitted stray bytes and corrupted `SEQ_LIST`.
+  Immediate mode is now safe, which is what `cc784.py`'s `query()` had to
+  avoid before.
+- **P1 / stack relocation** — `B4 '1'` reports `total 06670`, exactly the
+  patched `STORE_SIZE` (`0x1A0E`) rather than the stock 6926. `free 06365`
+  after a clear plus a 4-byte message matches the predicted 6369 − 4.
+- **B8** — `clearall`, then messages into channels 0, 42 and 99, then `B4 '3'`:
+  315 data bytes, checksum OK, all three channels intact and 100 markers
+  present. Both extremes of the changed `LDDR` bound are exercised.
+- **B5/B7** — the sign ACKs at address 1 from cold with no battery fitted.
+- **B2** — clock displayed with `msg 0 "@{5f}"`, confirmed ticking, then
+  `raw 17 32` sent. The clock kept advancing (`:26 → :27 → :28`), so
+  `CLK_RUN` is restored on the early-exit path. Note the hour tens digit does
+  change to `2`: `cmd_17` stores `0x32 & 0x0F` into `CLK_H10` before
+  discovering the packet ended. That corruption is inherent to the command,
+  not to the patch — a following full `17` puts it right.
 
 ## 12. Rebuilding
 
 ```
 git clone --recurse-submodules https://github.com/z00m128/sjasmplus && make
-sjasmplus cc784nir.asm          # -> cc784nir.bin, byte-identical to the dump
+cd src/stock   && sjasmplus cc784nir.asm   # -> cc784nir.bin
+cd src/patched && sjasmplus cc784nir.asm   # -> cc784nir_patched.bin
 ```
+Or the `Build stock ROM` / `Build patched ROM` tasks. `src/stock/cc784nir.bin`
+must stay at md5 `c021af146a50b93a22d13535201b7eaa` — that is the regression
+test for every edit to the stock source, and the `Verify stock ROM is
+byte-identical` task asserts it.
+
 For a W27C512 in the 27C256 socket, program the 32 KB image twice
 (`cat cc784nir.bin cc784nir.bin > w27c512.bin`): the board ties pin 1 (A15)
-high so the upper half is what runs.
+high so the upper half is what runs. An AT28C256 needs two socket bodges
+instead — see `CC784_hardware.md` §2 and `AT28C256.md`.
 
 ## 13. What is still unknown in the firmware
 
-- Exact behaviour of effects `BB`, `BE` (tiny mode is confirmed by the demo
-  text), `BD`, and background codes `94–9F`.
-- Exact reply layout for `B4 '3'` (only decodable from the TX code; not yet
-  captured on hardware because of B1).
+- Exact *behaviour* of `BB` (HOLD), `BD` (MAGIC OFF), `B9` (THIN) and `1D`
+  (SHIFT). Named from `ATTR_LABEL_TABLE` (§7), but named is not traced.
+- Background codes `94–9F`. `COLOUR_NAME_TABLE` shows only four distinct
+  background names (B-BLK, B-RED, B-YEL, B-GRE) repeated four times across the
+  16 slots, so `94–9F` may simply alias `90–93`. Untested on hardware.
 - The IR carrier frequency (module part number not yet read; 38 or 40 kHz).
-- Full menu/editor semantics (only structurally read).
+- Full menu/editor semantics (only structurally read), though the label tables
+  now give every function key its name.

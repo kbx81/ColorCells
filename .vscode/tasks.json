@@ -2,7 +2,8 @@
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "Build cc784nir.bin",
+      "label": "Build stock ROM",
+      "detail": "Reassembles the untouched reconstruction. Must stay byte-identical to the EPROM dump.",
       "type": "shell",
       "command": "sjasmplus",
       "args": [
@@ -18,6 +19,22 @@
         "isDefault": true
       },
       "problemMatcher": "$zx-macroasm-sjasmplus"
+    },
+    {
+      "label": "Verify stock ROM is byte-identical",
+      "detail": "Regression test for any edit to src/stock: the image must still md5 to c021af146a50b93a22d13535201b7eaa.",
+      "type": "shell",
+      "command": "test \"$(md5 -q cc784nir.bin)\" = c021af146a50b93a22d13535201b7eaa && echo 'OK: byte-identical to the dump' || { echo 'FAIL: stock ROM no longer matches the dump'; exit 1; }",
+      "options": {
+        "cwd": "${workspaceFolder}/src/stock"
+      },
+      "dependsOn": "Build stock ROM",
+      "group": "test",
+      "presentation": {
+        "reveal": "always",
+        "clear": true
+      },
+      "problemMatcher": []
     }
   ]
 }

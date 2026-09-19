@@ -168,7 +168,11 @@ class Sign:
         while time.time() < end and time.time() - t0 < timeout + 5.0:   # hard ceiling
             b = self.link.read(1, 0.2)
             if b:
-                buf += b; end = time.time() + 1.0     # keep reading while bytes flow
+                # keep reading while bytes flow, but never shorten the original
+                # deadline: the ACK arrives first and a deferred query reply can
+                # be seconds behind it (main_loop only polls PKT_READY at the end
+                # of a display cycle).
+                buf += b; end = max(end, time.time() + 1.0)
         if self.verbose and buf: print("  RX:", hexs(buf))
         return bytes(buf)
 
@@ -190,18 +194,24 @@ def parse_reply(raw: bytes, kind: str):
         print("  from addr %d, sign says %s bytes, got %d, checksum %s" %
               (raw[1], cnt.decode(errors='replace'), len(data),
                "OK" if sum(data) & 0xFF == ck else "BAD"))
-        # walk the store: D0+n = channel n, 03 = end of channel, DA = end
-        chn = None; text = bytearray()
-        for b in data:
-            if 0xD0 <= b <= 0xDA:
-                if chn is not None: print("   ch %2d: %s" % (chn, printable(text)))
-                chn, text = b - 0xD0, bytearray()
-                if b == 0xDA: break
-            elif b == 0x03:
-                if chn is not None: print("   ch %2d: %s" % (chn, printable(text)))
-                chn = None
+        # walk the store: a channel marker is TWO bytes, D0+tens then D0+units
+        # (channel 42 -> D4 D2); 03 ends a channel's text, DA ends the store.
+        i = 0; shown = 0
+        while i < len(data):
+            b = data[i]
+            if b == 0xDA:
+                break
+            if 0xD0 <= b <= 0xD9 and i + 1 < len(data) and 0xD0 <= data[i + 1] <= 0xD9:
+                chn = (b - 0xD0) * 10 + (data[i + 1] - 0xD0); i += 2
+                text = bytearray()
+                while i < len(data) and data[i] != 0x03:
+                    text.append(data[i]); i += 1
+                i += 1                                  # skip the 03
+                if text:
+                    print("   ch %2d: %s" % (chn, printable(text))); shown += 1
             else:
-                text.append(b)
+                i += 1
+        print("   (%d channel%s with text)" % (shown, '' if shown == 1 else 's'))
     else:
         ln = raw[2]; data = raw[3:3 + ln]; ck = raw[3 + ln] if len(raw) > 3 + ln else None
         ok = ck is not None and sum(data) & 0xFF == ck
