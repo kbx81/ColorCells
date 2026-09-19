@@ -7,25 +7,24 @@
 ; ============================================================================
         DEVICE NONE
 
-; Patched build: the five fixes in CC784_firmware.md §11 are applied here.
-; Every patch is size-neutral in place and the two spill-over subroutines sit
-; at 0x3C21 in the 0xFF fill, so no stock address moves and the per-line
-; address comments stay valid. Diff against ../stock/cc784nir.asm to see
-; exactly what changed; everything else is kept identical on purpose.
+; Patched build: the five fixes in CC784_firmware.md §11 are applied here,
+; all written inline (the source is relocatable, so addresses above 0x144A
+; differ from stock). Diff against ../stock/cc784nir.asm to see exactly what
+; changed; everything else is kept identical on purpose.
 
         OUTPUT "cc784nir_patched.bin"
 
 FRAMEBUF             equ 0x4040
 FRAMEBUF_ROW1        equ 0x4096
 FRAMEBUF_TINY        equ 0x40eb
-FB_COLPTR            equ 0x4198
-FB_COL               equ 0x419b
-FB_TMP               equ 0x41a1
-TXBUF                equ 0x41a2
-EFFECT_TMP           equ 0x41f8
-EFFECT_TMP2          equ 0x41fb
-FLASH_TIMER          equ 0x41fd
-TICK_COUNTDOWN       equ 0x41fe
+FB_COLPTR            equ 0x4198   ; frame-buffer write pointer (next glyph column)
+FB_COL               equ 0x419b   ; scroll position: the column the output window is moving toward
+BGRND_PENDING        equ 0x41a1   ; editor: BGRND key pressed, next key is the colour digit
+TXBUF                equ 0x41a2   ; reply frames, and the effect staging frame (86 columns)
+STAGE_PTR            equ 0x41f8   ; next free column in TXBUF while an effect stages text
+STAGE_OFFSET         equ 0x41fb   ; centring offset of the staged text (free columns / 2)
+ROW_PORT             equ 0x41fd   ; port group for the row data: 40 first pass, 48 second
+BEEP_TICKS           equ 0x41fe   ; beeper on while non-zero (port bit 5); beep_start = 0x96
 CLK_H10              equ 0x4200
 CLK_H1               equ 0x4201
 CLK_M10              equ 0x4202
@@ -36,24 +35,24 @@ CLK_RUN              equ 0x4206
 GLYPH_WIDTH          equ 0x4207
 GLYPH_PTR            equ 0x4208
 CUR_COLOUR           equ 0x420c
-EFFECT_PHASE         equ 0x420d
+SCROLLING            equ 0x420d   ; FF while the output window is catching up with FB_COLPTR
 CUR_CHAR             equ 0x420e
-SEQ_PTR_SAVE         equ 0x4210
-EFFECT_ACTIVE        equ 0x4212
+FB_OUT_PTR           equ 0x4210   ; first column sent to the panel (start of the output window)
+DISP_ON              equ 0x4212   ; 0 suppresses row output (effects rewrite FRAMEBUF meanwhile)
 MENU_ACTIVE          equ 0x4217
 INS_PTR              equ 0x4218
-RENDER_DONE          equ 0x421a
-COL_COUNT            equ 0x421c
-ROW_DATA_LATCH       equ 0x4222
-RX_MSGFLAG           equ 0x4223
-RX_LASTCMD           equ 0x4225
+MAGIC_MODE           equ 0x421a   ; FF between MAGIC (1F) and MAGIC OFF (BD)
+COL_COUNT            equ 0x421c   ; columns still free in the staging frame; 0 = no staging (LEFT)
+ROW_COLOUR           equ 0x4222   ; colour byte sent ahead of each row
+QUERIES_ENABLED      equ 0x4223   ; FF after boot; gates query_dispatch
+EDIT_KEY             equ 0x4225   ; key/character the editor is processing (0 = none)
 RX_BYTE              equ 0x4228
-BEEP_TIMER           equ 0x422a
+SPARE_TIMER          equ 0x422a   ; decremented in tick6_exit, never set: dead
 CTRL_LATCH_SHADOW    equ 0x422d
-DISP_FLAGS           equ 0x4230
-FB_EXTRA_LEN         equ 0x4232
+FB_OUT_LEN           equ 0x4230   ; bytes to send from FB_OUT_PTR before wrapping to FRAMEBUF
+FB_EXTRA_LEN         equ 0x4232   ; bytes to send from FRAMEBUF after the wrap
 STORE_END            equ 0x4234
-PAUSE_FLAG           equ 0x423a
+EFFECT_ID            equ 0x423a   ; 0 LEFT, 1 PAUSE, 2 UP, 3 DOWN, 4 RIGHT, 5 HOLD
 EFFECT_VECTOR        equ 0x423b
 MENU_TEXT_PTR        equ 0x423d
 ROW_INDEX            equ 0x4245
@@ -67,9 +66,9 @@ RX_STATE             equ 0x425c
 CHAN_LOCK            equ 0x426a
 SEQ_LIST             equ 0x426b
 SEQ_PTR              equ 0x42d3
-SEQ_IDX              equ 0x42d5
-FONT_MODE            equ 0x4339
-TINY_MODE            equ 0x433a
+SEQ_ALL_EMPTY        equ 0x42d5   ; 10 = every listed channel is empty, play the demo
+FONT_MODE            equ 0x4339   ; bit 1 BOLD, bit 2 ITALIC, bit 3 BIG
+TINY_MODE            equ 0x433a   ; FF = glyphs go to the tiny buffer (menus, TINY)
 NMI_COUNT            equ 0x433c
 STORE_TMP            equ 0x433e
 MOVE_DST             equ 0x4340
@@ -82,32 +81,32 @@ TX_TICKS             equ 0x434b
 TX_SHIFT             equ 0x434c
 TX_STATUS            equ 0x434d
 TX_TIMING_PTR        equ 0x434e
-DISP_ENABLE          equ 0x4359
-MENU_FLAG            equ 0x435b
+ROW_OUT_PENDING      equ 0x4359   ; FF = the current row still has to be sent
+NEXT_CHAN            equ 0x435b   ; channel to show first after the editor (FF = none)
 NMI_PER_SEC          equ 0x435d
-ROW_PHASE            equ 0x435e
-TINY_RENDER          equ 0x435f
+TINY_FRAME_READY     equ 0x435e   ; tiny mode: a frame is in FRAMEBUF_TINY
+TINY_RENDER          equ 0x435f   ; FF while attr_tiny drives the display
 TICK6_COUNT          equ 0x4379
 TICK1_COUNT          equ 0x437a
-GEN_COUNTDOWN        equ 0x4380
+GEN_COUNTDOWN        equ 0x4380   ; IR repeat/hold timer, counts down in tick6 (word)
 IR_STATE_CNT         equ 0x4382
 IR_BITCNT            equ 0x4383
-IR_KEY               equ 0x4384
+IR_KEY               equ 0x4384   ; last accepted key number
 IR_SHIFT             equ 0x4385
 IR_CODE              equ 0x4386
 TICK_VECTOR          equ 0x4388
-MENU_CHAR            equ 0x4393
-MENU_TMP             equ 0x4394
+MAGIC_LAST_CHAR      equ 0x4393   ; magic mode: last char of the current word (punctuation check)
+MAGIC_COLOUR_SET     equ 0x4394   ; magic mode: colour set by an attribute, skip the auto change
 RND_SEED             equ 0x4396
-MENU_TMP2            equ 0x4397
-RND_VAL              equ 0x4398
+MAGIC_FONT_SET       equ 0x4397   ; magic mode: font set by an attribute, skip the random pick
+RND_VAL              equ 0x4398   ; magic mode: words until the next colour change
 CHAN_D10             equ 0x439c
 CHAN_D1              equ 0x439d
 MENU_ENTRY_BUF       equ 0x43c5
 MY_ADDRESS           equ 0x43cb
 MY_ADDRESS_INV       equ 0x43cc
 BLANK_TIMER          equ 0x43ce
-GLYPH_PTR2           equ 0x43d0
+GLYPH_PTR_ORIG       equ 0x43d0   ; glyph address before bold/italic/big copies
 STORE_LIMIT          equ 0x43d8
 STORE_SIZE           equ 0x43da
 MSG_STORE            equ 0x43e2
@@ -128,74 +127,71 @@ PORT_ROW0            equ 0x48
 PORT_STROBE          equ 0x80
 PORT_IN              equ 0xc0
 
-; ---- RAM locations the reconstruction never named. Those with a real
-;      name below are the ones whose purpose is established; VAR_xxxx is
-;      an honest placeholder, not an abbreviation - rename as they are
-;      traced. Listed so no bare hex address is left in the code.
+; ---- RAM locations named from their use. The ones marked "never read"
+;      are written by the firmware but influence nothing.
 MENU_MSG_PTR         equ 0x420a   ; message the editor is showing (set with MENU_MSG_FLAG)
-VAR_420F             equ 0x420f
-VAR_4213             equ 0x4213
-VAR_4214             equ 0x4214
-VAR_421B             equ 0x421b
-VAR_421D             equ 0x421d
-VAR_421E             equ 0x421e
-VAR_421F             equ 0x421f
-VAR_4220             equ 0x4220
-VAR_4221             equ 0x4221
+TEST_MODE            equ 0x420f   ; FF = display the ROM-checksum test message (SEQ MSG? then MAGIC, C)
+CLK_RENDER_STEP      equ 0x4213   ; clock (5F) render step 0..8; FF = finished
+CLK_RENDER_PTR       equ 0x4214   ; clock render: next CLK_ digit to emit
+WINDOW_COLOUR        equ 0x421b   ; last colour byte at the output window start (bit 4 = flash)
+FRAME_COUNT          equ 0x421d   ; frames since LATCH_BIT7 last toggled (mod 13)
+FLASH_BIT            equ 0x421e   ; 0x10 while the current word flashes; OR-ed into colour bytes
+LATCH_BIT7           equ 0x421f   ; 00/80 toggled every 13 frames, OR-ed into CTRL_LATCH bit 7
+COLOR_PENDING        equ 0x4220   ; editor: COLOR key pressed, next key is the colour digit
+GRAPH_PENDING        equ 0x4221   ; editor: GRAPH key pressed, next key selects A0-AF
 MENU_MSG_FLAG        equ 0x4224   ; FF = editor has a message to display
-VAR_4226             equ 0x4226
-VAR_4227             equ 0x4227
-VAR_4229             equ 0x4229
-VAR_4236             equ 0x4236
-VAR_4241             equ 0x4241
-VAR_4242             equ 0x4242
-VAR_4243             equ 0x4243
-VAR_4244             equ 0x4244
-VAR_424C             equ 0x424c
-VAR_425A             equ 0x425a
-VAR_425E             equ 0x425e
-VAR_4260             equ 0x4260
-VAR_42D6             equ 0x42d6
-VAR_42F6             equ 0x42f6
-VAR_4316             equ 0x4316
-VAR_4336             equ 0x4336
+PREV_KEY             equ 0x4226   ; editor key history (written, never read)
+PREV_KEY2            equ 0x4227   ; editor key history (written, never read)
+IR_KEY_CHAR          equ 0x4229   ; character decoded from the IR key via the CHARSET_ tables
+STORE_WRAPPED        equ 0x4236   ; FF when the editor cursor hit STORE_LIMIT (written, never read)
+SHIFT_LABEL          equ 0x4241   ; FF = redraw shows the SHIFT indicator
+FLUSH_PENDING        equ 0x4242   ; FF = staged text must be shown before the next effect runs
+PROG_MSG_FORCE       equ 0x4243   ; would force the PROG MSG? prompt; only ever written 0
+FRAME_DELAY          equ 0x4244   ; frames to hold before the next column step (1, 3 or 0x50)
+RX_SPARE             equ 0x424c   ; zeroed by store_init, never read
+REDRAW_PTR           equ 0x425a   ; editor redraw: byte being rendered
+RX_STATE_COPY        equ 0x425e   ; second copy of RX_STATE written by store_init, never read
+CHAN_STATE           equ 0x4260   ; 11 bytes cleared by clear_chan_lock; only CHAN_LOCK (last) is read
+GLYPH_BUF            equ 0x42d6   ; working copy of the glyph (bold/plain), 32 bytes
+GLYPH_BUF_ITALIC     equ 0x42f6   ; sheared copy for ITALIC, 32 bytes
+GLYPH_BUF_BIG        equ 0x4316   ; widened copy for BIG, 32 bytes
+SEQ_MENU_ACTIVE      equ 0x4336   ; FF while the SEQ MSG? dialogue runs
 SHIFT_STATE          equ 0x4337   ; SHIFT latch, toggled by key 29 (see section 9)
-VAR_4338             equ 0x4338
-VAR_433B             equ 0x433b
-VAR_4344             equ 0x4344
-CAPS_LOCK             equ 0x4358
-VAR_435A             equ 0x435a
-VAR_4360             equ 0x4360
-VAR_4361             equ 0x4361
-VAR_4362             equ 0x4362
-VAR_4363             equ 0x4363
-EURO_STATE             equ 0x4364
-VAR_4365             equ 0x4365
-VAR_4377             equ 0x4377
-VAR_4381             equ 0x4381
-VAR_4387             equ 0x4387
-VAR_438C             equ 0x438c
-VAR_438F             equ 0x438f
-VAR_4390             equ 0x4390
-VAR_4391             equ 0x4391
-VAR_4392             equ 0x4392
-VAR_4395             equ 0x4395
-VAR_4399             equ 0x4399
-VAR_439A             equ 0x439a
-VAR_439B             equ 0x439b
-VAR_43A2             equ 0x43a2
-VAR_43A3             equ 0x43a3
-VAR_43A4             equ 0x43a4
-VAR_43A5             equ 0x43a5
-VAR_43CA             equ 0x43ca
-VAR_43CD             equ 0x43cd
-VAR_43CF             equ 0x43cf
-VAR_43D2             equ 0x43d2
-VAR_43D4             equ 0x43d4
-VAR_43D6             equ 0x43d6
+PREV_SPACE           equ 0x4338   ; 1 = previous char was a space (two in a row reset the background)
+FORCE_BOLD           equ 0x433b   ; editor redraw: FF = effect text is drawn bold (unless THIN)
+REDRAW_FROM          equ 0x4344   ; editor redraw: first byte actually displayed (cursor-21, >= INS_PTR)
+CAPS_LOCK            equ 0x4358
+SEQ_SET              equ 0x435a   ; FF = sequence set by hand; do not auto-add the edited channel
+DRAW_PREV            equ 0x4360   ; FF = previous item was a DRAW graphic
+CLK_RENDERED         equ 0x4361   ; FF just after a clock display; forces LEFT in an effect
+MAGIC_COLOUR_IDX     equ 0x4362   ; index into MAGIC_COLOUR_CYCLE
+STORE_BAD_COUNT      equ 0x4363   ; bytes replaced by ? in store_fix_bad_bytes (never read)
+EURO_STATE           equ 0x4364
+DRAW_BUF             equ 0x4365   ; 16 packed hex columns of a DRAW graphic
+IR_DEBOUNCE          equ 0x4377   ; key number seen once, awaiting its second frame
+IR_KEYNUM            equ 0x4387   ; IR_CODE & 3F = key number 0..63
+EFFECT_ID_COPY       equ 0x438c   ; copy of EFFECT_ID (written, never read)
+NEW_MSG_CHAN         equ 0x438f   ; channel chosen for a new MAGIC message
+MAGIC_FX_PREV        equ 0x4390   ; FF = last byte was a movement attribute (magic mode)
+MAGIC_FLASH_WORD     equ 0x4391   ; '$' = flash the word that starts with $ (magic mode)
+EDITOR_FIRST_KEY     equ 0x4392   ; FF until the first key in the editor is processed
+MAGIC_WORD_COUNT     equ 0x4395   ; words since the last colour change (magic mode)
+MAGIC_MSG_CHAN       equ 0x4399   ; channel to announce as MAGIC MSG nn on redraw (0 = none)
+REDRAW_MAGIC         equ 0x439a   ; editor redraw: MAGIC seen, font resets at each word
+DRAW_NO_GAP          equ 0x439b   ; FF = butt this DRAW graphic against the previous one
+FLASH_PENDING        equ 0x43a2   ; 0x10 after FLASH until the next printable char
+TEXT_DRAWN           equ 0x43a3   ; FF once a printable char has been drawn since init_render
+RAINBOW_IDX          equ 0x43a4   ; RAINBOW per-char colour index, 0 = off
+TEST_MSG_BUF         equ 0x43a5   ; RAM copy of TEST_MESSAGE plus the ROM checksum, 28 bytes
+FUNC_PENDING         equ 0x43ca   ; editor: FUNC (B7) pressed, next key picks the second function
+SCROLL_SPEED         equ 0x43cd   ; 0..7 from F0-F7; blank ticks inserted after every frame
+SPEED_PENDING        equ 0x43cf   ; editor: SPEED key pressed, next key is the digit
+ASK_CHAN_RESULT      equ 0x43d2   ; menu_ask_chan return value
+ASK_CHAN_PROMPT      equ 0x43d4   ; menu_ask_chan prompt string
+THIN_MODE            equ 0x43d6   ; non-zero after THIN (B9): no bold in effects
 KEY_ECHO_TX          equ 0x43d7   ; non-zero = echo accepted keys on serial TX
-VAR_43DC             equ 0x43dc
-VAR_43DE             equ 0x43de
+STORE_TEXT_LIMIT     equ 0x43dc   ; free text bytes; scan bound for store_repair
+STORE_WARN_LIMIT     equ 0x43de   ; STORE_END here trips the 100 KEYS LEFT warning
 
 ; ---- Stack / message-store geometry -----------------------------------------
 ; Stock: SP=0x403F leaves only 64 bytes before 0x4000, which is ROM - pushes
@@ -204,8 +200,12 @@ VAR_43DE             equ 0x43de
 ; + int/NMI frames), hence bug B1.  Patched: 256-byte stack at 0x5DF0..0x5EEF,
 ; carved off the top of the message store so nothing else has to move.
 STACK_TOP            equ 0x5ef0      ; first PUSH lands at 0x5EEE
+; FLASH blink: frames per half period of CTRL_LATCH bit 7. Stock 13 = 2.4 Hz;
+; 7 gave a visible ~5 Hz on the sign (2026-09-19), which is what proved bit 7
+; is the blink clock. Change here to retune, nothing else references it.
+FLASH_HALF_PERIOD    equ 13
 STORE_TOP            equ 0x5def
-; ir_init derives these three from STORE_TOP; keep them in step or the store
+; store_init derives these three from STORE_TOP; keep them in step or the store
 ; scans, the "100 KEYS LEFT" warning and the B4 '1' memory report disagree.
 STORE_WARN           equ STORE_TOP-100            ; 0x5E8B stock
 STORE_SIZE_INIT      equ STORE_TOP-MSG_STORE+1    ; 0x1B0E stock
@@ -217,13 +217,14 @@ STORE_TEXT_FREE      equ STORE_SIZE_INIT-301      ; 0x19E1 stock (301 = framing)
 RESET:
         LD SP,STACK_TOP
         CALL init_vars
+        CALL store_init
         CALL ir_init
-        CALL ir_init2
-        CALL init_vars3
+        CALL init_nmi_rate
 
-L_000f:
+; ---- restart_display: re-init and run the sequence (also from the editor)
+restart_display:
         CALL init_render
-        CALL init_vars2
+        CALL store_repair
         CALL init_sequence
         EI
         JP main_loop
@@ -265,22 +266,22 @@ int_timer:
         LD A,(TICK6_COUNT)
         INC A
         CP 6
-        JR nz,L_0082
+        JR nz,int_tick6_store
         LD HL,0xc4
         PUSH HL
         XOR A
 
-L_0082:
+int_tick6_store:
         LD (TICK6_COUNT),A
         LD A,(TICK1_COUNT)
         INC A
         CP 1
-        JR nz,L_0092
+        JR nz,int_tick1_store
         LD HL,(TICK_VECTOR)
         PUSH HL
         XOR A
 
-L_0092:
+int_tick1_store:
         LD (TICK1_COUNT),A
         EX AF,AF'
         EXX
@@ -288,7 +289,7 @@ L_0092:
         RETI
 
 ; ---- main_loop: Main loop: if PKT_READY process packet, else init/render/effect step, then loop.
-;      The PKT_READY test runs ONCE on entry - L_00a7 below never falls back
+;      The PKT_READY test runs ONCE on entry - render_loop below never falls back
 ;      to 0x009A. Re-entry only happens via fx_end_of_channel (0x0F5E) at the
 ;      end of a display cycle, or the BA wait-for-key spin at 0x0A49. That is
 ;      why NETCC sets PKT_FLAG=0x80: deferred packets wait for the current
@@ -298,21 +299,21 @@ main_loop:
         AND A
         JP nz,pkt_process
         CALL init_render
-        CALL init_display_state
+        CALL seq_next_channel
 
-L_00a7:
+render_loop:
         CALL render_next_char
         CALL effect_step
         ; LD A,(nn) sets no flags, so this JR tests effect_step's exit flags,
-        ; not RENDER_DONE. A is loaded for whatever runs after the branch.
-        LD A,(RENDER_DONE)
-        JR nz,L_00a7
+        ; not MAGIC_MODE. A is loaded for whatever runs after the branch.
+        LD A,(MAGIC_MODE)
+        JR nz,render_loop
         XOR A
         LD (COL_COUNT),A
-        LD HL,fx_none
-        LD (PAUSE_FLAG),A
+        LD HL,fxv_none
+        LD (EFFECT_ID),A
         LD (EFFECT_VECTOR),HL
-        JR L_00a7
+        JR render_loop
         db 0xc3,0xa7,0x00
 
 ; ---- tick6_service: Runs every 6 timer ticks: serial RX/TX bit engines, countdowns, display column refresh & flashing, then the RX byte consumer.
@@ -320,14 +321,14 @@ tick6_service:
         PUSH AF
         LD A,(IX+0)
         CP 0xaa
-        JR nz,L_00d5
+        JR nz,tick6_run
         LD A,(IY+0)
         CP 0x55
-        JR nz,L_00d5
+        JR nz,tick6_run
         POP AF
         RET
 
-L_00d5:
+tick6_run:
         PUSH BC
         PUSH DE
         PUSH HL
@@ -338,55 +339,55 @@ L_00d5:
         LD A,H
         AND L
         CP 0xff
-        JR z,L_00e9
+        JR z,tick6_engines
         LD (GEN_COUNTDOWN),HL
 
-L_00e9:
+tick6_engines:
         CALL rx_bit_engine
         CALL tx_bit_engine
-        LD HL,(TICK_COUNTDOWN)
+        LD HL,(BEEP_TICKS)
         LD A,H
         OR L
-        JR z,L_00fa
+        JR z,tick6_display
         DEC HL
-        LD (TICK_COUNTDOWN),HL
+        LD (BEEP_TICKS),HL
 
-L_00fa:
+tick6_display:
         LD A,(MENU_ACTIVE)
         AND A
-        JR nz,L_0125
-        LD A,(PAUSE_FLAG)
+        JR nz,row_output
+        LD A,(EFFECT_ID)
         AND A
-        JR nz,L_0125
+        JR nz,row_output
         LD A,(TINY_RENDER)
         AND A
-        JP nz,L_124b
+        JP nz,tiny_refresh
         LD A,(BLANK_TIMER)
         AND A
-        JR z,L_0125
+        JR z,row_output
         DEC A
         LD (BLANK_TIMER),A
         LD A,(CTRL_LATCH_SHADOW)
         OR 15
         LD (CTRL_LATCH_SHADOW),A
         LD (CTRL_LATCH),A
-        JP L_030d
+        JP tick6_restore
 
-L_0125:
-        LD A,(DISP_ENABLE)
+row_output:
+        LD A,(ROW_OUT_PENDING)
         AND A
-        JP z,L_01ce
+        JP z,row_advance
         LD A,(CTRL_LATCH_SHADOW)
         OR 15
         LD (CTRL_LATCH_SHADOW),A
         LD (CTRL_LATCH),A
-        LD A,(EFFECT_ACTIVE)
+        LD A,(DISP_ON)
         AND A
-        JP z,L_01b9
-        LD HL,(SEQ_PTR_SAVE)
-        LD A,(DISP_FLAGS)
+        JP z,row_phase_step
+        LD HL,(FB_OUT_PTR)
+        LD A,(FB_OUT_LEN)
         LD B,A
-        LD A,(FLASH_TIMER)
+        LD A,(ROW_PORT)
         LD C,A
         LD A,(ROW_INDEX)
         CPL
@@ -395,44 +396,44 @@ L_0125:
         OR C
         LD C,A
         PUSH IX
-        LD IX,TICK_COUNTDOWN
+        LD IX,BEEP_TICKS
         LD A,(IX+0)
         OR (IX+1)
         POP IX
-        JR z,L_0164
+        JR z,row_out_colour
         SET 5,C
 
-L_0164:
-        LD A,(ROW_DATA_LATCH)
+row_out_colour:
+        LD A,(ROW_COLOUR)
         OUT (C),A
         LD A,B
         AND A
-        JR z,L_0182
+        JR z,row_out_wrap
         BIT 0,B
-        JR z,L_0174
+        JR z,row_out_data
         DEC B
-        JR z,L_017f
+        JR z,row_out_last
 
-L_0174:
+row_out_data:
         OTIR
-        LD A,(DISP_FLAGS)
+        LD A,(FB_OUT_LEN)
         BIT 0,A
-        JR z,L_0182
+        JR z,row_out_wrap
         LD B,1
 
-L_017f:
+row_out_last:
         LD A,(HL)
         OUT (C),A
 
-L_0182:
+row_out_wrap:
         LD A,(FB_EXTRA_LEN)
         AND A
-        JR z,L_018e
+        JR z,row_strobe
         LD B,A
         LD HL,FRAMEBUF
         OTIR
 
-L_018e:
+row_strobe:
         LD A,(CTRL_LATCH_SHADOW)
         AND 0x70
         OR 15
@@ -442,12 +443,12 @@ L_018e:
         CPL
         AND 7
         DEC A
-        JR nz,L_01a5
+        JR nz,row_select
         LD A,7
 
-L_01a5:
+row_select:
         LD C,A
-        LD A,(VAR_421F)
+        LD A,(LATCH_BIT7)
         OR C
         AND 0x8f
         LD C,A
@@ -457,132 +458,132 @@ L_01a5:
         LD (CTRL_LATCH_SHADOW),A
         LD (CTRL_LATCH),A
 
-L_01b9:
-        LD A,(FLASH_TIMER)
+row_phase_step:
+        LD A,(ROW_PORT)
         CP 0x48
-        JR z,L_01c7
+        JR z,row_phase_done
         LD A,0x48
-        LD (FLASH_TIMER),A
-        JR L_01cb
+        LD (ROW_PORT),A
+        JR row_exit
 
-L_01c7:
+row_phase_done:
         XOR A
-        LD (DISP_ENABLE),A
+        LD (ROW_OUT_PENDING),A
 
-L_01cb:
-        JP L_030d
+row_exit:
+        JP tick6_restore
 
-L_01ce:
+row_advance:
         LD A,(ROW_INDEX)
         LD C,A
         INC A
         LD (ROW_INDEX),A
         CP 7
-        JP c,L_0303
+        JP c,tick6_arm_row
         LD A,0
         LD (ROW_INDEX),A
-        LD A,(VAR_43CD)
+        LD A,(SCROLL_SPEED)
         LD (BLANK_TIMER),A
-        LD A,(VAR_4244)
+        LD A,(FRAME_DELAY)
         AND A
-        JR z,L_01f3
+        JR z,frame_scroll
         DEC A
-        LD (VAR_4244),A
-        JP L_0281
+        LD (FRAME_DELAY),A
+        JP frame_bit7_tick
 
-L_01f3:
-        LD A,(EFFECT_PHASE)
+frame_scroll:
+        LD A,(SCROLLING)
         AND A
-        JR z,L_022a
+        JR z,frame_check_still
         LD HL,(FB_COL)
         LD DE,0x56
-        CALL sub_0e2d
+        CALL fb_ptr_add
         LD DE,(FB_COLPTR)
         OR A
         SBC HL,DE
-        JR z,L_0223
+        JR z,frame_scroll_stop
         LD HL,(FB_COL)
-        CALL sub_0e16
+        CALL fb_ptr_inc
         LD (FB_COL),HL
         LD DE,0x56
-        CALL sub_0e2d
+        CALL fb_ptr_add
         LD DE,(FB_COLPTR)
         OR A
         SBC HL,DE
-        JR nz,L_0237
+        JR nz,frame_colour
 
-L_0223:
+frame_scroll_stop:
         XOR A
-        LD (EFFECT_PHASE),A
-        JP L_0237
+        LD (SCROLLING),A
+        JP frame_colour
 
-L_022a:
-        LD HL,(SEQ_PTR_SAVE)
+frame_check_still:
+        LD HL,(FB_OUT_PTR)
         LD DE,(FB_COL)
         OR A
         SBC HL,DE
-        JP z,L_0281
+        JP z,frame_bit7_tick
 
-L_0237:
+frame_colour:
         LD HL,(FB_COL)
         BIT 7,(HL)
-        JR z,L_0242
+        JR z,frame_latch_colour
         LD A,(HL)
-        LD (VAR_421B),A
+        LD (WINDOW_COLOUR),A
 
-L_0242:
-        LD A,(PAUSE_FLAG)
+frame_latch_colour:
+        LD A,(EFFECT_ID)
         AND A
-        LD A,(VAR_421B)
-        JR z,L_024f
+        LD A,(WINDOW_COLOUR)
+        JR z,frame_set_window
         AND 0x10
         OR 0x8f
 
-L_024f:
-        LD (ROW_DATA_LATCH),A
+frame_set_window:
+        LD (ROW_COLOUR),A
         LD HL,(FB_COL)
-        LD (SEQ_PTR_SAVE),HL
+        LD (FB_OUT_PTR),HL
         LD HL,FB_COLPTR
         LD BC,(FB_COL)
         LD DE,0x56
         XOR A
         SBC HL,BC
         XOR A
-        LD (DISP_FLAGS),HL
+        LD (FB_OUT_LEN),HL
         EX DE,HL
         SBC HL,DE
-        JP z,L_0275
-        JP c,L_0275
-        JP L_027e
+        JP z,frame_window_wrap
+        JP c,frame_window_wrap
+        JP frame_set_extra
 
-L_0275:
+frame_window_wrap:
         LD HL,0x56
-        LD (DISP_FLAGS),HL
+        LD (FB_OUT_LEN),HL
         LD HL,0
 
-L_027e:
+frame_set_extra:
         LD (FB_EXTRA_LEN),HL
 
-L_0281:
-        LD A,(VAR_421D)
+frame_bit7_tick:
+        LD A,(FRAME_COUNT)
         INC A
-        LD (VAR_421D),A
-        CP 13
-        JR nz,L_02a1
+        LD (FRAME_COUNT),A
+        CP FLASH_HALF_PERIOD
+        JR nz,frame_done
         XOR A
-        LD (VAR_421D),A
-        LD A,(VAR_421F)
+        LD (FRAME_COUNT),A
+        LD A,(LATCH_BIT7)
         AND A
-        JR z,L_029c
+        JR z,frame_bit7_set
         XOR A
-        LD (VAR_421F),A
-        JR L_02a1
+        LD (LATCH_BIT7),A
+        JR frame_done
 
-L_029c:
+frame_bit7_set:
         LD A,0x80
-        LD (VAR_421F),A
+        LD (LATCH_BIT7),A
 
-L_02a1:
+frame_done:
         NOP
 
 ; ---- rx_consume: Pop a byte from RX_FIFO; in normal mode feed the packet parser (or if IR_CODE=A4/A5 handle keypad); packet start needs 0xB1 while idle
@@ -591,31 +592,31 @@ rx_consume:
         AND A
         JP nz,tick6_exit
         CALL rx_fifo_get
-        JP nc,L_02ca
+        JP nc,rx_have_byte
         LD A,(IR_CODE)
         CP 0xa4
-        JP z,L_02c4
+        JP z,rx_ir_stop_key
         CP 0xa5
         JP nz,tick6_exit
         LD A,0x20
         LD (RX_BYTE),A
         JP tick6_exit
 
-L_02c4:
+rx_ir_stop_key:
         LD (IR_KEY),A
         JP key_handler
 
-L_02ca:
+rx_have_byte:
         LD A,(PKT_STATE)
         AND A
-        JR z,L_02d6
+        JR z,rx_idle_byte
         CALL pkt_feed_byte
         JP tick6_exit
 
-L_02d6:
+rx_idle_byte:
         LD A,(RX_BYTE)
         CP 0xb1
-        JR nz,L_02f1
+        JR nz,rx_not_start
         LD A,(PKT_READY)
         AND A
         JR nz,tick6_exit
@@ -625,26 +626,26 @@ L_02d6:
         LD (PKT_VECTOR),HL
         JP tick6_exit
 
-L_02f1:
+rx_not_start:
         LD A,(RX_BYTE)
         CP 1
         JP z,key_handler
 
 ; ---- tick6_exit
 tick6_exit:
-        LD A,(BEEP_TIMER)
+        LD A,(SPARE_TIMER)
         AND A
-        JR z,L_0303
+        JR z,tick6_arm_row
         DEC A
-        LD (BEEP_TIMER),A
+        LD (SPARE_TIMER),A
 
-L_0303:
+tick6_arm_row:
         LD A,0xff
-        LD (DISP_ENABLE),A
+        LD (ROW_OUT_PENDING),A
         LD A,0x40
-        LD (FLASH_TIMER),A
+        LD (ROW_PORT),A
 
-L_030d:
+tick6_restore:
         POP IY
         POP IX
         POP HL
@@ -653,40 +654,41 @@ L_030d:
         POP AF
         RET
 
-; ---- init_sequence: Init SEQ_LIST (0x68 bytes) etc.
+; ---- init_sequence: validate SEQ_LIST (reset to 0..99 if not), then flag
+;      SEQ_ALL_EMPTY when no listed channel has text
 init_sequence:
         XOR A
-        LD (SEQ_IDX),A
+        LD (SEQ_ALL_EMPTY),A
         LD B,0x68
         LD HL,SEQ_LIST
         LD A,(HL)
         CP 0xff
-        JR z,L_0336
+        JR z,seq_reset_default
 
-L_0324:
+seq_scan:
         CP 0x65
-        JR nc,L_0332
+        JR nc,seq_scan_end
         INC HL
         LD A,(HL)
-        DJNZ L_0324
+        DJNZ seq_scan
         DEC HL
         LD (HL),0xff
-        JP L_034d
+        JP seq_check_first
 
-L_0332:
+seq_scan_end:
         CP 0xff
-        JR z,L_034d
+        JR z,seq_check_first
 
-L_0336:
+seq_reset_default:
         LD HL,SEQ_LIST
         LD A,0
         LD B,0x64
 
-L_033d:
+seq_fill:
         LD (HL),A
         INC HL
         INC A
-        DJNZ L_033d
+        DJNZ seq_fill
         LD (HL),0xff
         INC HL
         LD (HL),0xff
@@ -695,15 +697,15 @@ L_033d:
         INC HL
         LD (HL),0xff
 
-L_034d:
+seq_check_first:
         LD HL,SEQ_LIST
 
-L_0350:
+seq_check_loop:
         LD A,(HL)
         INC HL
         PUSH HL
         CP 0xff
-        JR z,L_0366
+        JR z,seq_all_empty
         CALL chan_select
         OR A
         JP nz,pkt_process_end
@@ -711,54 +713,56 @@ L_0350:
         CP 3
         POP HL
         RET nz
-        JP L_0350
+        JP seq_check_loop
 
-L_0366:
+seq_all_empty:
         POP HL
         LD A,10
-        LD (SEQ_IDX),A
+        LD (SEQ_ALL_EMPTY),A
         RET
 
-; ---- init_display_state
-init_display_state:
-        LD A,(VAR_420F)
+; ---- seq_next_channel: pick the channel to display next: NEXT_CHAN once, else the
+;      next SEQ_LIST entry (demo 100 when SEQ_ALL_EMPTY); seat STORE_CURSOR on its
+;      first printable byte, or on TEST_MSG_BUF in TEST_MODE
+seq_next_channel:
+        LD A,(TEST_MODE)
         INC A
-        JP z,L_0410
-        LD A,(MENU_FLAG)
+        JP z,seq_test_message
+        LD A,(NEXT_CHAN)
         CP 0x64
-        JP nc,L_0386
+        JP nc,seq_from_list
         LD E,A
         LD A,0xff
-        LD (MENU_FLAG),A
+        LD (NEXT_CHAN),A
         LD A,E
-        JP L_03ae
+        JP seq_open_channel
 
-L_0386:
-        LD A,(SEQ_IDX)
+seq_from_list:
+        LD A,(SEQ_ALL_EMPTY)
         LD E,A
         CP 10
         LD A,0x64
-        JR z,L_03ae
+        JR z,seq_open_channel
         LD HL,(SEQ_PTR)
         LD A,(HL)
         CP 0xff
-        JR nz,L_03a1
+        JR nz,seq_clamp_entry
         LD HL,SEQ_LIST
         LD (SEQ_PTR),HL
-        JP init_display_state
+        JP seq_next_channel
 
-L_03a1:
+seq_clamp_entry:
         CP 0x65
-        JR c,L_03a9
+        JR c,seq_advance
         LD A,0x64
         LD (HL),0x64
 
-L_03a9:
+seq_advance:
         LD E,A
         INC HL
         LD (SEQ_PTR),HL
 
-L_03ae:
+seq_open_channel:
         LD E,A
         PUSH DE
         CALL chan_select
@@ -767,165 +771,166 @@ L_03ae:
         JP nz,pkt_process_end
         LD A,(HL)
         CP 3
-        JR z,L_03f8
+        JR z,seq_chan_empty
         PUSH HL
         LD B,0
         LD C,A
         LD IX,CHAR_FLAGS
         ADD IX,BC
         BIT 1,(IX+0)
-        JR z,L_03e6
+        JR z,seq_set_cursor
 
-L_03cd:
+seq_skip_attrs:
         INC HL
         LD A,(HL)
         CP 3
-        JR nz,L_03d7
+        JR nz,seq_skip_attrs_next
         POP HL
-        JP L_03f8
+        JP seq_chan_empty
 
-L_03d7:
+seq_skip_attrs_next:
         LD B,0
         LD C,A
         LD IX,CHAR_FLAGS
         ADD IX,BC
         BIT 1,(IX+0)
-        JR nz,L_03cd
+        JR nz,seq_skip_attrs
 
-L_03e6:
+seq_set_cursor:
         POP HL
         LD (STORE_CURSOR),HL
         PUSH DE
-        CALL chan_find
+        CALL clear_chan_lock
         POP DE
         LD A,E
         CP 0x64
-        JR nz,L_03f7
+        JR nz,seq_ret
         LD (CHAN_LOCK),A
 
-L_03f7:
+seq_ret:
         RET
 
-L_03f8:
+seq_chan_empty:
         LD HL,(SEQ_PTR)
         LD A,(HL)
         CP 0xff
-        JP nz,init_display_state
+        JP nz,seq_next_channel
         DEC HL
         LD DE,SEQ_LIST
         OR A
         SBC HL,DE
-        JP nz,init_display_state
+        JP nz,seq_next_channel
         LD A,0x64
-        JP L_03ae
+        JP seq_open_channel
 
-L_0410:
-        LD HL,VAR_43A5
+seq_test_message:
+        LD HL,TEST_MSG_BUF
         LD (STORE_CURSOR),HL
-        CALL chan_find
+        CALL clear_chan_lock
         RET
 
-; ---- chan_find: Locate channel marker (D0+n) in MSG_STORE
-chan_find:
-        LD HL,VAR_4260
+; ---- clear_chan_lock: zero CHAN_STATE, 11 bytes ending in CHAN_LOCK
+clear_chan_lock:
+        LD HL,CHAN_STATE
         LD B,11
         LD A,0
 
-L_0421:
+clr_lock_loop:
         LD (HL),A
         INC HL
-        DJNZ L_0421
+        DJNZ clr_lock_loop
         RET
 
 ; ---- chan_select: Select channel E: find/create its slot in MSG_STORE, set INS_PTR/STORE_CURSOR
 chan_select:
         CP 0x64
-        JR nz,L_0430
+        JR nz,chan_marker
         LD HL,DEMO_MESSAGE
-        JP L_046e
+        JP chan_ok
 
-L_0430:
+chan_marker:
         LD DE,0xd0d0
         AND A
-        JR z,L_0445
+        JR z,chan_scan
         LD B,A
         LD A,0xda
 
-L_0439:
+chan_marker_inc:
         INC E
         CP E
-        JR nz,L_0443
+        JR nz,chan_marker_next
         LD E,0xd0
         INC D
         CP D
-        JR z,L_0470
+        JR z,chan_error
 
-L_0443:
-        DJNZ L_0439
+chan_marker_next:
+        DJNZ chan_marker_inc
 
-L_0445:
+chan_scan:
         LD IX,MSG_STORE
         LD BC,(STORE_SIZE)
 
-L_044d:
+chan_scan_loop:
         LD A,(IX+0)
         CP 0xda
-        JR z,L_0470
+        JR z,chan_error
         LD H,A
         LD L,(IX+1)
         OR A
         SBC HL,DE
-        JR z,L_0467
+        JR z,chan_found
         INC IX
         DEC BC
         LD A,C
         OR B
-        JR nz,L_044d
-        JP z,L_0470
+        JR nz,chan_scan_loop
+        JP z,chan_error
 
-L_0467:
+chan_found:
         INC IX
         INC IX
         PUSH IX
         POP HL
 
-L_046e:
+chan_ok:
         XOR A
         RET
 
-L_0470:
+chan_error:
         LD A,0xff
         RET
 
-; ---- init_vars2
-init_vars2:
-        CALL sub_04e5
-        CALL sub_050f
+; ---- store_repair: every boot: bad bytes -> ?, stray 03 -> space, then re-sequence
+;      the 100 channel markers and re-terminate (recovers a corrupted store)
+store_repair:
+        CALL store_fix_bad_bytes
+        CALL store_strip_ends
         LD HL,MSG_STORE
         LD A,0xd0
         LD D,0xd0
         LD E,A
-        LD BC,(VAR_43DC)
+        LD BC,(STORE_TEXT_LIMIT)
 
-L_0485:
+repair_marker:
         LD (HL),E
         INC HL
         LD (HL),D
         LD A,0xda
         INC D
         CP D
-        JR nz,L_0493
+        JR nz,repair_check_units
         LD D,0xd0
         INC E
-        JR L_049a
+        JR repair_fix_pair
 
-L_0493:
+repair_check_units:
         CP E
-        JR nz,L_049a
+        JR nz,repair_fix_pair
         DEC HL
-        JP L_04dc
+        JP repair_terminate
 
-L_049a:
+repair_fix_pair:
         DEC HL
         DEC HL
         LD (HL),0x20
@@ -934,37 +939,37 @@ L_049a:
         INC HL
         LD A,(HL)
         CP 0xd0
-        JP c,L_04ae
+        JP c,repair_next
         CP 0xdb
-        JP nc,L_04ae
+        JP nc,repair_next
         LD (HL),0x20
 
-L_04ae:
+repair_next:
         INC HL
 
-L_04af:
+repair_scan:
         LD A,(HL)
         CP 0xd0
-        JP c,L_04bc
+        JP c,repair_scan_next
         CP 0xdb
-        JP nc,L_04bc
-        JR L_0485
+        JP nc,repair_scan_next
+        JR repair_marker
 
-L_04bc:
+repair_scan_next:
         INC HL
         DEC BC
         LD A,C
         OR B
-        JR z,L_04c5
-        JP L_04af
+        JR z,repair_append_rest
+        JP repair_scan
 
-L_04c5:
+repair_append_rest:
         LD A,0xda
 
-L_04c7:
+repair_append_loop:
         LD (HL),E
         CP E
-        JR z,L_04dc
+        JR z,repair_terminate
         INC HL
         LD (HL),D
         INC HL
@@ -972,75 +977,75 @@ L_04c7:
         INC HL
         INC D
         CP D
-        JR nz,L_04c7
+        JR nz,repair_append_loop
         LD D,0xd0
         INC E
         CP E
-        JR nz,L_04c7
+        JR nz,repair_append_loop
         LD (HL),A
 
-L_04dc:
+repair_terminate:
         PUSH HL
-        CALL sub_0524
+        CALL store_add_ends
         POP HL
         LD A,0xda
         LD (HL),A
         RET
 
-sub_04e5:
+store_fix_bad_bytes:
         LD HL,MSG_STORE
         LD BC,(STORE_SIZE)
-        LD IY,VAR_4363
+        LD IY,STORE_BAD_COUNT
         LD (IY+0),0
         LD D,0
 
-L_04f6:
+fixbad_loop:
         LD E,(HL)
         LD IX,CHAR_FLAGS
         ADD IX,DE
         BIT 0,(IX+0)
-        JR z,L_0508
+        JR z,fixbad_next
         LD (HL),0x3f
         INC (IY+0)
 
-L_0508:
+fixbad_next:
         INC HL
         DEC BC
         LD A,C
         OR B
-        JR nz,L_04f6
+        JR nz,fixbad_loop
         RET
 
-sub_050f:
+store_strip_ends:
         LD HL,MSG_STORE
         LD BC,(STORE_SIZE)
 
-L_0516:
+strip_loop:
         LD A,(HL)
         CP 3
-        JR nz,L_051d
+        JR nz,strip_next
         LD (HL),0x20
 
-L_051d:
+strip_next:
         INC HL
         DEC BC
         LD A,C
         OR B
-        JR nz,L_0516
+        JR nz,strip_loop
         RET
 
-sub_0524:
+store_add_ends:
         LD IX,MSG_STORE+2
         LD BC,(STORE_SIZE)
         DEC BC
         DEC BC
 
-L_052e:
+addend_loop:
         LD A,(IX+0)
         CP 0xd0
-        JP c,L_0545
+        JP c,addend_next
         CP 0xdb
-        JP nc,L_0545
+        JP nc,addend_next
         LD (IX-1),3
         INC IX
         DEC BC
@@ -1048,16 +1053,16 @@ L_052e:
         OR B
         RET z
 
-L_0545:
+addend_next:
         INC IX
         DEC BC
         LD A,C
         OR B
-        JR nz,L_052e
+        JR nz,addend_loop
         RET
 
-; ---- init_vars3: NMI_PER_SEC = 60 -> NMI is a 60 Hz (mains) tick
-init_vars3:
+; ---- init_nmi_rate: NMI_PER_SEC = 60 -> NMI is a 60 Hz (mains) tick
+init_nmi_rate:
         LD A,0x3c
         LD (NMI_PER_SEC),A
         RET
@@ -1067,39 +1072,39 @@ init_vars3:
 init_vars:
         XOR A
         LD (TINY_RENDER),A
-        LD (ROW_PHASE),A
+        LD (TINY_FRAME_READY),A
         LD HL,MENU_ENTRY_BUF
         LD B,5
 
-L_055f:
+init_clear_addrbuf:
         LD (HL),A
         INC HL
-        DJNZ L_055f
-        LD (VAR_439B),A
-        LD (VAR_4360),A
+        DJNZ init_clear_addrbuf
+        LD (DRAW_NO_GAP),A
+        LD (DRAW_PREV),A
         LD (EURO_STATE),A
-        LD (VAR_4213),A
-        LD (VAR_4361),A
-        LD (VAR_43A2),A
-        LD (MENU_TMP2),A
-        LD (MENU_TMP),A
-        LD (VAR_43A4),A
-        LD (VAR_439A),A
-        LD (VAR_4399),A
-        LD (VAR_4395),A
-        LD (VAR_4391),A
-        LD (VAR_43A3),A
-        LD (VAR_43D6),A
+        LD (CLK_RENDER_STEP),A
+        LD (CLK_RENDERED),A
+        LD (FLASH_PENDING),A
+        LD (MAGIC_FONT_SET),A
+        LD (MAGIC_COLOUR_SET),A
+        LD (RAINBOW_IDX),A
+        LD (REDRAW_MAGIC),A
+        LD (MAGIC_MSG_CHAN),A
+        LD (MAGIC_WORD_COUNT),A
+        LD (MAGIC_FLASH_WORD),A
+        LD (TEXT_DRAWN),A
+        LD (THIN_MODE),A
         LD (KEY_ECHO_TX),A
-        LD (VAR_43CF),A
-        LD (VAR_43CA),A
-        LD (VAR_43CD),A
+        LD (SPEED_PENDING),A
+        LD (FUNC_PENDING),A
+        LD (SCROLL_SPEED),A
         LD (BLANK_TIMER),A
         LD (TICK6_COUNT),A
         LD A,0xff
-        LD (MENU_FLAG),A
+        LD (NEXT_CHAN),A
         LD A,0x20
-        LD (MENU_CHAR),A
+        LD (MAGIC_LAST_CHAR),A
         LD A,(NMI_COUNT)
         LD (RND_SEED),A
         AND 3
@@ -1110,7 +1115,7 @@ L_055f:
         LD A,(MY_ADDRESS_INV)
         CPL
         CP C
-        JR z,L_05cc
+        JR z,init_copy_tables
         ; MY_ADDRESS_INV is MY_ADDRESS+1, so one 16-bit store does both:
         ; L=0x01 -> address 1 (NETCC's default), H=0xFE -> its complement.
         LD HL,0xfe01
@@ -1118,21 +1123,21 @@ L_055f:
         NOP
         NOP
 
-L_05cc:
+init_copy_tables:
         LD HL,INIT_DATA
         LD BC,10
         LD DE,FB_COLPTR
         LDIR
-        LD HL,INIT_DATA+10               ; -> EFFECT_TMP
-        LD DE,EFFECT_TMP
+        LD HL,INIT_DATA+10               ; -> STAGE_PTR
+        LD DE,STAGE_PTR
         LD BC,8
         LDIR
         LD HL,INIT_DATA+0x18             ; -> CLK_RUN..
         LD DE,CLK_RUN
         LD BC,0x5a
         LDIR
-        LD HL,INIT_DATA+0x73             ; -> VAR_4336..
-        LD DE,VAR_4336
+        LD HL,INIT_DATA+0x73             ; -> SEQ_MENU_ACTIVE..
+        LD DE,SEQ_MENU_ACTIVE
         LD BC,0x24
         LDIR
         IM 1
@@ -1154,13 +1159,13 @@ INIT_DATA:
         db 0x40               ; 419e 
         db 0x01               ; 419f 
         db 0x01               ; 41a0 
-        db 0x00               ; 41a1 FB_TMP
-; -- +0a -> 41f8 (EFFECT_TMP), 8 bytes
-        dw TXBUF              ; 41f8 EFFECT_TMP
+        db 0x00               ; 41a1 BGRND_PENDING
+; -- +0a -> 41f8 (STAGE_PTR), 8 bytes
+        dw TXBUF              ; 41f8 STAGE_PTR
         db 0x56               ; 41fa 
-        dw 0x0000             ; 41fb EFFECT_TMP2
-        db 0x00               ; 41fd FLASH_TIMER
-        dw 0x0000             ; 41fe TICK_COUNTDOWN
+        dw 0x0000             ; 41fb STAGE_OFFSET
+        db 0x00               ; 41fd ROW_PORT
+        dw 0x0000             ; 41fe BEEP_TICKS
         db 0x01,0x02,0x00,0x00,0x00,0x00   ; +12 dead
 ; -- +18 -> 4206 (CLK_RUN), 90 bytes
         db 0x01               ; 4206 CLK_RUN
@@ -1168,57 +1173,57 @@ INIT_DATA:
         dw 0x0000             ; 4208 GLYPH_PTR
         dw 0x0000             ; 420a MENU_MSG_PTR
         db 0x0f               ; 420c CUR_COLOUR
-        db 0x00               ; 420d EFFECT_PHASE
+        db 0x00               ; 420d SCROLLING
         db 0x00               ; 420e CUR_CHAR
-        db 0x00               ; 420f VAR_420F
-        dw FRAMEBUF           ; 4210 SEQ_PTR_SAVE
-        db 0x01               ; 4212 EFFECT_ACTIVE
-        db 0x05               ; 4213 VAR_4213
-        dw 0x0000             ; 4214 VAR_4214
+        db 0x00               ; 420f TEST_MODE
+        dw FRAMEBUF           ; 4210 FB_OUT_PTR
+        db 0x01               ; 4212 DISP_ON
+        db 0x05               ; 4213 CLK_RENDER_STEP
+        dw 0x0000             ; 4214 CLK_RENDER_PTR
         db 0x00               ; 4216 
         db 0x00               ; 4217 MENU_ACTIVE
         dw 0x0000             ; 4218 INS_PTR
-        db 0x00               ; 421a RENDER_DONE
-        db 0x00               ; 421b VAR_421B
+        db 0x00               ; 421a MAGIC_MODE
+        db 0x00               ; 421b WINDOW_COLOUR
         db 0x0f               ; 421c COL_COUNT
-        db 0x00               ; 421d VAR_421D
-        db 0x00               ; 421e VAR_421E
-        db 0x0a               ; 421f VAR_421F
-        db 0x00               ; 4220 VAR_4220
-        db 0x00               ; 4221 VAR_4221
-        db 0x00               ; 4222 ROW_DATA_LATCH
-        db 0x0f               ; 4223 RX_MSGFLAG
+        db 0x00               ; 421d FRAME_COUNT
+        db 0x00               ; 421e FLASH_BIT
+        db 0x0a               ; 421f LATCH_BIT7
+        db 0x00               ; 4220 COLOR_PENDING
+        db 0x00               ; 4221 GRAPH_PENDING
+        db 0x00               ; 4222 ROW_COLOUR
+        db 0x0f               ; 4223 QUERIES_ENABLED
         db 0x00               ; 4224 MENU_MSG_FLAG
-        db 0x00               ; 4225 RX_LASTCMD
-        db 0x00               ; 4226 VAR_4226
-        db 0x00               ; 4227 VAR_4227
+        db 0x00               ; 4225 EDIT_KEY
+        db 0x00               ; 4226 PREV_KEY
+        db 0x00               ; 4227 PREV_KEY2
         db 0x00               ; 4228 RX_BYTE
-        db 0x00               ; 4229 VAR_4229
-        dw 0x0000             ; 422a BEEP_TIMER
+        db 0x00               ; 4229 IR_KEY_CHAR
+        dw 0x0000             ; 422a SPARE_TIMER
         db 0x00               ; 422c 
         dw 0x0000             ; 422d CTRL_LATCH_SHADOW
         db 0x00               ; 422f 
-        dw 0x5600             ; 4230 DISP_FLAGS
+        dw 0x5600             ; 4230 FB_OUT_LEN
         dw 0x0000             ; 4232 FB_EXTRA_LEN
         dw 0xff00             ; 4234 STORE_END
-        dw 0x005f             ; 4236 VAR_4236
+        dw 0x005f             ; 4236 STORE_WRAPPED
         db 0x00               ; 4238 
         db 0x00               ; 4239 
-        db 0x00               ; 423a PAUSE_FLAG
+        db 0x00               ; 423a EFFECT_ID
         dw 0x0000             ; 423b EFFECT_VECTOR
         dw 0x0000             ; 423d MENU_TEXT_PTR
         db 0x00               ; 423f 
         db 0x00               ; 4240 
-        db 0x00               ; 4241 VAR_4241
-        db 0x01               ; 4242 VAR_4242
-        db 0x00               ; 4243 VAR_4243
-        db 0x00               ; 4244 VAR_4244
+        db 0x00               ; 4241 SHIFT_LABEL
+        db 0x01               ; 4242 FLUSH_PENDING
+        db 0x00               ; 4243 PROG_MSG_FORCE
+        db 0x00               ; 4244 FRAME_DELAY
         db 0x00               ; 4245 ROW_INDEX
         dw 0x0000             ; 4246 RX_BITMASK
         db 0x00               ; 4248 
         dw 0x0000             ; 4249 RX_SHIFT
         db 0x00               ; 424b RX_TICKS
-        db 0x00               ; 424c VAR_424C
+        db 0x00               ; 424c RX_SPARE
         dw 0x0000             ; 424d RX_FIFO
         db 0x00               ; 424f 
         db 0x00               ; 4250 
@@ -1234,18 +1239,18 @@ INIT_DATA:
         db 0x00               ; 425c RX_STATE
         dw rx_st_wait_start   ; +6f -> 425d
         dw rx_st_wait_start   ; +71 -> 425f
-; -- +73 -> 4336 (VAR_4336), 36 bytes
-        db 0x00               ; 4336 VAR_4336
+; -- +73 -> 4336 (SEQ_MENU_ACTIVE), 36 bytes
+        db 0x00               ; 4336 SEQ_MENU_ACTIVE
         db 0x00               ; 4337 SHIFT_STATE
-        db 0x00               ; 4338 VAR_4338
+        db 0x00               ; 4338 PREV_SPACE
         db 0x00               ; 4339 FONT_MODE
         db 0x00               ; 433a TINY_MODE
-        db 0x00               ; 433b VAR_433B
+        db 0x00               ; 433b FORCE_BOLD
         dw 0x04b0             ; 433c NMI_COUNT
         dw 0x0000             ; 433e STORE_TMP
         dw 0x0000             ; 4340 MOVE_DST
         dw 0x0000             ; 4342 MOVE_SRC
-        dw 0x0000             ; 4344 VAR_4344
+        dw 0x0000             ; 4344 REDRAW_FROM
         dw MSG_STORE          ; 4346 STORE_CURSOR
         db 0x00               ; 4348 TX_BITIDX
         db 0x01               ; 4349 TX_BITMASK
@@ -1262,145 +1267,148 @@ INIT_DATA:
         db 0x00               ; 4355 
         dw TX_TIMING          ; +93 -> 4356
         db 0xff               ; 4358 CAPS_LOCK
-        db 0xff               ; 4359 DISP_ENABLE
+        db 0xff               ; 4359 ROW_OUT_PENDING
 
 ; ---- init_render: Reset render state for the current message
 init_render:
         CALL clear_framebuf
         XOR A
-        LD (VAR_439B),A
-        LD (VAR_4360),A
+        LD (DRAW_NO_GAP),A
+        LD (DRAW_PREV),A
         LD (TINY_RENDER),A
-        LD (ROW_PHASE),A
+        LD (TINY_FRAME_READY),A
         LD A,0xff
-        LD (EFFECT_ACTIVE),A
+        LD (DISP_ON),A
         LD HL,FRAMEBUF
-        LD (SEQ_PTR_SAVE),HL
+        LD (FB_OUT_PTR),HL
         LD (FB_COL),HL
         LD HL,0
         LD (FB_EXTRA_LEN),HL
         LD HL,0x56
-        LD (DISP_FLAGS),HL
+        LD (FB_OUT_LEN),HL
         LD A,1
-        LD (VAR_438C),A
+        LD (EFFECT_ID_COPY),A
         XOR A
-        LD (RENDER_DONE),A
-        LD (EFFECT_PHASE),A
-        LD (VAR_4213),A
-        LD (RENDER_DONE),A
-        LD (VAR_421E),A
-        LD (MENU_TMP),A
-        LD (VAR_439A),A
-        LD (MENU_TMP2),A
+        LD (MAGIC_MODE),A
+        LD (SCROLLING),A
+        LD (CLK_RENDER_STEP),A
+        LD (MAGIC_MODE),A
+        LD (FLASH_BIT),A
+        LD (MAGIC_COLOUR_SET),A
+        LD (REDRAW_MAGIC),A
+        LD (MAGIC_FONT_SET),A
         LD (RND_VAL),A
-        LD (PAUSE_FLAG),A
-        LD (VAR_4244),A
-        LD (VAR_43A2),A
-        LD (VAR_43A3),A
-        LD (VAR_43A4),A
-        LD (VAR_43CD),A
-        LD (VAR_433B),A
+        LD (EFFECT_ID),A
+        LD (FRAME_DELAY),A
+        LD (FLASH_PENDING),A
+        LD (TEXT_DRAWN),A
+        LD (RAINBOW_IDX),A
+        LD (SCROLL_SPEED),A
+        LD (FORCE_BOLD),A
         LD (TINY_MODE),A
         LD (FONT_MODE),A
-        LD (VAR_43D6),A
+        LD (THIN_MODE),A
         LD A,0x8f
-        LD (VAR_421B),A
-        LD (ROW_DATA_LATCH),A
+        LD (WINDOW_COLOUR),A
+        LD (ROW_COLOUR),A
         LD (CUR_COLOUR),A
-        LD HL,fx_none
+        LD HL,fxv_none
         LD (EFFECT_VECTOR),HL
         LD HL,FRAMEBUF_ROW1
         LD (FB_COLPTR),HL
         LD HL,TXBUF
-        LD (EFFECT_TMP),HL
+        LD (STAGE_PTR),HL
         CALL clear_txbuf
         CALL clear_glyph_tmp
         LD HL,(STORE_LIMIT)
         LD (HL),0xda
         RET
 
-sub_072a:
+; ---- track_flash_space: FLASH takes effect at the next printable char and ends
+;      at the next space; two spaces in a row clear the background colour
+track_flash_space:
         LD A,(CUR_CHAR)
         CP 0x20
-        JR z,L_0757
+        JR z,space_seen
         XOR A
-        LD (VAR_4338),A
+        LD (PREV_SPACE),A
         LD A,(CUR_CHAR)
         LD D,0
         LD E,A
         LD HL,CHAR_FLAGS
         ADD HL,DE
         BIT 1,(HL)
-        JR nz,L_0776
+        JR nz,track_done
         LD A,0xff
-        LD (VAR_43A3),A
-        LD A,(VAR_43A2)
+        LD (TEXT_DRAWN),A
+        LD A,(FLASH_PENDING)
         AND A
-        JR z,L_0776
-        LD (VAR_421E),A
+        JR z,track_done
+        LD (FLASH_BIT),A
         XOR A
-        LD (VAR_43A2),A
-        JR L_0776
+        LD (FLASH_PENDING),A
+        JR track_done
 
-L_0757:
+space_seen:
         XOR A
-        LD (VAR_421E),A
-        LD A,(VAR_4338)
+        LD (FLASH_BIT),A
+        LD A,(PREV_SPACE)
         AND A
-        JR nz,L_0768
+        JR nz,double_space
         LD A,1
-        LD (VAR_4338),A
-        JR L_0776
+        LD (PREV_SPACE),A
+        JR track_done
 
-L_0768:
-        LD A,(VAR_420F)
+double_space:
+        LD A,(TEST_MODE)
         INC A
-        JR z,L_0776
+        JR z,track_done
         LD A,(CUR_COLOUR)
         AND 15
         LD (CUR_COLOUR),A
 
-L_0776:
+track_done:
         RET
 
 ; ---- render_next_char: Fetch next byte from the message store at STORE_CURSOR and act on it: attribute bytes are dispatched, printable bytes are drawn via glyph_lookup
 render_next_char:
-        CALL sub_0968
+        CALL fetch_char
 
-sub_077a:
-        CALL sub_072a
-        CALL sub_0b14
-        CALL sub_0996
-        CALL sub_0a60
-        CALL sub_0a53
-        CALL sub_0a17
-        CALL sub_09fe
-        CALL sub_098c
+; ---- render_cur_char: render CUR_CHAR (render_next_char without the fetch)
+render_cur_char:
+        CALL track_flash_space
+        CALL magic_preprocess
+        CALL attr_rainbow
+        CALL attr_draw_check
+        CALL attr_thin_check
+        CALL attr_wait_check
+        CALL attr_remark_check
+        CALL attr_hold_check
         CP 0xbe
         JP z,attr_tiny
         AND 0xf0
         CP 0xa0
-        JR nz,L_07a7
+        JR nz,class_not_a0
         LD A,(CUR_CHAR)
         AND 15
         LD (CUR_CHAR),A
         JR glyph_lookup
 
-L_07a7:
+class_not_a0:
         LD A,(CUR_CHAR)
         CP 0x17
         JR z,glyph_lookup
         BIT 7,A
-        JP nz,L_07c5
+        JP nz,class_high
         AND 0x60
-        JP z,L_0ea8
+        JP z,attr_control
         LD A,(CUR_CHAR)
         CP 0x5f
-        JP z,L_1d90
+        JP z,render_clock
         BIT 7,A
         JP z,glyph_lookup
 
-L_07c5:
+class_high:
         CP 0x94
         JP c,attr_colour_speed
         CP 0xa0
@@ -1428,7 +1436,7 @@ glyph_lookup:
         RL D
         ADD HL,DE
         LD (GLYPH_PTR),HL
-        LD (GLYPH_PTR2),HL
+        LD (GLYPH_PTR_ORIG),HL
         LD DE,7
         ADD HL,DE
         LD A,(HL)
@@ -1436,177 +1444,179 @@ glyph_lookup:
         CALL clear_glyph_tmp
         LD A,(TINY_MODE)
         AND A
-        JR nz,L_085c
-        CALL draw_glyph
-        CALL sub_0de3
-        CALL sub_0d97
-        LD A,(VAR_4213)
+        JR nz,glyph_place
+        CALL glyph_bold
+        CALL glyph_big
+        CALL glyph_italic
+        LD A,(CLK_RENDER_STEP)
         CP 0xff
-        JR nz,L_0826
+        JR nz,glyph_graphic_check
         XOR A
-        LD (VAR_4213),A
+        LD (CLK_RENDER_STEP),A
         LD A,0xff
-        LD (VAR_4361),A
+        LD (CLK_RENDERED),A
 
-L_0826:
+glyph_graphic_check:
         LD A,(CUR_CHAR)
         AND 0xf0
-        JR nz,L_085c
+        JR nz,glyph_place
         LD HL,(GLYPH_PTR)
-        LD DE,(GLYPH_PTR2)
+        LD DE,(GLYPH_PTR_ORIG)
         OR A
         SBC HL,DE
-        JR nz,L_084d
+        JR nz,glyph_double_width
         LD HL,(GLYPH_PTR)
         LD A,(GLYPH_WIDTH)
         LD C,A
         LD B,0
-        LD DE,VAR_42D6
+        LD DE,GLYPH_BUF
         LDIR
-        LD HL,VAR_42D6
+        LD HL,GLYPH_BUF
         LD (GLYPH_PTR),HL
 
-L_084d:
+glyph_double_width:
         LD A,(GLYPH_WIDTH)
         SLA A
         CP 0x20
-        JP c,L_0859
+        JP c,glyph_set_width
         LD A,0x1f
 
-L_0859:
+glyph_set_width:
         LD (GLYPH_WIDTH),A
 
-L_085c:
+glyph_place:
         LD A,(MENU_ACTIVE)
         AND A
-        JR nz,L_0869
-        LD A,(PAUSE_FLAG)
+        JR nz,glyph_direct
+        LD A,(EFFECT_ID)
         AND A
-        JP nz,L_08fc
+        JP nz,glyph_stage
 
-L_0869:
+glyph_direct:
         LD A,0
-        LD (VAR_438C),A
+        LD (EFFECT_ID_COPY),A
 
-sub_086e:
-        LD A,(RENDER_DONE)
+; ---- glyph_blit: write colour byte + glyph columns at FB_COLPTR
+glyph_blit:
+        LD A,(MAGIC_MODE)
         AND A
-        JR z,L_0887
+        JR z,blit_setup
         LD A,(CUR_CHAR)
         CP 0x20
-        JR nz,L_0887
-        LD DE,TBL_08F0
+        JR nz,blit_setup
+        LD DE,WIDE_SPACE_GLYPH
         LD (GLYPH_PTR),DE
         LD A,9
         LD (GLYPH_WIDTH),A
 
-L_0887:
+blit_setup:
         LD DE,(GLYPH_PTR)
         LD HL,(FB_COLPTR)
         LD A,(GLYPH_WIDTH)
         LD B,A
         LD A,(MENU_ACTIVE)
         AND A
-        JR z,L_08a5
+        JR z,blit_flash_bit
         LD A,15
         LD (CUR_COLOUR),A
         LD A,(TINY_MODE)
         AND A
         LD C,0
-        JR nz,L_08b7
+        JR nz,blit_colour
 
-L_08a5:
-        LD A,(VAR_4391)
+blit_flash_bit:
+        LD A,(MAGIC_FLASH_WORD)
         AND A
-        JR z,L_08b3
+        JR z,blit_use_flash
         XOR A
-        LD (VAR_4391),A
+        LD (MAGIC_FLASH_WORD),A
         LD A,0x10
-        JR L_08b6
+        JR blit_set_c
 
-L_08b3:
-        LD A,(VAR_421E)
+blit_use_flash:
+        LD A,(FLASH_BIT)
 
-L_08b6:
+blit_set_c:
         LD C,A
 
-L_08b7:
+blit_colour:
         PUSH BC
         LD A,(CUR_CHAR)
         CP 0x20
         LD C,0xf0
-        JR z,L_08c3
+        JR z,blit_write_colour
         LD C,0xff
 
-L_08c3:
+blit_write_colour:
         LD A,(CUR_COLOUR)
         AND C
         POP BC
         OR C
         SET 7,A
         LD (HL),A
-        LD A,(VAR_439B)
+        LD A,(DRAW_NO_GAP)
         AND A
-        CALL z,sub_0e16
+        CALL z,fb_ptr_inc
         XOR A
-        LD (VAR_439B),A
+        LD (DRAW_NO_GAP),A
 
-L_08d7:
+blit_columns:
         LD A,(DE)
         LD (HL),A
         INC DE
-        CALL sub_0e16
-        DJNZ L_08d7
+        CALL fb_ptr_inc
+        DJNZ blit_columns
         LD (FB_COLPTR),HL
         LD A,(MENU_ACTIVE)
         AND A
         LD A,0
-        JR nz,L_08ec
+        JR nz,blit_set_scroll
         LD A,0xff
 
-L_08ec:
-        LD (EFFECT_PHASE),A
+blit_set_scroll:
+        LD (SCROLLING),A
         RET
 
-; ---- data 08f0-08fb:
-TBL_08F0:
+; ---- WIDE_SPACE_GLYPH: 9-column blank used for spaces in MAGIC mode
+WIDE_SPACE_GLYPH:
         db 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
 
-L_08fc:
-        LD HL,(EFFECT_TMP)
+; ---- glyph_stage: effect active: stage the glyph into TXBUF instead
+glyph_stage:
+        LD HL,(STAGE_PTR)
         LD A,(GLYPH_WIDTH)
         LD D,0
         LD E,A
         ADD HL,DE
-        LD DE,EFFECT_TMP
+        LD DE,STAGE_PTR
         XOR A
         SBC HL,DE
-        JP nc,L_0efc
-        LD DE,(EFFECT_TMP)
-        LD A,(VAR_421E)
+        JP nc,fx_flush_stage
+        LD DE,(STAGE_PTR)
+        LD A,(FLASH_BIT)
         OR 0x8f
         LD (DE),A
-        LD A,(VAR_439B)
+        LD A,(DRAW_NO_GAP)
         AND A
         LD A,0
-        LD (VAR_439B),A
-        JR nz,L_0925
+        LD (DRAW_NO_GAP),A
+        JR nz,stage_copy
         INC DE
 
-L_0925:
+stage_copy:
         LD HL,(GLYPH_PTR)
         LD A,(GLYPH_WIDTH)
         LD B,0
         LD C,A
         LDIR
-        LD (EFFECT_TMP),DE
+        LD (STAGE_PTR),DE
         JP render_next_char
 
-L_0937:
+stage_centre:
         SRL H
         RR L
-        LD (EFFECT_TMP2),HL
-        CALL sub_0cea
+        LD (STAGE_OFFSET),HL
+        CALL unfetch_char
         RET
 
 ; ---- char_to_glyph: Map a character code to a font glyph index
@@ -1616,77 +1626,80 @@ char_to_glyph:
         AND 0xf0
         CP 0xc0
         LD DE,FONT+8*128
-        JR z,L_0963
+        JR z,glyph_base_sel
         CP 0xd0
         LD DE,FONT+8*175
-        JR z,L_0963
+        JR z,glyph_base_sel
         CP 0xe0
         LD DE,FONT+8*144
-        JR z,L_0963
+        JR z,glyph_base_sel
         CP 0x90
         LD DE,FONT+8*160
-        JR z,L_0963
+        JR z,glyph_base_sel
         POP AF
         RET
 
-L_0963:
+glyph_base_sel:
         POP AF
         AND 15
         EX DE,HL
         RET
 
-sub_0968:
+; ---- fetch_char: CUR_CHAR = next store byte (LEFT substituted after a clock)
+fetch_char:
         PUSH HL
         PUSH AF
         LD HL,(STORE_CURSOR)
-        LD A,(PAUSE_FLAG)
+        LD A,(EFFECT_ID)
         AND A
-        JR z,L_097d
-        LD A,(VAR_4361)
+        JR z,fetch_read
+        LD A,(CLK_RENDERED)
         AND A
-        JR z,L_097d
+        JR z,fetch_read
         LD A,0x18
-        JR L_097e
+        JR fetch_store
 
-L_097d:
+fetch_read:
         LD A,(HL)
 
-L_097e:
+fetch_store:
         INC HL
         LD (STORE_CURSOR),HL
         LD (CUR_CHAR),A
         XOR A
-        LD (VAR_4361),A
+        LD (CLK_RENDERED),A
         POP AF
         POP HL
         RET
 
-sub_098c:
+; ---- attr_hold_check: BB HOLD goes through fx_attr
+attr_hold_check:
         LD A,(CUR_CHAR)
         CP 0xbb
         RET nz
         POP HL
-        JP L_0ef1
+        JP fx_attr
 
-sub_0996:
+; ---- attr_rainbow: BC starts the per-character colour cycle
+attr_rainbow:
         LD A,(CUR_CHAR)
         CP 0xbc
-        JR nz,L_09b5
-        LD A,(RENDER_DONE)
+        JR nz,rainbow_step
+        LD A,(MAGIC_MODE)
         AND A
-        JR z,L_09a9
-        LD A,(TBL_09F6+1)
+        JR z,rainbow_on
+        LD A,(RAINBOW_COLOURS+1)
         LD (CUR_COLOUR),A
 
-L_09a9:
+rainbow_on:
         LD A,1
-        LD (VAR_43A4),A
-        LD (MENU_TMP),A
+        LD (RAINBOW_IDX),A
+        LD (MAGIC_COLOUR_SET),A
         POP HL
         JP render_next_char
 
-L_09b5:
-        LD A,(VAR_43A4)
+rainbow_step:
+        LD A,(RAINBOW_IDX)
         AND A
         LD A,(CUR_CHAR)
         RET z
@@ -1698,424 +1711,431 @@ L_09b5:
         ADD IX,DE
         BIT 1,(IX+0)
         RET nz
-        LD A,(VAR_43A4)
+        LD A,(RAINBOW_IDX)
         INC A
         AND 7
-        JR nz,L_09d8
+        JR nz,rainbow_lookup
         LD A,1
 
-L_09d8:
+rainbow_lookup:
         LD E,A
         LD D,0
-        LD HL,TBL_09F6
+        LD HL,RAINBOW_COLOURS
         ADD HL,DE
         LD A,(HL)
         CP 0xff
-        JR nz,L_09e9
+        JR nz,rainbow_apply
         LD E,1
-        LD A,(TBL_09F6+1)
+        LD A,(RAINBOW_COLOURS+1)
 
-L_09e9:
+rainbow_apply:
         AND 15
         LD (CUR_COLOUR),A
         LD A,E
-        LD (VAR_43A4),A
+        LD (RAINBOW_IDX),A
         LD A,(CUR_CHAR)
         RET
 
-; ---- data 09f6-09fd:
-TBL_09F6:
+; ---- RAINBOW_COLOURS: per-character cycle red, orange, yellow, lime, green
+RAINBOW_COLOURS:
         db 0x00,0x8c,0x8d,0x8f,0x87,0x83,0xff,0xff
 
-sub_09fe:
+attr_remark_check:
         LD A,(CUR_CHAR)
         CP 0xb0
         RET nz
 
-L_0a04:
-        CALL sub_0968
+remark_skip:
+        CALL fetch_char
         LD A,(CUR_CHAR)
 
 ; ---- attr_remark: 0xB0: skip text until the next 0xB0 (hidden remark)
 attr_remark:
         CP 0xb0
-        JR z,L_0a13
+        JR z,remark_end
         CP 3
         RET z
-        JR L_0a04
+        JR remark_skip
 
-L_0a13:
+remark_end:
         POP HL
         JP render_next_char
 
-sub_0a17:
+; ---- attr_wait_check: BA WAIT: flush, then spin until SPACE or a packet
+attr_wait_check:
         LD A,(CUR_CHAR)
         CP 0xba
         RET nz
         LD A,(COL_COUNT)
         AND A
-        JR z,L_0a34
-        LD HL,(EFFECT_TMP)
+        JR z,wait_for_key
+        LD HL,(STAGE_PTR)
         LD DE,TXBUF
         XOR A
         SBC HL,DE
-        JR z,L_0a34
+        JR z,wait_for_key
         LD A,0x18
         LD (CUR_CHAR),A
         RET
 
-L_0a34:
-        CALL sub_1062
+wait_for_key:
+        CALL fb_colours_default
         XOR A
         LD (RX_BYTE),A
         LD (IR_CODE),A
 
-L_0a3e:
+wait_poll:
         LD A,(RX_BYTE)
         CP 0x20
-        JR nz,L_0a49
+        JR nz,wait_check_pkt
         POP HL
         JP render_next_char
 
-L_0a49:
+wait_check_pkt:
         LD A,(PKT_READY)
         AND A
         JP nz,pkt_process
-        JP L_0a3e
+        JP wait_poll
 
-sub_0a53:
+; ---- attr_thin_check: B9 THIN
+attr_thin_check:
         LD A,(CUR_CHAR)
         CP 0xb9
         RET nz
-        LD (VAR_43D6),A
+        LD (THIN_MODE),A
         POP HL
         JP render_next_char
 
-sub_0a60:
+; ---- attr_draw_check: B8 DRAW: hex digit pairs -> DRAW_BUF columns, up to
+;      16, ended by the first non-hex byte
+attr_draw_check:
         LD A,(CUR_CHAR)
 
-; ---- attr_graphic: 0xB8: user-drawn graphic follows
-attr_graphic:
+; ---- attr_draw: 0xB8: user-drawn graphic follows
+attr_draw:
         CP 0xb8
-        JR z,L_0a70
+        JR z,draw_begin
         LD A,0
-        LD (VAR_4360),A
+        LD (DRAW_PREV),A
         LD A,(CUR_CHAR)
         RET
 
-L_0a70:
-        LD A,(VAR_4360)
-        LD (VAR_439B),A
+draw_begin:
+        LD A,(DRAW_PREV)
+        LD (DRAW_NO_GAP),A
         LD A,0xff
-        LD (VAR_4360),A
-        LD HL,VAR_4365
+        LD (DRAW_PREV),A
+        LD HL,DRAW_BUF
         PUSH HL
         PUSH HL
         LD B,0x10
 
-L_0a82:
+draw_clear:
         LD (HL),0
         INC HL
-        DJNZ L_0a82
+        DJNZ draw_clear
         CALL clear_glyph_tmp
         POP HL
         LD C,0
         LD B,0x10
 
-L_0a8f:
-        CALL sub_0968
+draw_hex_loop:
+        CALL fetch_char
         LD A,(CUR_CHAR)
-        CALL sub_0af4
+        CALL hex_digit_value
         CP 0xff
-        JR z,L_0ae2
+        JR z,draw_bad_hex
         PUSH AF
-        CALL sub_0968
+        CALL fetch_char
         LD A,(CUR_CHAR)
-        CALL sub_0af4
+        CALL hex_digit_value
         CP 0xff
-        JR z,L_0ae1
+        JR z,draw_pop_odd
         RRD
         POP AF
         RRD
         INC HL
         INC C
-        DJNZ L_0a8f
+        DJNZ draw_hex_loop
 
-L_0ab3:
+draw_finish:
         POP HL
         LD (GLYPH_PTR),HL
-        LD (GLYPH_PTR2),HL
+        LD (GLYPH_PTR_ORIG),HL
         LD A,C
         AND A
-        JP nz,L_0ac9
+        JP nz,draw_set_width
         XOR A
-        LD (VAR_439B),A
+        LD (DRAW_NO_GAP),A
         LD A,0x20
         LD (CUR_CHAR),A
         RET
 
-L_0ac9:
+draw_set_width:
         LD (GLYPH_WIDTH),A
         POP HL
-        LD A,(PAUSE_FLAG)
+        LD A,(EFFECT_ID)
         AND A
-        JP z,L_085c
-        CALL draw_glyph
+        JP z,glyph_place
+        CALL glyph_bold
         LD A,(GLYPH_WIDTH)
         DEC A
         LD (GLYPH_WIDTH),A
-        JP L_085c
+        JP glyph_place
 
-L_0ae1:
+draw_pop_odd:
         POP AF
 
-L_0ae2:
+draw_bad_hex:
         LD A,(CUR_CHAR)
         CP 3
-        JR nz,L_0aec
-        CALL sub_0cea
+        JR nz,draw_abort
+        CALL unfetch_char
 
-L_0aec:
+draw_abort:
         LD A,0x2a
         LD (CUR_CHAR),A
-        JP L_0ab3
+        JP draw_finish
 
-sub_0af4:
+; ---- hex_digit_value: A = value of ASCII hex digit, FF if not one
+hex_digit_value:
         CP 0x30
-        JP c,L_0b11
+        JP c,hexval_bad
         CP 0x3a
-        JP c,L_0b0e
+        JP c,hexval_ok
         AND 0xdf
         CP 0x41
-        JP c,L_0b11
+        JP c,hexval_bad
         CP 0x47
-        JP nc,L_0b11
+        JP nc,hexval_bad
         AND 15
         ADD A,9
 
-L_0b0e:
+hexval_ok:
         AND 15
         RET
 
-L_0b11:
+hexval_bad:
         LD A,0xff
         RET
 
-sub_0b14:
+; ---- magic_preprocess: MAGIC mode: random font per word, colour change every
+;      few words or at punctuation, text pushed off before movement attributes
+magic_preprocess:
         LD A,(MENU_ACTIVE)
         AND A
         RET nz
-        LD A,(RENDER_DONE)
+        LD A,(MAGIC_MODE)
         AND A
         RET z
-        LD A,(PAUSE_FLAG)
+        LD A,(EFFECT_ID)
         AND A
-        JR z,L_0b2e
+        JR z,magic_char
         LD A,(CUR_CHAR)
         CP 0x20
         RET nz
         POP HL
-        JP L_0efc
+        JP fx_flush_stage
 
-L_0b2e:
+magic_char:
         LD A,(CUR_CHAR)
         CP 0x20
-        JR nz,L_0b62
-        LD HL,VAR_4395
+        JR nz,magic_attr
+        LD HL,MAGIC_WORD_COUNT
         INC (HL)
         LD A,2
         LD (FONT_MODE),A
-        LD A,(MENU_CHAR)
+        LD A,(MAGIC_LAST_CHAR)
         CP 0x2e
-        JP z,L_0c68
+        JP z,magic_reseed
         CP 0x21
-        JP z,L_0c68
+        JP z,magic_reseed
         CP 0x3f
-        JP z,L_0c68
+        JP z,magic_reseed
         CP 0x3a
-        JP z,L_0c68
+        JP z,magic_reseed
         CP 0x2c
-        JP z,L_0c68
+        JP z,magic_reseed
         LD A,0x20
-        LD (MENU_CHAR),A
-        JP L_0cd3
+        LD (MAGIC_LAST_CHAR),A
+        JP magic_ret
 
-L_0b62:
+magic_attr:
         CP 0xbb
-        JR z,L_0b72
+        JR z,magic_effect_attr
         CP 15
-        JR z,L_0b72
+        JR z,magic_effect_attr
         CP 0x19
-        JR c,L_0bb7
+        JR c,magic_other
         CP 0x1c
-        JR nc,L_0bb7
+        JR nc,magic_other
 
-L_0b72:
+magic_effect_attr:
         XOR A
-        LD (MENU_TMP2),A
-        LD (MENU_TMP),A
-        LD A,(VAR_4390)
+        LD (MAGIC_FONT_SET),A
+        LD (MAGIC_COLOUR_SET),A
+        LD A,(MAGIC_FX_PREV)
         AND A
         RET nz
         LD A,0xff
-        LD (VAR_4390),A
-        LD A,(VAR_43A3)
+        LD (MAGIC_FX_PREV),A
+        LD A,(TEXT_DRAWN)
         AND A
         RET z
         LD A,(CUR_CHAR)
         PUSH AF
         LD B,14
 
-L_0b8e:
+magic_push_off:
         PUSH BC
         LD A,0x20
         LD (CUR_CHAR),A
         XOR A
-        LD (PAUSE_FLAG),A
-        LD HL,fx_none
+        LD (EFFECT_ID),A
+        LD HL,fxv_none
         LD (EFFECT_VECTOR),HL
         LD A,6
         LD (GLYPH_WIDTH),A
         LD HL,FONT+8*32
         LD (GLYPH_PTR),HL
-        CALL sub_086e
+        CALL glyph_blit
         CALL effect_step
         POP BC
-        DJNZ L_0b8e
+        DJNZ magic_push_off
         POP AF
         LD (CUR_CHAR),A
         RET
 
-L_0bb7:
+magic_other:
         XOR A
-        LD (VAR_4390),A
+        LD (MAGIC_FX_PREV),A
         LD A,(CUR_CHAR)
         CP 0xb8
-        JP z,L_0bd4
+        JP z,magic_printable
         AND 0xf0
         CP 0xa0
-        JP z,L_0bd4
+        JP z,magic_printable
         CP 0x20
-        JP c,L_0cd3
+        JP c,magic_ret
         CP 0x80
-        JP nc,L_0cd3
+        JP nc,magic_ret
 
-L_0bd4:
-        LD A,(MENU_CHAR)
+magic_printable:
+        LD A,(MAGIC_LAST_CHAR)
         CP 0x20
-        JR z,L_0be4
+        JR z,magic_word_start
         LD A,(CUR_CHAR)
-        LD (MENU_CHAR),A
-        JP L_0cd3
+        LD (MAGIC_LAST_CHAR),A
+        JP magic_ret
 
-L_0be4:
+magic_word_start:
         LD A,(CUR_CHAR)
-        LD (MENU_CHAR),A
+        LD (MAGIC_LAST_CHAR),A
         CP 0x24
-        JR nz,L_0bf1
-        LD (VAR_4391),A
+        JR nz,magic_pick_font
+        LD (MAGIC_FLASH_WORD),A
 
-L_0bf1:
+magic_pick_font:
         AND 0xf0
         CP 0xa0
-        JP z,L_0c73
-        LD A,(MENU_TMP2)
+        JP z,magic_colour_check
+        LD A,(MAGIC_FONT_SET)
         AND A
         LD A,0
-        LD (MENU_TMP2),A
-        JR nz,L_0c42
+        LD (MAGIC_FONT_SET),A
+        JR nz,magic_count_words
         LD B,8
         LD HL,(STORE_CURSOR)
 
-L_0c08:
+magic_scan_word:
         LD A,(HL)
         AND 0x5f
         CP 0x41
-        JP c,L_0c1b
+        JP c,magic_short_word
         CP 0x5b
-        JP nc,L_0c1b
+        JP nc,magic_short_word
         INC HL
-        DJNZ L_0c08
-        JP L_0c3e
+        DJNZ magic_scan_word
+        JP magic_font_normal
 
-L_0c1b:
+magic_short_word:
         LD A,B
         CP 6
-        JP nc,L_0c3e
+        JP nc,magic_font_normal
         LD A,(RND_SEED)
         ADD A,(HL)
         LD HL,(NMI_COUNT)
         ADD A,(HL)
         LD (RND_SEED),A
         AND 3
-        JR z,L_0c37
+        JR z,magic_font_italic
         LD HL,FONT_MODE
         LD (HL),2
-        JR L_0c42
+        JR magic_count_words
 
-L_0c37:
+magic_font_italic:
         LD HL,FONT_MODE
         LD (HL),6
-        JR L_0c42
+        JR magic_count_words
 
-L_0c3e:
+magic_font_normal:
         XOR A
         LD (FONT_MODE),A
 
-L_0c42:
-        LD A,(VAR_4395)
+magic_count_words:
+        LD A,(MAGIC_WORD_COUNT)
         CP 3
-        JP nc,L_0c73
+        JP nc,magic_colour_check
         LD A,(RND_VAL)
         AND A
-        JP z,L_0c68
+        JP z,magic_reseed
         DEC A
-        JP z,L_0c68
+        JP z,magic_reseed
         LD (RND_VAL),A
-        LD A,(MENU_TMP)
+        LD A,(MAGIC_COLOUR_SET)
         AND A
-        JR z,L_0ccf
+        JR z,magic_reset_words
         XOR A
-        LD (MENU_TMP),A
+        LD (MAGIC_COLOUR_SET),A
         LD (RND_VAL),A
-        JP L_0ccf
+        JP magic_reset_words
 
-L_0c68:
+magic_reseed:
         LD A,(NMI_COUNT)
         LD E,A
         AND 3
         ADD A,2
         LD (RND_VAL),A
 
-L_0c73:
-        LD A,(MENU_TMP)
+magic_colour_check:
+        LD A,(MAGIC_COLOUR_SET)
         AND A
-        JR z,L_0c83
+        JR z,magic_next_colour
         XOR A
-        LD (MENU_TMP),A
+        LD (MAGIC_COLOUR_SET),A
         LD (RND_VAL),A
-        JP L_0ccf
+        JP magic_reset_words
 
-L_0c83:
+magic_next_colour:
         XOR A
-        LD (VAR_43A4),A
-        LD A,(VAR_4362)
+        LD (RAINBOW_IDX),A
+        LD A,(MAGIC_COLOUR_IDX)
         INC A
         LD E,A
         LD A,(NMI_COUNT)
         ADD A,E
 
-L_0c90:
+magic_colour_try:
         AND 15
-        LD (VAR_4362),A
+        LD (MAGIC_COLOUR_IDX),A
         LD E,A
         LD D,0
-        LD HL,TBL_0CD4+6
+        LD HL,MAGIC_COLOUR_CYCLE
         ADD HL,DE
         LD A,(CUR_COLOUR)
         AND 15
         CP (HL)
-        JR z,L_0cc0
+        JR z,magic_colour_retry
         LD A,(CUR_COLOUR)
         LD E,A
         LD D,(HL)
@@ -2123,138 +2143,144 @@ L_0c90:
         LD HL,CUR_COLOUR
         RLD
         LD A,(HL)
-        LD HL,TBL_0CD4
+        LD HL,MAGIC_CLASH_PAIRS
         LD BC,6
         OR A
         CPIR
-        JP nz,L_0cc6
+        JP nz,magic_colour_apply
         LD A,E
         LD (CUR_COLOUR),A
 
-L_0cc0:
-        LD A,(VAR_4362)
+magic_colour_retry:
+        LD A,(MAGIC_COLOUR_IDX)
         INC A
-        JR L_0c90
+        JR magic_colour_try
 
-L_0cc6:
+magic_colour_apply:
         LD A,E
         AND 0x10
         OR D
         AND 0x1f
         LD (CUR_COLOUR),A
 
-L_0ccf:
+magic_reset_words:
         XOR A
-        LD (VAR_4395),A
+        LD (MAGIC_WORD_COUNT),A
 
-L_0cd3:
+magic_ret:
         RET
 
-; ---- data 0cd4-0ce9:
-TBL_0CD4:
-        db 0xf7,0x7f,0xfd,0xdf,0xcd,0xdc,0x07,0x0c,0x0f,0x03,0x0c,0x03,0x0d,0x03,0x0f,0x03
+; ---- MAGIC_CLASH_PAIRS: (old<<4 | new) foreground pairs too alike to follow each
+;      other in MAGIC mode: yellow/lime, yellow/orange, red/orange
+MAGIC_CLASH_PAIRS:
+        db 0xf7,0x7f,0xfd,0xdf,0xcd,0xdc
+; ---- MAGIC_COLOUR_CYCLE: the 16 foregrounds MAGIC mode walks through
+MAGIC_COLOUR_CYCLE:
+        db 0x07,0x0c,0x0f,0x03,0x0c,0x03,0x0d,0x03,0x0f,0x03
         db 0x0c,0x03,0x03,0x0c,0x0f,0x0c
 
-sub_0cea:
+; ---- unfetch_char: STORE_CURSOR back one byte
+unfetch_char:
         LD HL,(STORE_CURSOR)
         LD DE,MSG_STORE
         OR A
         SBC HL,DE
-        JR z,L_0cfc
+        JR z,unfetch_ret
         LD HL,(STORE_CURSOR)
         DEC HL
         LD (STORE_CURSOR),HL
 
-L_0cfc:
+unfetch_ret:
         RET
 
-; ---- draw_glyph: Copy the glyph columns into FRAMEBUF at the current column
-draw_glyph:
-        LD A,(VAR_433B)
+; ---- glyph_bold: bold copy of the glyph in GLYPH_BUF: for BOLD, or for any effect
+;      unless THIN. Three full (7F) columns in a row collapse to two.
+glyph_bold:
+        LD A,(FORCE_BOLD)
         AND A
-        JR nz,L_0d36
-        LD A,(PAUSE_FLAG)
+        JR nz,bold_expand
+        LD A,(EFFECT_ID)
         AND A
-        JR z,L_0d2f
-        LD A,(VAR_43D6)
+        JR z,bold_check_mode
+        LD A,(THIN_MODE)
         AND A
-        JR z,L_0d36
+        JR z,bold_expand
         LD A,(FONT_MODE)
         AND 10
-        JR nz,L_0d2f
+        JR nz,bold_check_mode
         LD A,(GLYPH_WIDTH)
         LD C,A
         LD B,0
         INC A
         LD (GLYPH_WIDTH),A
         LD HL,(GLYPH_PTR)
-        LD DE,VAR_42D6
+        LD DE,GLYPH_BUF
         LDIR
-        LD HL,VAR_42D6
+        LD HL,GLYPH_BUF
         LD (GLYPH_PTR),HL
         RET
 
-L_0d2f:
+bold_check_mode:
         LD A,(FONT_MODE)
         BIT 1,A
-        JR z,L_0d96
+        JR z,bold_ret
 
-L_0d36:
+bold_expand:
         LD A,(GLYPH_WIDTH)
         LD B,A
         LD HL,(GLYPH_PTR)
-        LD DE,VAR_42D6
+        LD DE,GLYPH_BUF
         LD C,0
 
-L_0d42:
+bold_loop:
         LD A,(HL)
         LD (DE),A
         INC HL
         AND A
-        JR z,L_0d4c
+        JR z,bold_next
         OR (HL)
         INC DE
         INC C
         LD (DE),A
 
-L_0d4c:
+bold_next:
         INC DE
         INC C
-        DJNZ L_0d42
+        DJNZ bold_loop
         XOR A
         LD (DE),A
         LD A,C
         CP 2
-        JR z,L_0d5b
+        JR z,bold_set_width
         XOR A
         DEC DE
         LD (DE),A
         LD A,C
 
-L_0d5b:
+bold_set_width:
         LD (GLYPH_WIDTH),A
-        LD HL,VAR_42D6
+        LD HL,GLYPH_BUF
         LD (GLYPH_PTR),HL
-        LD IX,VAR_42D6
+        LD IX,GLYPH_BUF
         LD B,4
 
-L_0d6a:
+bold_scan_7f:
         LD A,(IX+0)
         CP 0x7f
-        JR nz,L_0d7f
+        JR nz,bold_scan_next
         LD A,(IX+1)
         CP 0x7f
-        JR nz,L_0d7f
+        JR nz,bold_scan_next
         LD A,(IX+2)
         CP 0x7f
-        JR z,L_0d84
+        JR z,bold_collapse
 
-L_0d7f:
+bold_scan_next:
         INC IX
-        DJNZ L_0d6a
+        DJNZ bold_scan_7f
         RET
 
-L_0d84:
+bold_collapse:
         PUSH IX
         POP HL
         LD D,H
@@ -2266,28 +2292,29 @@ L_0d84:
         DEC A
         LD (GLYPH_WIDTH),A
 
-L_0d96:
+bold_ret:
         RET
 
-sub_0d97:
+; ---- glyph_italic: shear the glyph into GLYPH_BUF_ITALIC (width + 2)
+glyph_italic:
         LD A,(FONT_MODE)
         BIT 2,A
-        JR z,L_0de2
+        JR z,italic_ret
         LD HL,(GLYPH_PTR)
         LD A,(GLYPH_WIDTH)
         LD C,A
-        LD DE,VAR_42F6
+        LD DE,GLYPH_BUF_ITALIC
         LD B,0
         LDIR
         LD B,A
         LD E,B
         LD D,0
-        LD HL,VAR_42F6
+        LD HL,GLYPH_BUF_ITALIC
         ADD HL,DE
         PUSH HL
         POP IX
 
-L_0db7:
+italic_loop:
         LD A,(HL)
         AND 3
         OR (IX+2)
@@ -2302,42 +2329,43 @@ L_0db7:
         DEC HL
         DEC IX
         DEC B
-        JP p,L_0db7
+        JP p,italic_loop
         LD A,(GLYPH_WIDTH)
         INC A
         INC A
         LD (GLYPH_WIDTH),A
-        LD HL,VAR_42F6
+        LD HL,GLYPH_BUF_ITALIC
         LD (GLYPH_PTR),HL
 
-L_0de2:
+italic_ret:
         RET
 
-sub_0de3:
+; ---- glyph_big: double each column into GLYPH_BUF_BIG
+glyph_big:
         LD A,(FONT_MODE)
         BIT 3,A
-        JR z,L_0e15
+        JR z,big_ret
         LD A,(GLYPH_WIDTH)
         LD B,A
         LD HL,(GLYPH_PTR)
-        LD DE,VAR_4316
+        LD DE,GLYPH_BUF_BIG
         LD C,0
 
-L_0df6:
+big_loop:
         LD A,(HL)
         LD (DE),A
         INC HL
         AND A
-        JR z,L_0e00
+        JR z,big_next
         OR (HL)
         INC DE
         INC C
         LD (DE),A
 
-L_0e00:
+big_next:
         INC DE
         INC C
-        DJNZ L_0df6
+        DJNZ big_loop
         XOR A
         LD (DE),A
         DEC DE
@@ -2347,13 +2375,14 @@ L_0e00:
         LD A,C
         DEC A
         LD (GLYPH_WIDTH),A
-        LD HL,VAR_4316
+        LD HL,GLYPH_BUF_BIG
         LD (GLYPH_PTR),HL
 
-L_0e15:
+big_ret:
         RET
 
-sub_0e16:
+; ---- fb_ptr_inc: HL++ inside the FRAMEBUF ring
+fb_ptr_inc:
         INC HL
         PUSH AF
         PUSH DE
@@ -2361,20 +2390,21 @@ sub_0e16:
         LD DE,FB_COLPTR
         XOR A
         SBC HL,DE
-        JP c,L_0e29
+        JP c,fbinc_nowrap
         LD HL,FRAMEBUF
         POP DE
-        JR L_0e2a
+        JR fbinc_ret
 
-L_0e29:
+fbinc_nowrap:
         POP HL
 
-L_0e2a:
+fbinc_ret:
         POP DE
         POP AF
         RET
 
-sub_0e2d:
+; ---- fb_ptr_add: HL += DE inside the FRAMEBUF ring
+fb_ptr_add:
         PUSH AF
         PUSH DE
         ADD HL,DE
@@ -2382,368 +2412,372 @@ sub_0e2d:
         LD DE,FB_COLPTR
         XOR A
         SBC HL,DE
-        JR c,L_0e40
+        JR c,fbadd_nowrap
         POP DE
         LD DE,FRAMEBUF
         ADD HL,DE
-        JR L_0e41
+        JR fbadd_ret
 
-L_0e40:
+fbadd_nowrap:
         POP HL
 
-L_0e41:
+fbadd_ret:
         POP DE
         POP AF
         RET
 
 ; ---- effect_step: Called from main loop: jump to EFFECT_VECTOR (current movement effect handler)
 effect_step:
-        LD A,(VAR_4244)
+        LD A,(FRAME_DELAY)
         AND A
         JR nz,effect_step
 
-L_0e4a:
-        LD A,(EFFECT_PHASE)
+fx_wait_scroll:
+        LD A,(SCROLLING)
         AND A
-        JR nz,L_0e4a
-        LD A,(PAUSE_FLAG)
+        JR nz,fx_wait_scroll
+        LD A,(EFFECT_ID)
         AND A
         RET z
 
-L_0e55:
+fx_wait_row6:
         LD A,(ROW_INDEX)
         CP 6
-        JR nz,L_0e55
-        LD HL,(EFFECT_TMP2)
+        JR nz,fx_wait_row6
+        LD HL,(STAGE_OFFSET)
         LD A,L
         CP 0x2b
-        JR z,L_0e68
+        JR z,fx_stage_empty
         LD HL,(EFFECT_VECTOR)
         JP (HL)
 
-L_0e68:
+fx_stage_empty:
         LD HL,0
-        LD (EFFECT_TMP2),HL
+        LD (STAGE_OFFSET),HL
 
-L_0e6e:
+fx_done:
         LD HL,(STORE_CURSOR)
         LD A,(HL)
         CP 0xba
-        JR nz,L_0e7a
+        JR nz,fx_done_effect
         XOR A
-        LD (VAR_4244),A
+        LD (FRAME_DELAY),A
 
-L_0e7a:
-        LD A,(PAUSE_FLAG)
+fx_done_effect:
+        LD A,(EFFECT_ID)
         AND A
-        JR z,L_0e9b
-        LD A,(RENDER_DONE)
+        JR z,fx_reset_stage
+        LD A,(MAGIC_MODE)
         AND A
-        JR z,L_0e8b
+        JR z,fx_toggle_flush
         LD A,15
         LD (CUR_COLOUR),A
 
-L_0e8b:
-        LD A,(VAR_4242)
+fx_toggle_flush:
+        LD A,(FLUSH_PENDING)
         CPL
         AND A
-        LD (VAR_4242),A
-        JR z,L_0e9b
+        LD (FLUSH_PENDING),A
+        JR z,fx_reset_stage
         XOR A
-        LD (VAR_4242),A
+        LD (FLUSH_PENDING),A
         LD A,0x56
 
-L_0e9b:
+fx_reset_stage:
         LD (COL_COUNT),A
         CALL clear_txbuf
         LD HL,TXBUF
-        LD (EFFECT_TMP),HL
+        LD (STAGE_PTR),HL
         RET
 
-L_0ea8:
+attr_control:
         LD A,(CUR_CHAR)
 
-; ---- attr_dispatch: Attribute byte dispatcher: 11 normal,12 bold,13 italic,14 flash,10 large,1F magic,06 pause,07 beep,03 end,18 crawl,19 jump,1A wipe up,1B wipe down,0F wipe back,BB (extra effect)
+; ---- attr_dispatch: 11 NORM,12 BOLD,13 ITALIC,14 FLASH,10 BIG,1F MAGIC; the rest go
+;      through fx_attr: 06 HALT,07 BEEP,03 END,18 LEFT,19 PAUSE,1A UP,1B DOWN,0F RIGHT,BB HOLD
 attr_dispatch:
         CP 0x11
-        JP nz,L_0eba
+        JP nz,attr_not_norm
         XOR A
-        LD (VAR_421E),A
+        LD (FLASH_BIT),A
         LD (FONT_MODE),A
-        JP L_0ee1
+        JP attr_set_font
 
-L_0eba:
+attr_not_norm:
         CP 0x12
-        JP nz,L_0ec4
+        JP nz,attr_not_bold
         LD A,2
-        JP L_0ee1
+        JP attr_set_font
 
-L_0ec4:
+attr_not_bold:
         CP 0x13
-        JP nz,L_0ece
+        JP nz,attr_not_italic
         LD A,6
-        JP L_0ee1
+        JP attr_set_font
 
-L_0ece:
+attr_not_italic:
         CP 0x14
-        JP nz,L_0edb
+        JP nz,attr_not_flash
         LD A,0x10
-        LD (VAR_43A2),A
+        LD (FLASH_PENDING),A
         JP render_next_char
 
-L_0edb:
+attr_not_flash:
         CP 0x10
-        JR nz,L_0eec
+        JR nz,attr_not_big
         LD A,10
 
-L_0ee1:
+attr_set_font:
         LD (FONT_MODE),A
         LD A,0xff
-        LD (MENU_TMP2),A
+        LD (MAGIC_FONT_SET),A
         JP render_next_char
 
-L_0eec:
+attr_not_big:
         CP 0x1f
         JP z,fx_magic
 
-L_0ef1:
+fx_attr:
         LD A,(COL_COUNT)
         AND A
-        JR z,L_0f0f
+        JR z,fx_dispatch
         LD A,0xff
-        LD (VAR_4242),A
+        LD (FLUSH_PENDING),A
 
-L_0efc:
-        LD HL,(EFFECT_TMP)
-        LD DE,EFFECT_TMP
+fx_flush_stage:
+        LD HL,(STAGE_PTR)
+        LD DE,STAGE_PTR
         XOR A
         EX DE,HL
         SBC HL,DE
         LD A,0x56
         SUB L
         LD (COL_COUNT),A
-        JP L_0937
+        JP stage_centre
 
-L_0f0f:
+fx_dispatch:
         LD A,(CUR_CHAR)
         CP 6
-        JP z,fx_pause
+        JP z,fx_halt
         CP 7
         JP z,fx_beep
         CP 3
         JP z,fx_end_of_channel
         CP 0x18
-        JP z,fx_crawl
+        JP z,fx_left
         CP 0x19
-        JP z,fx_jump
+        JP z,fx_pause
         CP 0x1a
-        JP z,fx_wipe_up
+        JP z,fx_up
         CP 0x1b
-        JP z,fx_wipe_down
+        JP z,fx_down
         CP 15
-        JP z,fx_wipe_back
+        JP z,fx_right
         CP 0xbb
-        JP z,fx_BB
+        JP z,fx_hold
         JP render_next_char
 
 ; ---- fx_beep
 fx_beep:
-        CALL sub_0f48
+        CALL beep_start
         JP render_next_char
 
-sub_0f48:
+; ---- beep_start: BEEP_TICKS = 0x96 (~115 ms)
+beep_start:
         PUSH HL
         LD HL,0x96
-        LD (TICK_COUNTDOWN),HL
+        LD (BEEP_TICKS),HL
         POP HL
         RET
 
 ; ---- fx_end_of_channel
 fx_end_of_channel:
-        LD HL,fx_none
+        LD HL,fxv_none
         LD (EFFECT_VECTOR),HL
         XOR A
-        LD (PAUSE_FLAG),A
-        CALL demo_scroll
+        LD (EFFECT_ID),A
+        CALL scroll_off_text
         LD SP,STACK_TOP
         JP main_loop
 
-; ---- fx_wipe_back
-fx_wipe_back:
+; ---- fx_right: 0F: reveal the staged text left to right, a column per frame
+fx_right:
         XOR A
-        LD (EFFECT_PHASE),A
+        LD (SCROLLING),A
         LD A,0x56
         LD (COL_COUNT),A
         LD A,4
-        LD HL,fx_scroll_in
+        LD HL,fxv_right
         JP set_effect_vector
 
-; ---- fx_crawl
-fx_crawl:
+; ---- fx_left: 18: plain crawl, no staging
+fx_left:
         XOR A
         LD (COL_COUNT),A
-        LD HL,fx_none
+        LD HL,fxv_none
         JP set_effect_vector
 
-; ---- fx_BB
-fx_BB:
+; ---- fx_hold: BB: blank, then reveal the staged text right to left
+fx_hold:
         XOR A
         LD A,0x56
         LD (COL_COUNT),A
         LD A,5
-        LD HL,fx_fill_frame
+        LD HL,fxv_hold
         JP set_effect_vector
 
-; ---- fx_jump
-fx_jump:
+; ---- fx_pause: 19: show the staged text at once and hold 0x50 frames
+fx_pause:
         XOR A
-        LD (EFFECT_PHASE),A
+        LD (SCROLLING),A
         LD A,0x56
         LD (COL_COUNT),A
         LD A,1
-        LD HL,fx_scroll_copy
+        LD HL,fxv_pause
         JP set_effect_vector
 
-; ---- fx_wipe_up
-fx_wipe_up:
+; ---- fx_up: 1A: reveal the staged text row by row from the top
+fx_up:
         XOR A
-        LD (EFFECT_PHASE),A
+        LD (SCROLLING),A
         LD A,0x56
         LD (COL_COUNT),A
         LD A,2
-        LD HL,fx_138b
+        LD HL,fxv_wipe_updown
         JP set_effect_vector
 
-; ---- fx_wipe_down
-fx_wipe_down:
+; ---- fx_down: 1B: reveal the staged text row by row from the bottom
+fx_down:
         XOR A
-        LD (EFFECT_PHASE),A
+        LD (SCROLLING),A
         LD A,0x56
         LD (COL_COUNT),A
         LD A,3
-        LD HL,fx_138b
+        LD HL,fxv_wipe_updown
         JP set_effect_vector
 
 ; ---- set_effect_vector: HL -> EFFECT_VECTOR, A -> effect id
 set_effect_vector:
-        LD (PAUSE_FLAG),A
-        LD (VAR_438C),A
+        LD (EFFECT_ID),A
+        LD (EFFECT_ID_COPY),A
         LD (EFFECT_VECTOR),HL
         JP render_next_char
 
 ; ---- fx_magic
 fx_magic:
         XOR A
-        LD (VAR_43A2),A
-        LD (MENU_TMP),A
-        LD (MENU_TMP2),A
-        LD (VAR_43A4),A
-        LD (VAR_4390),A
+        LD (FLASH_PENDING),A
+        LD (MAGIC_COLOUR_SET),A
+        LD (MAGIC_FONT_SET),A
+        LD (RAINBOW_IDX),A
+        LD (MAGIC_FX_PREV),A
         LD A,0xff
-        LD (RENDER_DONE),A
+        LD (MAGIC_MODE),A
         LD A,0x20
-        LD (MENU_CHAR),A
+        LD (MAGIC_LAST_CHAR),A
         LD A,1
-        LD (VAR_4395),A
+        LD (MAGIC_WORD_COUNT),A
         LD A,(NMI_COUNT)
         LD E,A
         AND 3
         ADD A,2
         LD (RND_VAL),A
-        CALL sub_0ffc
+        CALL magic_first_colour
         JP render_next_char
 
-sub_0ffc:
+; ---- magic_first_colour: first colour of the cycle when MAGIC starts
+magic_first_colour:
         LD A,(MENU_ACTIVE)
         AND A
         RET nz
-        LD A,(PAUSE_FLAG)
+        LD A,(EFFECT_ID)
         AND A
         RET nz
-        LD A,(VAR_4362)
+        LD A,(MAGIC_COLOUR_IDX)
         INC A
         AND 15
-        LD (VAR_4362),A
+        LD (MAGIC_COLOUR_IDX),A
         LD E,A
         LD D,0
-        LD HL,TBL_0CD4+6
+        LD HL,MAGIC_COLOUR_CYCLE
         ADD HL,DE
         LD A,(HL)
         AND 15
         LD (CUR_COLOUR),A
         RET
 
-; ---- attr_restart: 0xBD
-attr_restart:
+; ---- attr_magic_off: 0xBD: leave MAGIC mode, default colour and font
+attr_magic_off:
         XOR A
-        LD (RENDER_DONE),A
-        LD (MENU_TMP2),A
-        LD (MENU_TMP),A
+        LD (MAGIC_MODE),A
+        LD (MAGIC_FONT_SET),A
+        LD (MAGIC_COLOUR_SET),A
         LD (FONT_MODE),A
         LD A,0x8f
         LD (CUR_COLOUR),A
         JP render_next_char
 
-; ---- fx_pause
-fx_pause:
+; ---- fx_halt: 06: hold 0x50 frames (~1.3 s) with the colours reset
+fx_halt:
         XOR A
-        LD (EFFECT_PHASE),A
-        LD A,(PAUSE_FLAG)
+        LD (SCROLLING),A
+        LD A,(EFFECT_ID)
         AND A
-        JR nz,L_1042
+        JR nz,halt_hold
 
-L_103c:
-        LD A,(VAR_4244)
+halt_wait_frames:
+        LD A,(FRAME_DELAY)
         AND A
-        JR nz,L_103c
+        JR nz,halt_wait_frames
 
-L_1042:
+halt_hold:
         LD A,0x50
-        LD (VAR_4244),A
-        CALL sub_1062
+        LD (FRAME_DELAY),A
+        CALL fb_colours_default
         LD HL,(STORE_CURSOR)
         LD A,(HL)
         CP 0x18
-        JP z,fx_crawl
-        LD A,(PAUSE_FLAG)
+        JP z,fx_left
+        LD A,(EFFECT_ID)
         AND A
-        JP z,fx_crawl
+        JP z,fx_left
         LD A,0x56
         LD (COL_COUNT),A
         JP render_next_char
 
-sub_1062:
+; ---- fb_colours_default: every colour byte in FRAMEBUF -> 8F, keeping flash
+fb_colours_default:
         LD HL,FRAMEBUF
         LD BC,0x0158
 
-L_1068:
+fbcol_loop:
         BIT 7,(HL)
-        JR z,L_1072
+        JR z,fbcol_next
         LD A,(HL)
         AND 0x10
         OR 0x8f
         LD (HL),A
 
-L_1072:
+fbcol_next:
         INC HL
         DEC BC
         LD A,C
         OR B
-        JR nz,L_1068
-        LD A,(VAR_421B)
+        JR nz,fbcol_loop
+        LD A,(WINDOW_COLOUR)
         AND 0x10
         OR 0x8f
-        LD (VAR_421B),A
-        LD (ROW_DATA_LATCH),A
+        LD (WINDOW_COLOUR),A
+        LD (ROW_COLOUR),A
         LD E,A
-        LD A,(RENDER_DONE)
+        LD A,(MAGIC_MODE)
         AND A
         RET z
         LD A,15
         LD (CUR_COLOUR),A
         RET
 
-; ---- attr_colour_speed: 0x8x foreground colour, 0x9x background, 0xFx speed, 0xBD restart
+; ---- attr_colour_speed: 0x8x foreground colour, 0x9x background, 0xFx speed, 0xBD MAGIC OFF
 attr_colour_speed:
         LD A,(CUR_CHAR)
         AND 0xf0
@@ -2755,21 +2789,21 @@ attr_colour_speed:
         JP z,attr_speed
         LD A,(CUR_CHAR)
         CP 0xbd
-        JP z,attr_restart
+        JP z,attr_magic_off
         JP render_next_char
 
 ; ---- attr_fore_colour
 attr_fore_colour:
         XOR A
-        LD (VAR_43A4),A
-        LD A,(RENDER_DONE)
+        LD (RAINBOW_IDX),A
+        LD A,(MAGIC_MODE)
         AND A
-        JR z,L_10c2
+        JR z,fore_set
         LD A,(CUR_COLOUR)
         AND 0xcf
         LD (CUR_COLOUR),A
 
-L_10c2:
+fore_set:
         LD A,(CUR_CHAR)
         AND 15
         LD E,A
@@ -2778,146 +2812,148 @@ L_10c2:
         OR E
         LD (CUR_COLOUR),A
         LD A,0xff
-        LD (MENU_TMP),A
+        LD (MAGIC_COLOUR_SET),A
         JP render_next_char
 
 ; ---- attr_back_colour
 attr_back_colour:
-        LD A,(RENDER_DONE)
+        LD A,(MAGIC_MODE)
         AND A
-        JR z,L_10e7
+        JR z,back_set
         LD A,(CUR_COLOUR)
         OR 15
         LD (CUR_COLOUR),A
 
-L_10e7:
+back_set:
         XOR A
-        LD (VAR_43A4),A
+        LD (RAINBOW_IDX),A
         LD HL,0
         LD DE,0x20
         LD A,(CUR_CHAR)
         AND 3
-        JR z,L_10fc
+        JR z,back_apply
 
-L_10f8:
+back_mul:
         ADD HL,DE
         DEC A
-        JR nz,L_10f8
+        JR nz,back_mul
 
-L_10fc:
+back_apply:
         LD A,(CUR_COLOUR)
         AND 15
         OR L
         AND 0x6f
         LD (CUR_COLOUR),A
         LD A,0xff
-        LD (MENU_TMP),A
+        LD (MAGIC_COLOUR_SET),A
         JP render_next_char
 
 ; ---- attr_speed
 attr_speed:
         LD A,(CUR_CHAR)
         AND 7
-        LD (VAR_43CD),A
+        LD (SCROLL_SPEED),A
         JP render_next_char
 
 ; ---- attr_tiny: 0xBE: switch to tiny (28-char) font mode and render
 attr_tiny:
-        CALL sub_114c
+        CALL tiny_scroll_off
         CALL clear_framebuf
         LD A,0xff
         LD (TINY_RENDER),A
         LD A,0x8f
         LD (FRAMEBUF_TINY),A
 
-L_112a:
-        CALL sub_1187
+tiny_loop:
+        CALL tiny_get_glyph
         AND A
-        JR nz,L_113c
-        CALL sub_11fe
+        JR nz,tiny_end
+        CALL tiny_scroll_cols
         LD HL,(STORE_CURSOR)
         INC HL
         LD (STORE_CURSOR),HL
-        JR L_112a
+        JR tiny_loop
 
-L_113c:
-        CALL sub_1231
+tiny_end:
+        CALL tiny_scroll_out
         CALL clear_framebuf
         XOR A
         LD (TINY_RENDER),A
         CALL init_render
-        JP L_00a7
+        JP render_loop
 
-sub_114c:
+; ---- tiny_scroll_off: push existing text off before TINY text
+tiny_scroll_off:
         LD E,0
         LD HL,FB_COL
         LD B,0x56
 
-L_1153:
+tinyoff_scan:
         BIT 7,(HL)
-        JR z,L_115a
+        JR z,tinyoff_next
         LD A,(HL)
         OR E
         LD E,A
 
-L_115a:
+tinyoff_next:
         INC HL
-        DJNZ L_1153
+        DJNZ tinyoff_scan
         LD A,E
         AND A
         RET z
         LD B,14
 
-L_1162:
+tinyoff_loop:
         PUSH BC
         LD A,0x20
         LD (CUR_CHAR),A
         XOR A
-        LD (PAUSE_FLAG),A
-        LD HL,fx_none
+        LD (EFFECT_ID),A
+        LD HL,fxv_none
         LD (EFFECT_VECTOR),HL
         LD A,6
         LD (GLYPH_WIDTH),A
         LD HL,FONT+8*32
         LD (GLYPH_PTR),HL
-        CALL sub_086e
+        CALL glyph_blit
         CALL effect_step
         POP BC
-        DJNZ L_1162
+        DJNZ tinyoff_loop
         RET
 
-sub_1187:
+; ---- tiny_get_glyph: glyph for the byte at STORE_CURSOR; A=FF ends tiny mode
+tiny_get_glyph:
         LD HL,(STORE_CURSOR)
         LD A,(HL)
         LD (CUR_CHAR),A
         AND 0xf0
         CP 0xa0
-        JR nz,L_119e
+        JR nz,tinyg_check
         LD A,(CUR_CHAR)
         AND 15
         LD (CUR_CHAR),A
-        JR L_11c7
+        JR tinyg_lookup
 
-L_119e:
+tinyg_check:
         LD A,(CUR_CHAR)
         AND 0x60
-        JP z,L_11fb
+        JP z,tinyg_stop
         LD A,(CUR_CHAR)
         CP 0x5f
-        JP z,L_11fb
+        JP z,tinyg_stop
         BIT 7,A
-        JP z,L_11c7
+        JP z,tinyg_lookup
         CP 0x94
-        JP c,L_11fb
+        JP c,tinyg_stop
         CP 0x9e
-        JR c,L_11c7
+        JR c,tinyg_lookup
         AND 0xf0
         CP 0xc0
-        JR z,L_11c7
+        JR z,tinyg_lookup
         CP 0xe0
-        JP nz,L_11fb
+        JP nz,tinyg_stop
 
-L_11c7:
+tinyg_lookup:
         LD HL,FONT
         LD A,(CUR_CHAR)
         CALL char_to_glyph
@@ -2937,7 +2973,8 @@ L_11c7:
         LD (GLYPH_WIDTH),A
         POP HL
 
-sub_11ea:
+; ---- tiny_put_glyph: colour byte + glyph into FRAMEBUF_TINY
+tiny_put_glyph:
         LD DE,FRAMEBUF_TINY+1
         LD B,0
         LD A,(GLYPH_WIDTH)
@@ -2949,70 +2986,73 @@ sub_11ea:
         XOR A
         RET
 
-L_11fb:
+tinyg_stop:
         LD A,0xff
         RET
 
-sub_11fe:
+; ---- tiny_scroll_cols: scroll the tiny buffer GLYPH_WIDTH+1 columns
+tiny_scroll_cols:
         LD A,(GLYPH_WIDTH)
         INC A
 
-L_1202:
+tinysc_loop:
         LD HL,FRAMEBUF+1
         LD DE,FRAMEBUF
         LD BC,0xbc
         LDIR
         PUSH AF
-        CALL sub_1216
+        CALL tiny_copy_frame
         POP AF
         DEC A
-        JR nz,L_1202
+        JR nz,tinysc_loop
         RET
 
-sub_1216:
+; ---- tiny_copy_frame: wait for the panel, copy every other column
+tiny_copy_frame:
         LD HL,FRAMEBUF
         LD DE,FRAMEBUF_TINY+31
         LD BC,0x56
-        LD A,(ROW_PHASE)
+        LD A,(TINY_FRAME_READY)
         AND A
-        JR nz,sub_1216
+        JR nz,tiny_copy_frame
 
-L_1225:
+tinycp_loop:
         LDI
         INC HL
-        JP pe,L_1225
+        JP pe,tinycp_loop
         LD A,0xff
-        LD (ROW_PHASE),A
+        LD (TINY_FRAME_READY),A
         RET
 
-sub_1231:
+; ---- tiny_scroll_out: 28 spaces to clear the tiny line
+tiny_scroll_out:
         LD B,0x1c
 
-L_1233:
+tinyout_loop:
         PUSH BC
         LD A,0x20
         LD (CUR_CHAR),A
         LD A,5
         LD (GLYPH_WIDTH),A
         LD HL,FONT+8*32
-        CALL sub_11ea
-        CALL sub_11fe
+        CALL tiny_put_glyph
+        CALL tiny_scroll_cols
         POP BC
-        DJNZ L_1233
+        DJNZ tinyout_loop
         RET
 
-L_124b:
-        LD A,(ROW_PHASE)
+tiny_refresh:
+        LD A,(TINY_FRAME_READY)
         AND A
-        JR nz,L_125f
+        JR nz,tiny_row_out
         LD A,(CTRL_LATCH_SHADOW)
         OR 15
         LD (CTRL_LATCH_SHADOW),A
         LD (CTRL_LATCH),A
         JP rx_consume
 
-L_125f:
-        LD A,(DISP_ENABLE)
+tiny_row_out:
+        LD A,(ROW_OUT_PENDING)
         AND A
         JP z,disp_next_row
         LD A,(CTRL_LATCH_SHADOW)
@@ -3040,12 +3080,12 @@ disp_blank_row:
         CPL
         AND 7
         DEC A
-        JR nz,L_1296
+        JR nz,tiny_row_select
         LD A,7
 
-L_1296:
+tiny_row_select:
         LD C,A
-        LD A,(VAR_421F)
+        LD A,(LATCH_BIT7)
         OR C
         AND 0x8f
         LD C,A
@@ -3055,8 +3095,8 @@ L_1296:
         LD (CTRL_LATCH_SHADOW),A
         LD (CTRL_LATCH),A
         XOR A
-        LD (DISP_ENABLE),A
-        JP L_030d
+        LD (ROW_OUT_PENDING),A
+        JP tick6_restore
 
 ; ---- disp_next_row: ROW_INDEX = (ROW_INDEX+1) mod 7
 disp_next_row:
@@ -3065,81 +3105,84 @@ disp_next_row:
         INC A
         LD (ROW_INDEX),A
         CP 7
-        JP c,L_0303
+        JP c,tick6_arm_row
         LD A,0
         LD (ROW_INDEX),A
-        LD (ROW_PHASE),A
+        LD (TINY_FRAME_READY),A
         JP rx_consume
 
-; ---- fx_setup_scroll
-fx_setup_scroll:
+; ---- fxv_prepare: clear FRAMEBUF and reset the output window; HL = TXBUF,
+;      DE = FRAMEBUF + STAGE_OFFSET (the staged text is centred)
+fxv_prepare:
         CALL clear_framebuf
 
-sub_12cc:
+; ---- fxv_pointers: reset the output window; HL = TXBUF, DE = FRAMEBUF+offset
+fxv_pointers:
         LD HL,FRAMEBUF_ROW1
         LD (FB_COLPTR),HL
         LD HL,0x56
-        LD (DISP_FLAGS),HL
+        LD (FB_OUT_LEN),HL
         LD HL,0
         LD (FB_EXTRA_LEN),HL
         LD DE,FRAMEBUF
         LD (FB_COL),DE
-        LD (SEQ_PTR_SAVE),DE
-        LD HL,(EFFECT_TMP2)
+        LD (FB_OUT_PTR),DE
+        LD HL,(STAGE_OFFSET)
         ADD HL,DE
         LD DE,TXBUF
         EX DE,HL
         RET
 
-; ---- fx_scroll_in
-fx_scroll_in:
+; ---- fxv_right: effect 4: copy one staged column per frame, left to right
+fxv_right:
         LD A,0xff
-        LD (EFFECT_ACTIVE),A
-        CALL fx_setup_scroll
+        LD (DISP_ON),A
+        CALL fxv_prepare
         LD A,(COL_COUNT)
         LD B,A
 
-L_12fe:
+right_wait_row:
         LD A,(ROW_INDEX)
         CP 6
-        JR nz,L_12fe
+        JR nz,right_wait_row
         LD A,(HL)
         LD (DE),A
         INC HL
         INC DE
         LD A,0xff
-        LD (EFFECT_ACTIVE),A
+        LD (DISP_ON),A
         LD A,1
-        LD (VAR_4244),A
+        LD (FRAME_DELAY),A
 
-L_1313:
-        LD A,(VAR_4244)
+right_wait_frame:
+        LD A,(FRAME_DELAY)
         AND A
-        JR nz,L_1313
-        DJNZ L_12fe
+        JR nz,right_wait_frame
+        DJNZ right_wait_row
         LD A,0x50
-        LD (VAR_4244),A
+        LD (FRAME_DELAY),A
         XOR A
-        LD (EFFECT_PHASE),A
-        JP L_0e6e
+        LD (SCROLLING),A
+        JP fx_done
 
-; ---- fx_none: effect handler: nothing (straight to render loop)
-fx_none:
-        JP L_0e6e
+; ---- fxv_none: effect handler: nothing (straight to render loop)
+fxv_none:
+        JP fx_done
 
-; ---- fx_fill_frame: fill FRAMEBUF with 0x8F then continue
-fx_fill_frame:
+; ---- fxv_hold: effect 5: fill with 0x8F (no columns lit), then copy one staged
+;      column per frame, right to left
+fxv_hold:
         LD HL,FRAMEBUF
         LD BC,0x0158
 
-L_1330:
+hold_fill:
         LD (HL),0x8f
         INC HL
         DEC BC
         LD A,C
         OR B
-        JR nz,L_1330
-        CALL sub_12cc
+        JR nz,hold_fill
+        CALL fxv_pointers
         LD A,(COL_COUNT)
         PUSH HL
         LD H,0
@@ -3153,121 +3196,122 @@ L_1330:
         LD B,A
         INC B
 
-L_134b:
+hold_wait_row:
         LD A,(ROW_INDEX)
         CP 6
-        JR nz,L_134b
+        JR nz,hold_wait_row
         LD A,(HL)
         LD (DE),A
         DEC HL
         DEC DE
         LD A,0xff
-        LD (EFFECT_ACTIVE),A
+        LD (DISP_ON),A
         LD A,1
-        LD (VAR_4244),A
+        LD (FRAME_DELAY),A
 
-L_1360:
-        LD A,(VAR_4244)
+hold_wait_frame:
+        LD A,(FRAME_DELAY)
         AND A
-        JR nz,L_1360
-        DJNZ L_134b
+        JR nz,hold_wait_frame
+        DJNZ hold_wait_row
         LD A,0x50
-        LD (VAR_4244),A
+        LD (FRAME_DELAY),A
         XOR A
-        LD (EFFECT_PHASE),A
-        JP L_0e6e
+        LD (SCROLLING),A
+        JP fx_done
 
-; ---- fx_scroll_copy
-fx_scroll_copy:
-        CALL fx_setup_scroll
+; ---- fxv_pause: effect 1: copy the whole stage, then FRAME_DELAY 0x50
+fxv_pause:
+        CALL fxv_prepare
         LD B,0
         LD A,(COL_COUNT)
         LD C,A
         LDIR
         LD A,0x50
-        LD (VAR_4244),A
+        LD (FRAME_DELAY),A
         XOR A
-        LD (EFFECT_PHASE),A
-        JP L_0e6e
+        LD (SCROLLING),A
+        JP fx_done
 
-; ---- fx_138b
-fx_138b:
+; ---- fxv_wipe_updown: effects 2 (UP) and 3 (DOWN): eight passes copying the
+;      stage through a row mask that grows one row per pass
+fxv_wipe_updown:
         LD A,0
-        LD (EFFECT_ACTIVE),A
-        CALL fx_setup_scroll
+        LD (DISP_ON),A
+        CALL fxv_prepare
         LD A,(COL_COUNT)
         LD B,A
-        LD A,(PAUSE_FLAG)
+        LD A,(EFFECT_ID)
         CP 2
         LD C,0x80
-        JR z,L_13a2
+        JR z,wipev_start
         LD C,1
 
-L_13a2:
+wipev_start:
         LD A,8
 
-L_13a4:
+wipev_pass:
         PUSH AF
         PUSH HL
         PUSH DE
         PUSH BC
 
-L_13a8:
+wipev_wait_row:
         LD A,(ROW_INDEX)
         CP 6
-        JR nz,L_13a8
+        JR nz,wipev_wait_row
 
-L_13af:
+wipev_col:
         LD A,(HL)
         BIT 7,A
-        JR nz,L_13b7
+        JR nz,wipev_colour_byte
         AND C
-        JR L_13bf
+        JR wipev_store
 
-L_13b7:
+wipev_colour_byte:
         LD A,C
         CP 0xff
         LD A,0x8f
-        JR nz,L_13bf
+        JR nz,wipev_store
         LD A,(HL)
 
-L_13bf:
+wipev_store:
         LD (DE),A
         INC HL
         INC DE
-        DJNZ L_13af
+        DJNZ wipev_col
         LD A,0xff
-        LD (EFFECT_ACTIVE),A
+        LD (DISP_ON),A
         LD A,3
-        LD (VAR_4244),A
+        LD (FRAME_DELAY),A
 
-L_13ce:
-        LD A,(VAR_4244)
+wipev_wait_frame:
+        LD A,(FRAME_DELAY)
         AND A
-        JR nz,L_13ce
+        JR nz,wipev_wait_frame
         POP BC
         POP DE
         POP HL
-        LD A,(PAUSE_FLAG)
+        LD A,(EFFECT_ID)
         CP 2
-        JR nz,L_13e3
+        JR nz,wipev_mask_down
         SCF
         RR C
-        JR L_13e6
+        JR wipev_next_pass
 
-L_13e3:
+wipev_mask_down:
         SCF
         RL C
 
-L_13e6:
+wipev_next_pass:
         POP AF
         DEC A
-        JR nz,L_13a4
+        JR nz,wipev_pass
         LD A,0x50
-        LD (VAR_4244),A
+        LD (FRAME_DELAY),A
         XOR A
-        LD (EFFECT_PHASE),A
-        JP L_0e6e
+        LD (SCROLLING),A
+        JP fx_done
         db 0xc9
 
 ; ---- store_clear_all: Reset MSG_STORE: 100 empty channels D0..? then DA
@@ -3277,7 +3321,7 @@ store_clear_all:
         LD HL,MSG_STORE
         LD B,0x64
 
-L_1400:
+clr_chan_loop:
         LD (HL),A
         INC HL
         LD (HL),C
@@ -3288,41 +3332,41 @@ L_1400:
         LD D,A
         LD A,C
         CP 0xda
-        JR nz,L_1411
+        JR nz,clr_chan_next
         LD C,0xd0
         INC D
 
-L_1411:
+clr_chan_next:
         LD A,D
-        DJNZ L_1400
+        DJNZ clr_chan_loop
         LD A,0xda
         LD (HL),A
         LD HL,SEQ_LIST
         LD (HL),0xda
         LD B,0x67
 
-L_141e:
+clr_seq_loop:
         INC HL
         LD (HL),0xff
-        DJNZ L_141e
+        DJNZ clr_seq_loop
         RET
 
-; ---- ir_init: misnomer - this is the message-store init. Sets the store
+; ---- store_init: message-store init. Sets the store
 ;      ceiling and its three derived constants, writes the 0xDA store
 ;      terminator at the ceiling, then zeroes 0x5EF0..0x5FFF (PKT_READY,
 ;      PKT_BUF and the parser state, i.e. the whole top page of RAM).
 ;      0x43DE = ceiling-100, the "100 KEYS LEFT" trip point (used at 0x2601).
-;      0x43DC = free text bytes, the scan bound used by init_vars2 at 0x0481.
-ir_init:
+;      0x43DC = free text bytes, the scan bound used by store_repair at 0x0481.
+store_init:
         LD A,0xff
-        LD (RX_MSGFLAG),A
+        LD (QUERIES_ENABLED),A
         LD HL,STORE_TOP
         LD (STORE_LIMIT),HL
         LD (STORE_END),HL
         LD HL,STORE_WARN
-        LD (VAR_43DE),HL
+        LD (STORE_WARN_LIMIT),HL
         LD HL,STORE_TEXT_FREE
-        LD (VAR_43DC),HL
+        LD (STORE_TEXT_LIMIT),HL
         LD HL,STORE_SIZE_INIT
         LD (STORE_SIZE),HL
         ; P1: the store terminator no longer sits one byte below the page to
@@ -3332,33 +3376,33 @@ ir_init:
         LD BC,0x0110
         LD HL,0x5ef0
 
-L_144d:
+store_init_zero_page:
         LD (HL),0
         INC HL
         DEC BC
         LD A,C
         OR B
-        JR nz,L_144d
+        JR nz,store_init_zero_page
         LD HL,rx_st_wait_start
         LD (RX_STATE),HL
         LD HL,rx_st_wait_start
-        LD (VAR_425E),HL
+        LD (RX_STATE_COPY),HL
         XOR A
         LD (RX_TICKS),A
-        LD (VAR_424C),A
+        LD (RX_SPARE),A
         RET
         db 0xaa,"U"
 
-; ---- ir_init2
-ir_init2:
+; ---- ir_init: clear the IR decoder state, then fall into ir_reset
+ir_init:
         PUSH AF
         XOR A
-        LD (VAR_4377),A
+        LD (IR_DEBOUNCE),A
         LD (IR_CODE),A
-        LD (VAR_4387),A
+        LD (IR_KEYNUM),A
         LD (IR_KEY),A
         LD (GEN_COUNTDOWN),A
-        LD (VAR_4381),A
+        LD (GEN_COUNTDOWN+1),A
         LD (TICK1_COUNT),A
 
 ; ---- ir_reset: IR decoder: reset state, wait for leader (port C0 bit1)
@@ -3384,13 +3428,13 @@ ir_st_idle:
         JP nz,ir_reset
         LD A,(IR_STATE_CNT)
         DEC A
-        JP nz,L_14b1
+        JP nz,ir_idle_count
         PUSH HL
         LD HL,ir_st_leader
         LD (TICK_VECTOR),HL
         POP HL
 
-L_14b1:
+ir_idle_count:
         LD (IR_STATE_CNT),A
         POP AF
         RET
@@ -3400,7 +3444,7 @@ ir_st_leader:
         PUSH AF
         IN A,(PORT_IN)
         BIT 1,A
-        JP z,L_14cb
+        JP z,ir_leader_ret
         PUSH HL
         LD HL,ir_st_leader2
         LD (TICK_VECTOR),HL
@@ -3408,7 +3452,7 @@ ir_st_leader:
         LD A,4
         LD (IR_STATE_CNT),A
 
-L_14cb:
+ir_leader_ret:
         POP AF
         RET
 
@@ -3417,7 +3461,7 @@ ir_st_leader2:
         PUSH AF
         IN A,(PORT_IN)
         BIT 1,A
-        JP nz,L_14e2
+        JP nz,ir_leader2_ret
         PUSH HL
         LD HL,ir_st_leader3
         LD (TICK_VECTOR),HL
@@ -3425,7 +3469,7 @@ ir_st_leader2:
         LD A,0x15
         LD (IR_STATE_CNT),A
 
-L_14e2:
+ir_leader2_ret:
         POP AF
         RET
 
@@ -3434,7 +3478,7 @@ ir_st_leader3:
         PUSH AF
         LD A,(IR_STATE_CNT)
         DEC A
-        JR nz,L_14fc
+        JR nz,ir_leader3_count
         IN A,(PORT_IN)
         BIT 1,A
         JP z,ir_reset
@@ -3444,7 +3488,7 @@ ir_st_leader3:
         POP HL
         LD A,3
 
-L_14fc:
+ir_leader3_count:
         LD (IR_STATE_CNT),A
         POP AF
         RET
@@ -3454,7 +3498,7 @@ ir_st_start:
         PUSH AF
         LD A,(IR_STATE_CNT)
         DEC A
-        JP nz,L_151a
+        JP nz,ir_start_count
         IN A,(PORT_IN)
         BIT 1,A
         JP nz,ir_reset
@@ -3464,7 +3508,7 @@ ir_st_start:
         POP HL
         LD A,8
 
-L_151a:
+ir_start_count:
         LD (IR_STATE_CNT),A
         POP AF
         RET
@@ -3474,9 +3518,9 @@ ir_st_bits:
         PUSH AF
         LD A,(IR_STATE_CNT)
         DEC A
-        JP z,L_1540
+        JP z,ir_bit_verify
         CP 4
-        JP nz,L_155d
+        JP nz,ir_bit_count
         LD (IR_STATE_CNT),A
         PUSH HL
         LD HL,IR_SHIFT
@@ -3489,7 +3533,7 @@ ir_st_bits:
         POP AF
         RET
 
-L_1540:
+ir_bit_verify:
         PUSH HL
         LD A,(IR_SHIFT)
         CPL
@@ -3503,15 +3547,15 @@ L_1540:
         LD A,(IR_BITCNT)
         DEC A
         LD (IR_BITCNT),A
-        JP z,L_1562
+        JP z,ir_frame_done
         LD A,8
 
-L_155d:
+ir_bit_count:
         LD (IR_STATE_CNT),A
         POP AF
         RET
 
-L_1562:
+ir_frame_done:
         LD A,(IR_SHIFT)
         RRCA
         RRCA
@@ -3526,10 +3570,10 @@ tx_send_byte:
         PUSH HL
         PUSH DE
 
-L_1573:
+tx_wait_slot:
         CALL tx_try_queue
         AND A
-        JR nz,L_1573
+        JR nz,tx_wait_slot
         POP DE
         POP HL
         RET
@@ -3548,7 +3592,7 @@ tx_try_queue:
 tx_bit_engine:
         LD HL,TX_STATUS
         BIT 0,(HL)
-        JR nz,L_15b9
+        JR nz,tx_bit_tick
         BIT 1,(HL)
         RET z
         LD A,(TX_PENDING)
@@ -3568,7 +3612,7 @@ tx_bit_engine:
         LD (TX_TICKS),A
         RET
 
-L_15b9:
+tx_bit_tick:
         LD HL,TX_TICKS
         DEC (HL)
         RET nz
@@ -3576,23 +3620,23 @@ L_15b9:
         INC (HL)
         LD A,(HL)
         CP 9
-        JR z,L_15f2
+        JR z,tx_stop_bit
         CP 10
-        JR z,L_1603
+        JR z,tx_idle
         LD HL,TX_BITMASK
         LD E,(HL)
         SLA (HL)
         LD A,(TX_SHIFT)
         AND E
         LD A,(CTRL_LATCH_SHADOW)
-        JR nz,L_15de
+        JR nz,tx_mark
         OR 0x10
-        JR L_15e0
+        JR tx_latch_bit
 
-L_15de:
+tx_mark:
         AND 0xef
 
-L_15e0:
+tx_latch_bit:
         LD (CTRL_LATCH_SHADOW),A
         LD (CTRL_LATCH),A
         LD HL,(TX_TIMING_PTR)
@@ -3602,7 +3646,7 @@ L_15e0:
         LD (TX_TICKS),A
         RET
 
-L_15f2:
+tx_stop_bit:
         LD A,(CTRL_LATCH_SHADOW)
         AND 0xef
         LD (CTRL_LATCH_SHADOW),A
@@ -3611,7 +3655,7 @@ L_15f2:
         LD (TX_TICKS),A
         RET
 
-L_1603:
+tx_idle:
         LD HL,TX_STATUS
         RES 0,(HL)
         RET
@@ -3620,22 +3664,22 @@ L_1603:
 rx_bit_engine:
         LD A,(RX_COUNT)
         CP 8
-        JR nz,L_161c
+        JR nz,rx_tick
         LD HL,rx_st_wait_start
         LD (RX_STATE),HL
         LD A,0
         LD (RX_TICKS),A
         RET
 
-L_161c:
+rx_tick:
         LD A,(RX_TICKS)
         AND A
-        JR z,L_1627
+        JR z,rx_run_state
         DEC A
         LD (RX_TICKS),A
         RET nz
 
-L_1627:
+rx_run_state:
         LD HL,(RX_STATE)
         JP (HL)
 
@@ -3669,10 +3713,10 @@ rx_st_sample_bit:
         IN A,(PORT_IN)
         BIT 3,A
         LD A,0xff
-        JR z,L_1667
+        JR z,rx_merge_bit
         XOR A
 
-L_1667:
+rx_merge_bit:
         LD E,A
         LD A,(RX_SHIFT)
         LD D,A
@@ -3702,12 +3746,12 @@ L_1667:
 rx_st_stop_bit:
         IN A,(PORT_IN)
         BIT 3,A
-        JR nz,L_16b7
+        JR nz,rx_byte_done
         LD A,(RX_SHIFT)
         AND A
         LD A,(RX_COUNT)
         CP 8
-        JR z,L_16b7
+        JR z,rx_byte_done
         AND 7
         LD HL,RX_FIFO
         LD E,A
@@ -3719,7 +3763,7 @@ rx_st_stop_bit:
         INC A
         LD (RX_COUNT),A
 
-L_16b7:
+rx_byte_done:
         XOR A
         LD (RX_TICKS),A
         LD (RX_SHIFT),A
@@ -3731,7 +3775,7 @@ L_16b7:
 rx_fifo_get:
         LD A,(RX_COUNT)
         AND A
-        JR z,L_16e9
+        JR z,rx_fifo_empty
         LD HL,RX_FIFO
         LD A,(HL)
         LD (RX_BYTE),A
@@ -3746,7 +3790,7 @@ rx_fifo_get:
         OR A
         RET
 
-L_16e9:
+rx_fifo_empty:
         XOR A
         LD (RX_BYTE),A
         SCF
@@ -3777,10 +3821,10 @@ pkt_st_len:
         LD (PKT_LEN),A
         AND A
         LD HL,pkt_st_data
-        JR nz,L_1716
+        JR nz,pkt_len_setup
         LD HL,pkt_st_cksum
 
-L_1716:
+pkt_len_setup:
         LD (PKT_VECTOR),HL
         XOR A
         LD (PKT_CKSUM),A
@@ -3799,13 +3843,13 @@ pkt_st_data:
         LD (PKT_CKSUM),A
         LD A,(PKT_REMAIN)
         DEC A
-        JR z,L_1743
+        JR z,pkt_data_last
         LD (PKT_REMAIN),A
         INC HL
         LD (PKT_PTR),HL
         RET
 
-L_1743:
+pkt_data_last:
         LD HL,pkt_st_cksum
         LD (PKT_VECTOR),HL
         RET
@@ -3818,27 +3862,27 @@ pkt_st_cksum:
         LD E,A
         LD A,(PKT_ADDR)
         CP 0x2a
-        JR z,L_1769
+        JR z,pkt_check_ok
         LD D,A
         LD A,(MY_ADDRESS)
         CP D
-        JR nz,L_1785
+        JR nz,pkt_discard
         LD A,E
         AND A
         LD A,6
-        JR z,L_1766
+        JR z,pkt_send_reply
         LD A,0x15
 
-L_1766:
+pkt_send_reply:
         CALL tx_send_byte
 
-L_1769:
+pkt_check_ok:
         LD A,E
         AND A
-        JR nz,L_1785
+        JR nz,pkt_discard
         LD A,(PKT_LEN)
         AND A
-        JR z,L_1785
+        JR z,pkt_discard
         LD A,0xff
         LD (PKT_READY),A
         XOR A
@@ -3848,7 +3892,7 @@ L_1769:
         JP z,pkt_process
         RET
 
-L_1785:
+pkt_discard:
         XOR A
         LD (PKT_READY),A
         LD (PKT_STATE),A
@@ -3872,14 +3916,14 @@ tx_send_frame:
         CALL tx_send_byte
         INC HL
 
-L_17a8:
+txf_data_loop:
         LD A,(HL)
         ADD A,E
         LD E,A
         LD A,(HL)
         CALL tx_send_byte
         INC HL
-        DJNZ L_17a8
+        DJNZ txf_data_loop
         LD A,E
         CALL tx_send_byte
         POP IY
@@ -3890,22 +3934,23 @@ L_17a8:
         POP AF
         RET
 
-; ---- rx_cmd_check
-rx_cmd_check:
+; ---- editor_query_hook: serve B4 queries typed into the editor; when one is
+;      consumed, drop the caller and fetch the next key
+editor_query_hook:
         CALL query_dispatch
-        LD A,(RX_LASTCMD)
+        LD A,(EDIT_KEY)
         AND A
         RET nz
         POP HL
         POP HL
-        JP L_1ad5
+        JP editor_next_key
 
 ; ---- query_dispatch: 0xB4 + '0'..'3' query handlers
 query_dispatch:
-        LD A,(RX_MSGFLAG)
+        LD A,(QUERIES_ENABLED)
         AND A
         RET z
-        LD A,(RX_LASTCMD)
+        LD A,(EDIT_KEY)
         CP 0xb4
         RET nz
         CALL menu_getchar
@@ -3914,12 +3959,13 @@ query_dispatch:
         CP 0x31
         JP z,query_1_memory
         CP 0x32
-        JP z,sub_17ef
+        JP z,query_2_nop
         CP 0x33
         JP z,query_3_dump
         RET
 
-sub_17ef:
+; ---- query_2_nop: B4 '2' does nothing
+query_2_nop:
         RET
 
 ; ---- query_0_romid: B4 '0': reply with 16-byte ROM ID string
@@ -3949,7 +3995,7 @@ query_0_romid:
         LD HL,TXBUF
         CALL tx_send_frame
         XOR A
-        LD (RX_LASTCMD),A
+        LD (EDIT_KEY),A
         POP IY
         POP IX
         POP HL
@@ -3984,7 +4030,7 @@ query_1_memory:
         LD HL,TXBUF
         CALL tx_send_frame
         XOR A
-        LD (RX_LASTCMD),A
+        LD (EDIT_KEY),A
         POP IY
         POP IX
         POP HL
@@ -4015,15 +4061,15 @@ query_3_dump:
         LD HL,TXBUF
         LD B,5
 
-L_1899:
+dump_len_loop:
         LD A,(HL)
         CALL tx_send_byte
         INC HL
-        DJNZ L_1899
+        DJNZ dump_len_loop
         LD HL,MSG_STORE
         LD E,0
 
-L_18a5:
+dump_data_loop:
         LD A,(HL)
         ADD A,E
         LD E,A
@@ -4031,15 +4077,15 @@ L_18a5:
         CALL tx_send_byte
         LD A,(HL)
         CP 0xda
-        JP z,L_18b6
+        JP z,dump_cksum
         INC HL
-        JP L_18a5
+        JP dump_data_loop
 
-L_18b6:
+dump_cksum:
         LD A,E
         CALL tx_send_byte
         XOR A
-        LD (RX_LASTCMD),A
+        LD (EDIT_KEY),A
         POP IY
         POP IX
         POP HL
@@ -4052,24 +4098,25 @@ L_18b6:
 bin_to_dec5:
         LD IY,DEC_TABLE
 
-sub_18cb:
+; ---- bin_to_dec_iy: digits from the place-value table at IY
+bin_to_dec_iy:
         LD B,0x2f
         LD E,(IY+0)
         LD D,(IY+1)
         BIT 7,D
         RET nz
 
-L_18d6:
+dec_digit_loop:
         INC B
         OR A
         SBC HL,DE
-        JR nc,L_18d6
+        JR nc,dec_digit_loop
         ADD HL,DE
         LD (IX+0),B
         INC IX
         INC IY
         INC IY
-        JR sub_18cb
+        JR bin_to_dec_iy
 
 ; ---- data 18e8-18f3: 10000,1000,100,10,1,-1 for bin_to_dec5
 DEC_TABLE:
@@ -4115,7 +4162,7 @@ clock_tick:
         INC (HL)
         LD A,(HL)
         CP 10
-        JR nz,L_1934
+        JR nz,clk_check_12h
         LD (HL),0
         DEC HL
         LD A,(HL)
@@ -4124,10 +4171,10 @@ clock_tick:
         LD (HL),A
         RET
 
-L_1934:
+clk_check_12h:
         DEC HL
         CP 3
-        JP z,L_194a
+        JP z,clk_wrap_13
         CP 2
         RET nz
         LD A,(HL)
@@ -4139,7 +4186,7 @@ L_1934:
         LD (CLK_PM),A
         RET
 
-L_194a:
+clk_wrap_13:
         LD A,(HL)
         AND A
         RET z
@@ -4150,20 +4197,20 @@ L_194a:
         LD (HL),A
         RET
 
-; ---- demo_scroll: scroll a space 14 times (used when blanking)
-demo_scroll:
+; ---- scroll_off_text: push the displayed text off by rendering 14 spaces
+scroll_off_text:
         LD B,14
         LD A,0
         LD (FONT_MODE),A
 
-L_195a:
+scrolloff_loop:
         LD A,0x20
         LD (CUR_CHAR),A
         PUSH BC
-        CALL sub_077a
+        CALL render_cur_char
         CALL effect_step
         POP BC
-        DJNZ L_195a
+        DJNZ scrolloff_loop
         RET
 
 ; ---- keypad_scan: 8x8 matrix scan: row select via CTRL_LATCH high nibble, read PORT_IN bit 3; result -> RX_BYTE
@@ -4175,7 +4222,7 @@ keypad_scan:
         LD E,A
         LD B,8
 
-L_1976:
+kp_row_loop:
         LD A,H
         ADD A,0x10
         LD H,A
@@ -4183,21 +4230,21 @@ L_1976:
         LD (CTRL_LATCH),A
         IN A,(PORT_IN)
         BIT 3,A
-        JR z,L_198d
+        JR z,kp_key_found
         LD A,8
         ADD A,L
         LD L,A
-        DJNZ L_1976
+        DJNZ kp_row_loop
         XOR A
-        JR L_1994
+        JR kp_store
 
-L_198d:
+kp_key_found:
         AND 7
         ADD A,L
-        JR nz,L_1994
+        JR nz,kp_store
         LD A,0x1e
 
-L_1994:
+kp_store:
         LD (RX_BYTE),A
         AND A
         RET
@@ -4209,13 +4256,13 @@ clear_framebuf:
         LD HL,FRAMEBUF
         LD BC,0x0158
 
-L_19a1:
+clrfb_loop:
         LD (HL),0x80
         INC HL
         DEC BC
         LD A,C
         OR B
-        JR nz,L_19a1
+        JR nz,clrfb_loop
         POP BC
         POP HL
         RET
@@ -4227,10 +4274,10 @@ clear_txbuf:
         LD HL,TXBUF
         LD B,0x56
 
-L_19b3:
+clrtx_loop:
         LD (HL),0
         INC HL
-        DJNZ L_19b3
+        DJNZ clrtx_loop
         POP BC
         POP HL
         RET
@@ -4239,13 +4286,13 @@ L_19b3:
 clear_glyph_tmp:
         PUSH HL
         PUSH BC
-        LD HL,VAR_42D6
+        LD HL,GLYPH_BUF
         LD B,0x60
 
-L_19c2:
+clrglyph_loop:
         LD (HL),0
         INC HL
-        DJNZ L_19c2
+        DJNZ clrglyph_loop
         POP BC
         POP HL
         RET
@@ -4259,11 +4306,11 @@ menu_enter:
         CALL init_render
         XOR A
         LD (RX_BYTE),A
-        LD (VAR_4229),A
-        LD (VAR_4226),A
-        LD (VAR_4227),A
-        LD (BEEP_TIMER),A
-        LD (RX_LASTCMD),A
+        LD (IR_KEY_CHAR),A
+        LD (PREV_KEY),A
+        LD (PREV_KEY2),A
+        LD (SPARE_TIMER),A
+        LD (EDIT_KEY),A
         LD (KEY_ECHO_TX),A
         CALL menu_getchar
         PUSH AF
@@ -4272,9 +4319,9 @@ menu_enter:
         POP AF
         LD HL,MY_ADDRESS
         CP (HL)
-        JR z,L_1a0d
+        JR z,editor_start
         CP 0x2a
-        JR z,L_1a0d
+        JR z,editor_start
         JP RESET
 
 ; ---- key_handler: Handle a key / IR code: menu navigation (ADDRESS?, TIME?, PROG MSG?, SEQ MSG? ...)
@@ -4284,7 +4331,7 @@ key_handler:
         LD A,1
         LD (KEY_ECHO_TX),A
 
-L_1a0d:
+editor_start:
         LD SP,STACK_TOP
         LD A,0xff
         LD (MENU_ACTIVE),A
@@ -4292,66 +4339,66 @@ L_1a0d:
         CALL init_render
         LD A,(IR_CODE)
         CP 0xa4
-        JR nz,L_1a40
-        CALL sub_0f48
+        JR nz,editor_init
+        CALL beep_start
 
-L_1a23:
+editor_stop_wait:
         LD A,0xfe
         LD (IR_CODE),A
         LD HL,0x01a0
         LD (GEN_COUNTDOWN),HL
 
-L_1a2e:
+editor_stop_poll:
         LD A,(IR_CODE)
         CP 0xa4
-        JR z,L_1a23
+        JR z,editor_stop_wait
         CP 0xfe
-        JR nz,L_1a40
+        JR nz,editor_init
         LD HL,(GEN_COUNTDOWN)
         LD A,H
         OR L
-        JR nz,L_1a2e
+        JR nz,editor_stop_poll
 
-L_1a40:
-        CALL ir_init2
+editor_init:
+        CALL ir_init
         XOR A
         LD (RX_BYTE),A
-        LD (VAR_4229),A
-        LD (VAR_4226),A
-        LD (VAR_4227),A
-        LD (BEEP_TIMER),A
-        LD (VAR_435A),A
-        LD A,(VAR_420F)
+        LD (IR_KEY_CHAR),A
+        LD (PREV_KEY),A
+        LD (PREV_KEY2),A
+        LD (SPARE_TIMER),A
+        LD (SEQ_SET),A
+        LD A,(TEST_MODE)
         INC A
-        JR nz,L_1a69
+        JR nz,editor_find_marker
         XOR A
-        LD (VAR_420F),A
+        LD (TEST_MODE),A
         CALL chan_select
         LD (STORE_CURSOR),HL
-        CALL chan_find
+        CALL clear_chan_lock
 
-L_1a69:
+editor_find_marker:
         LD HL,(STORE_CURSOR)
         LD A,(HL)
         CP 0xd0
-        JP c,L_1a8e
+        JP c,editor_scan_back
         CP 0xdb
-        JP nc,L_1a8e
+        JP nc,editor_scan_back
         DEC HL
         DEC HL
         LD A,(HL)
         CP 0xd0
-        JP c,L_1a8b
+        JP c,editor_cursor_set
         CP 0xdb
-        JP nc,L_1a8b
+        JP nc,editor_cursor_set
         DEC HL
         LD (STORE_CURSOR),HL
-        JP L_1aaf
+        JP editor_marker_skip
 
-L_1a8b:
+editor_cursor_set:
         LD (STORE_CURSOR),HL
 
-L_1a8e:
+editor_scan_back:
         PUSH HL
         LD DE,MSG_STORE
         OR A
@@ -4361,134 +4408,136 @@ L_1a8e:
         POP HL
         DEC HL
 
-L_1a99:
+editor_scan_loop:
         LD A,(HL)
         CP 0xd0
-        JP c,L_1aa6
+        JP c,editor_scan_next
         CP 0xdb
-        JP nc,L_1aa6
-        JR L_1ab0
+        JP nc,editor_scan_next
+        JR editor_set_ins
 
-L_1aa6:
+editor_scan_next:
         DEC HL
         DEC BC
         LD A,C
         OR B
-        JR nz,L_1a99
+        JR nz,editor_scan_loop
         JP pkt_process_end
 
-L_1aaf:
+editor_marker_skip:
         INC HL
 
-L_1ab0:
+editor_set_ins:
         INC HL
         LD (INS_PTR),HL
         CALL store_finalize
         XOR A
-        LD (VAR_43CF),A
-        LD (VAR_43CA),A
-        LD (VAR_4221),A
-        LD (VAR_4220),A
-        LD (FB_TMP),A
-        LD (VAR_4241),A
+        LD (SPEED_PENDING),A
+        LD (FUNC_PENDING),A
+        LD (GRAPH_PENDING),A
+        LD (COLOR_PENDING),A
+        LD (BGRND_PENDING),A
+        LD (SHIFT_LABEL),A
         LD (MENU_MSG_FLAG),A
         LD A,0xff
-        LD (VAR_4392),A
+        LD (EDITOR_FIRST_KEY),A
 
 ; ---- editor_loop: Editor main loop: get key, dispatch
 editor_loop:
         CALL editor_redraw
 
-L_1ad5:
+editor_next_key:
         CALL menu_getchar
-        CALL sub_263c
-        LD A,(RX_LASTCMD)
+        CALL editor_translate_key
+        LD A,(EDIT_KEY)
         LD (CUR_CHAR),A
         CP 0x1d
         LD A,0
-        JR z,L_1af0
-        LD (VAR_4220),A
-        LD (FB_TMP),A
-        LD (VAR_43CA),A
+        JR z,editor_dispatch
+        LD (COLOR_PENDING),A
+        LD (BGRND_PENDING),A
+        LD (FUNC_PENDING),A
 
-L_1af0:
-        LD (VAR_4241),A
-        LD A,(VAR_4243)
+editor_dispatch:
+        LD (SHIFT_LABEL),A
+        LD A,(PROG_MSG_FORCE)
         OR A
-        JP nz,L_220d
-        LD A,(VAR_4336)
+        JP nz,menu_prog_msg
+        LD A,(SEQ_MENU_ACTIVE)
         BIT 7,A
-        JP nz,L_223a
-        LD A,(RX_LASTCMD)
+        JP nz,menu_seq_msg
+        LD A,(EDIT_KEY)
         CP 0x1f
-        CALL z,sub_1b91
+        CALL z,magic_new_message
         XOR A
-        LD (VAR_4392),A
-        LD A,(RX_LASTCMD)
+        LD (EDITOR_FIRST_KEY),A
+        LD A,(EDIT_KEY)
         CP 1
-        JP z,L_1ad5
+        JP z,editor_next_key
         CP 3
-        JP z,L_20c4
+        JP z,menu_clear_all
         CP 5
-        JP z,L_2087
+        JP z,show_top_of_msg
         CP 0x7f
-        JP z,L_2482
+        JP z,editor_delete
         CP 0x1d
-        JP z,L_2465
+        JP z,editor_key_shift
         CP 10
-        JP z,L_24f4
+        JP z,cursor_right
         CP 12
-        JP z,L_250f
+        JP z,cursor_right_8
         CP 8
-        JP z,L_2522
+        JP z,cursor_left
         CP 11
-        JP z,L_2552
+        JP z,cursor_left_8
         CP 14
-        JP z,L_20eb
+        JP z,editor_clear_msg
         CP 0xb6
-        JP z,L_2184
+        JP z,editor_toggle_euro
         CP 0x5e
-        JP z,L_1f3a
+        JP z,menu_address
         CP 0x1c
-        JP z,L_216c
+        JP z,editor_toggle_caps
         CP 0x1e
-        JP z,L_21b4
+        JP z,editor_key_graph
         CP 0x15
-        JP z,L_21cc
+        JP z,editor_key_color
         CP 0x16
-        JP z,L_21ec
+        JP z,editor_key_bgrnd
         CP 0x17
-        JP z,L_1d01
+        JP z,menu_time
         CP 2
-        JP z,L_219c
+        JP z,editor_key_speed
         CP 0xb3
-        JP z,L_2046
+        JP z,editor_goto_end
         CP 0xb7
-        JP z,L_21e4
+        JP z,editor_key_func
         CP 9
-        JP z,L_220d
+        JP z,menu_prog_msg
         CP 4
-        JP z,L_223a
+        JP z,menu_seq_msg
         CP 13
-        JP z,L_1c5c
+        JP z,editor_exit
         CP 0x9f
         JP z,editor_loop
         CP 0xb1
-        JP z,L_1c5c
-        JP L_2580
+        JP z,editor_exit
+        JP editor_insert
 
-sub_1b91:
+; ---- magic_new_message: MAGIC as first key: take the first empty channel
+;      (or ask via FULL!! MSG# ?), make it the whole sequence
+magic_new_message:
         LD A,(CHAN_LOCK)
         OR A
-        JP nz,L_1b9d
-        LD A,(VAR_4392)
+        JP nz,newmsg_from_0
+        LD A,(EDITOR_FIRST_KEY)
         AND A
         RET z
 
-L_1b9d:
+newmsg_from_0:
         LD A,0
 
-L_1b9f:
+newmsg_try_chan:
         LD E,A
         PUSH DE
         CALL chan_select
@@ -4497,88 +4546,88 @@ L_1b9f:
         JP nz,pkt_process_end
         LD A,(HL)
         CP 3
-        JR z,L_1c12
+        JR z,newmsg_empty_found
         LD B,0
         LD C,A
         LD IX,CHAR_FLAGS
         ADD IX,BC
         BIT 1,(IX+0)
-        JR z,L_1bd8
+        JR z,newmsg_next_chan
 
-L_1bbd:
+newmsg_skip_attrs:
         INC HL
         LD A,(HL)
         CP 3
-        JR nz,L_1bc7
+        JR nz,newmsg_skip_next
         LD A,E
-        JP L_1bf2
+        JP newmsg_select
 
-L_1bc7:
+newmsg_skip_next:
         LD B,0
         LD C,A
         LD IX,CHAR_FLAGS
         ADD IX,BC
         BIT 1,(IX+0)
-        JR z,L_1bd8
-        JR L_1bbd
+        JR z,newmsg_next_chan
+        JR newmsg_skip_attrs
 
-L_1bd8:
+newmsg_next_chan:
         LD A,E
         INC A
         CP 0x64
-        JR nz,L_1b9f
+        JR nz,newmsg_try_chan
         CALL init_render
         LD HL,(FB_COL)
         LD (FB_COLPTR),HL
 
-L_1be7:
+newmsg_ask_full:
         LD HL,MENU_STR_MSG_FULL
-        CALL sub_1e32
+        CALL menu_ask_chan
         CP 0x64
-        JP nc,L_1be7
+        JP nc,newmsg_ask_full
 
-L_1bf2:
-        LD (VAR_438F),A
+newmsg_select:
+        LD (NEW_MSG_CHAN),A
         CALL chan_select
         AND A
         JP nz,pkt_process_end
         LD (INS_PTR),HL
         DEC HL
         LD (STORE_CURSOR),HL
-        CALL sub_20f8
+        CALL delete_chan_text
         LD A,0x1f
-        LD (RX_LASTCMD),A
-        LD A,(VAR_438F)
+        LD (EDIT_KEY),A
+        LD A,(NEW_MSG_CHAN)
         LD E,A
-        JP L_1c1a
+        JP newmsg_set_seq
 
-L_1c12:
+newmsg_empty_found:
         LD (INS_PTR),HL
         DEC HL
         DEC HL
         LD (STORE_CURSOR),HL
 
-L_1c1a:
+newmsg_set_seq:
         PUSH DE
-        CALL chan_find
+        CALL clear_chan_lock
         POP DE
         LD A,E
         CP 0x64
-        JR nz,L_1c27
+        JR nz,newmsg_seq_fill
         LD (CHAN_LOCK),A
 
-L_1c27:
+newmsg_seq_fill:
         LD HL,SEQ_LIST
         LD (HL),E
         INC HL
         LD B,0x67
 
-L_1c2e:
+newmsg_seq_loop:
         LD (HL),0xff
         INC HL
-        DJNZ L_1c2e
+        DJNZ newmsg_seq_loop
         LD A,E
-        LD (VAR_4399),A
+        LD (MAGIC_MSG_CHAN),A
         RET
 
 ; ---- store_finalize: Fix up MSG_STORE terminators after an edit
@@ -4595,57 +4644,59 @@ store_finalize:
         LD (STORE_END),HL
         RET
 
-L_1c4e:
+editor_show_invalid:
         LD A,0xff
         LD (MENU_MSG_FLAG),A
         LD HL,MENU_STR_INVALID
         LD (MENU_MSG_PTR),HL
         JP editor_loop
 
-L_1c5c:
+; ---- editor_exit: STOP/START in the editor: add the channel to SEQ_LIST
+;      if absent and go back to displaying
+editor_exit:
         XOR A
-        LD (VAR_4336),A
-        LD (VAR_4243),A
+        LD (SEQ_MENU_ACTIVE),A
+        LD (PROG_MSG_FORCE),A
         LD A,(KEY_ECHO_TX)
         AND A
-        JR z,L_1c6f
+        JR z,exit_wait_release
         CALL tx_send_byte
-        JP L_1c9f
+        JP exit_add_to_seq
 
-L_1c6f:
+exit_wait_release:
         LD A,(IR_CODE)
         CP 0xbe
-        JR z,L_1c9f
+        JR z,exit_add_to_seq
         CP 0xa4
-        JR z,L_1c7e
+        JR z,exit_key_held
         CP 0xaf
-        JR nz,L_1c6f
+        JR nz,exit_wait_release
 
-L_1c7e:
+exit_key_held:
         LD A,0xff
         LD (IR_CODE),A
         LD HL,0x028a
         LD (GEN_COUNTDOWN),HL
 
-L_1c89:
+exit_held_poll:
         LD A,(IR_CODE)
         CP 0xa4
-        JR z,L_1c7e
+        JR z,exit_key_held
         CP 0xaf
-        JR z,L_1c7e
+        JR z,exit_key_held
         CP 0xff
-        JR nz,L_1c9f
+        JR nz,exit_add_to_seq
         LD HL,(GEN_COUNTDOWN)
         LD A,H
         OR L
-        JR nz,L_1c89
+        JR nz,exit_held_poll
 
-L_1c9f:
+exit_add_to_seq:
         LD A,0xff
-        LD (MENU_FLAG),A
-        LD A,(VAR_435A)
+        LD (NEXT_CHAN),A
+        LD A,(SEQ_SET)
         AND A
-        JP nz,L_1cee
+        JP nz,exit_to_display
         LD HL,(INS_PTR)
         DEC HL
         DEC HL
@@ -4654,26 +4705,26 @@ L_1c9f:
         LD E,A
         LD HL,SEQ_LIST
         CP (HL)
-        JP z,L_1cee
+        JP z,exit_to_display
         LD A,0x64
         CP (HL)
-        JP nz,L_1cc7
+        JP nz,exit_seq_search
         LD A,E
-        JP L_1ce3
+        JP exit_seq_first
 
-L_1cc7:
+exit_seq_search:
         LD B,0x68
 
-L_1cc9:
+exit_seq_loop:
         LD A,(HL)
         CP E
-        JP z,L_1cea
+        JP z,exit_seq_found
         CP 0xff
-        JR z,L_1cd5
+        JR z,exit_seq_insert
         INC HL
-        DJNZ L_1cc9
+        DJNZ exit_seq_loop
 
-L_1cd5:
+exit_seq_insert:
         LD A,E
         LD HL,SEQ_LIST+102
         LD (HL),0xff
@@ -4681,25 +4732,26 @@ L_1cd5:
         LD BC,0x67
         LDDR
 
-L_1ce3:
+exit_seq_first:
         LD HL,SEQ_LIST
         LD (HL),A
-        JP L_1cee
+        JP exit_to_display
 
-L_1cea:
+exit_seq_found:
         LD E,A
-        LD (MENU_FLAG),A
+        LD (NEXT_CHAN),A
 
-L_1cee:
+exit_to_display:
         LD SP,STACK_TOP
         XOR A
         LD (MENU_ACTIVE),A
-        LD (VAR_433B),A
+        LD (FORCE_BOLD),A
         LD HL,SEQ_LIST
         LD (SEQ_PTR),HL
-        JP L_000f
+        JP restart_display
 
-L_1d01:
+; ---- menu_time: 17: TIME? HHMM then AM? Y/N
+menu_time:
         CALL init_render
         LD HL,(FB_COL)
         LD (FB_COLPTR),HL
@@ -4711,17 +4763,17 @@ L_1d01:
         LD HL,CLK_H10
         LD B,4
 
-L_1d1c:
+time_digit_loop:
         PUSH BC
         PUSH HL
 
-L_1d1e:
+time_get_digit:
         CALL menu_getchar
         LD (CUR_CHAR),A
         CP 0x3a
-        JR nc,L_1d1e
+        JR nc,time_get_digit
         CP 0x30
-        JR c,L_1d1e
+        JR c,time_get_digit
         PUSH AF
         CALL glyph_lookup
         POP AF
@@ -4730,26 +4782,26 @@ L_1d1e:
         LD (HL),A
         INC HL
         POP BC
-        DJNZ L_1d1c
+        DJNZ time_digit_loop
         LD A,(CLK_H10)
         AND 1
         LD (CLK_H10),A
         OR A
-        JR z,L_1d50
+        JR z,time_wait
         LD A,(CLK_H1)
         CP 3
-        JR c,L_1d50
+        JR c,time_wait
         LD A,2
         LD (CLK_H1),A
 
-L_1d50:
+time_wait:
         LD A,0x50
-        LD (VAR_4244),A
+        LD (FRAME_DELAY),A
 
-L_1d55:
-        LD A,(VAR_4244)
+time_wait_loop:
+        LD A,(FRAME_DELAY)
         AND A
-        JR nz,L_1d55
+        JR nz,time_wait_loop
         CALL init_render
         LD HL,(FB_COL)
         LD (FB_COLPTR),HL
@@ -4757,172 +4809,176 @@ L_1d55:
         LD (MENU_TEXT_PTR),HL
         CALL menu_show_text
 
-L_1d6d:
+time_get_ampm:
         CALL menu_getchar
         RES 5,A
         CP 0x59
-        JR nz,L_1d7a
+        JR nz,time_check_n
         LD A,0
-        JR L_1d80
+        JR time_store_pm
 
-L_1d7a:
+time_check_n:
         CP 0x4e
-        JR nz,L_1d6d
+        JR nz,time_get_ampm
         LD A,0xff
 
-L_1d80:
+time_store_pm:
         LD (CLK_PM),A
         LD A,0
         LD (NMI_COUNT),A
         LD A,0xff
         LD (CLK_RUN),A
-        JP L_206a
+        JP editor_reshow
 
-L_1d90:
+; ---- render_clock: 5F: emit H:MM AM/PM one character per call
+render_clock:
         LD A,(MENU_ACTIVE)
         AND A
         JP nz,glyph_lookup
-        LD A,(PAUSE_FLAG)
+        LD A,(EFFECT_ID)
         AND A
-        JR z,L_1da2
+        JR z,clock_step
         LD HL,FONT_MODE
         RES 2,(HL)
 
-L_1da2:
-        LD A,(VAR_4213)
-        LD HL,(VAR_4214)
+clock_step:
+        LD A,(CLK_RENDER_STEP)
+        LD HL,(CLK_RENDER_PTR)
         AND A
-        JR nz,L_1dc2
+        JR nz,clock_next_step
         LD HL,CLK_H10
         LD A,(HL)
         AND A
-        LD A,(VAR_4213)
-        JR nz,L_1dc2
-        LD A,(VAR_4213)
+        LD A,(CLK_RENDER_STEP)
+        JR nz,clock_next_step
+        LD A,(CLK_RENDER_STEP)
         INC A
-        LD (VAR_4213),A
+        LD (CLK_RENDER_STEP),A
         INC HL
-        LD (VAR_4214),HL
-        JR L_1d90
+        LD (CLK_RENDER_PTR),HL
+        JR render_clock
 
-L_1dc2:
+clock_next_step:
         INC A
-        LD (VAR_4213),A
+        LD (CLK_RENDER_STEP),A
         CP 3
-        JR nz,L_1dd2
+        JR nz,clock_not_colon
         LD A,0x3a
         LD (CUR_CHAR),A
-        JP L_1e0c
+        JP clock_emit
 
-L_1dd2:
+clock_not_colon:
         CP 6
-        JR nz,L_1dde
+        JR nz,clock_not_space
         LD A,0x20
         LD (CUR_CHAR),A
-        JP L_1e0c
+        JP clock_emit
 
-L_1dde:
+clock_not_space:
         CP 7
-        JR nz,L_1df2
+        JR nz,clock_not_ampm
         LD A,(CLK_PM)
         AND 1
         LD A,0x41
-        JR z,L_1ded
+        JR z,clock_ampm_char
         LD A,0x50
 
-L_1ded:
+clock_ampm_char:
         LD (CUR_CHAR),A
-        JR L_1e0c
+        JR clock_emit
 
-L_1df2:
+clock_not_ampm:
         CP 8
-        JR nz,L_1dfd
+        JR nz,clock_digit
         LD A,0x4d
         LD (CUR_CHAR),A
-        JR L_1e1a
+        JR clock_emit_last
 
-L_1dfd:
+clock_digit:
         LD A,(HL)
         AND 15
         OR 0x30
         LD (CUR_CHAR),A
         INC HL
-        LD A,(VAR_4213)
-        LD (VAR_4214),HL
+        LD A,(CLK_RENDER_STEP)
+        LD (CLK_RENDER_PTR),HL
 
-L_1e0c:
-        CALL sub_0cea
+clock_emit:
+        CALL unfetch_char
         LD A,(CUR_CHAR)
         JP glyph_lookup
         LD A,0x20
         LD (CUR_CHAR),A
 
-L_1e1a:
+clock_emit_last:
         LD A,0xff
-        LD (VAR_4213),A
+        LD (CLK_RENDER_STEP),A
         LD A,(CUR_CHAR)
         JP glyph_lookup
 
-sub_1e25:
+; ---- menu_ask_chan_cur: ask for a channel number, prefilled from INS_PTR
+menu_ask_chan_cur:
         PUSH AF
         PUSH BC
         PUSH DE
         PUSH HL
         PUSH IX
         PUSH IY
-        LD (VAR_43D4),HL
-        JR L_1e40
+        LD (ASK_CHAN_PROMPT),HL
+        JR askchan_prefill
 
-sub_1e32:
+; ---- menu_ask_chan: ask for a channel number; returns 0-99, 64 demo,
+;      97 SEQ key, 98 MAGIC key, 99 A(ll), 9A blank + enter
+menu_ask_chan:
         PUSH AF
         PUSH BC
         PUSH DE
         PUSH HL
         PUSH IX
         PUSH IY
-        LD (VAR_43D4),HL
-        JP L_1f14
+        LD (ASK_CHAN_PROMPT),HL
+        JP askchan_clear
 
-L_1e40:
+askchan_prefill:
         LD HL,(INS_PTR)
         DEC HL
         LD A,(HL)
         CP 0xda
-        JR nz,L_1e4d
+        JR nz,askchan_units_digit
         LD A,0x44
-        JR L_1e51
+        JR askchan_store_units
 
-L_1e4d:
+askchan_units_digit:
         AND 15
         OR 0x30
 
-L_1e51:
+askchan_store_units:
         LD (CHAN_D1),A
         DEC HL
         LD A,(HL)
         CP 0xda
-        JR nz,L_1e5e
+        JR nz,askchan_tens_digit
         LD A,0x44
-        JR L_1e62
+        JR askchan_store_tens
 
-L_1e5e:
+askchan_tens_digit:
         AND 15
         OR 0x30
 
-L_1e62:
+askchan_store_tens:
         LD (CHAN_D10),A
 
-L_1e65:
+askchan_show:
         CALL init_render
         LD HL,(FB_COL)
         LD (FB_COLPTR),HL
-        LD HL,(VAR_43D4)
+        LD HL,(ASK_CHAN_PROMPT)
         LD (MENU_TEXT_PTR),HL
         CALL menu_show_text
         LD B,2
         LD HL,CHAN_D10
 
-L_1e7c:
+askchan_digits_loop:
         LD A,(HL)
         LD (CUR_CHAR),A
         PUSH HL
@@ -4931,104 +4987,105 @@ L_1e7c:
         POP BC
         POP HL
         INC HL
-        DJNZ L_1e7c
+        DJNZ askchan_digits_loop
 
-L_1e8a:
+askchan_key:
         CALL menu_getchar
         LD (CUR_CHAR),A
         CP 4
-        JP z,L_1f32
+        JP z,askchan_seq_key
         CP 8
-        JR z,L_1eeb
+        JR z,askchan_accept
         CP 9
-        JR z,L_1eeb
+        JR z,askchan_accept
         CP 13
-        JR z,L_1f1f
+        JR z,askchan_enter
         CP 14
-        JR z,L_1f14
+        JR z,askchan_clear
         CP 0x1f
-        JP z,L_1f36
+        JP z,askchan_magic_key
         CP 0x7f
-        JR z,L_1eda
+        JR z,askchan_backspace
         CP 0x41
-        JR z,L_1f2a
+        JR z,askchan_all
         CP 0x61
-        JR z,L_1f2a
+        JR z,askchan_all
         CP 0x44
-        JR z,L_1f2e
+        JR z,askchan_demo
         CP 0x64
-        JR z,L_1f2e
+        JR z,askchan_demo
         LD A,(CUR_CHAR)
         CALL is_digit
-        JP nc,L_1e8a
+        JP nc,askchan_key
         LD IX,CHAN_D10
         LD A,(IX+1)
         LD (IX+0),A
         LD A,(CUR_CHAR)
         LD (IX+1),A
-        JP L_1e65
+        JP askchan_show
 
-L_1eda:
+askchan_backspace:
         LD IX,CHAN_D10
         LD A,(IX+0)
         LD (IX+1),A
         LD (IX+0),0x30
-        JP L_1e65
+        JP askchan_show
 
-L_1eeb:
+askchan_accept:
         LD A,(CHAN_D10)
         OR 0x20
         CP 0x64
-        JR z,L_1f2e
+        JR z,askchan_demo
         LD A,(CHAN_D1)
         OR 0x20
         CP 0x64
-        JR z,L_1f2e
+        JR z,askchan_demo
         LD B,2
         LD HL,CHAN_D10
         CALL ascii_dec_to_bin
 
-L_1f05:
-        LD (VAR_43D2),A
+askchan_return:
+        LD (ASK_CHAN_RESULT),A
         POP IY
         POP IX
         POP HL
         POP DE
         POP BC
         POP AF
-        LD A,(VAR_43D2)
+        LD A,(ASK_CHAN_RESULT)
         RET
 
-L_1f14:
+askchan_clear:
         LD A,0x20
         LD (CHAN_D10),A
         LD (CHAN_D1),A
-        JP L_1e65
+        JP askchan_show
 
-L_1f1f:
+askchan_enter:
         LD A,(CHAN_D1)
         CP 0x20
-        JR nz,L_1eeb
+        JR nz,askchan_accept
         LD A,0x9a
-        JR L_1f05
+        JR askchan_return
 
-L_1f2a:
+askchan_all:
         LD A,0x99
-        JR L_1f05
+        JR askchan_return
 
-L_1f2e:
+askchan_demo:
         LD A,0x64
-        JR L_1f05
+        JR askchan_return
 
-L_1f32:
+askchan_seq_key:
         LD A,0x97
-        JR L_1f05
+        JR askchan_return
 
-L_1f36:
+askchan_magic_key:
         LD A,0x98
-        JR L_1f05
+        JR askchan_return
 
-L_1f3a:
+; ---- menu_address: 5E (FUNC+MAGIC): ADDRESS? 1-255, never 0 or 2A
+menu_address:
         CALL init_render
         LD HL,(FB_COL)
         LD (FB_COLPTR),HL
@@ -5038,39 +5095,39 @@ L_1f3a:
         LD H,0
         LD A,(MY_ADDRESS)
         CP 0
-        JR z,L_1f59
+        JR z,addr_default_1
         CP 0x2a
-        JR nz,L_1f5b
+        JR nz,addr_to_ascii
 
-L_1f59:
+addr_default_1:
         LD A,1
 
-L_1f5b:
+addr_to_ascii:
         LD L,A
         LD IX,MENU_ENTRY_BUF
         LD IY,DEC_TABLE+4
-        CALL sub_18cb
+        CALL bin_to_dec_iy
         LD HL,MENU_ENTRY_BUF
         LD B,3
 
-L_1f6c:
+addr_skip_zeros:
         LD A,(HL)
         CP 0x30
-        JR nz,L_1f79
+        JR nz,addr_show_loop
         LD A,B
         CP 1
-        JR z,L_1f79
+        JR z,addr_show_loop
         INC HL
-        DJNZ L_1f6c
+        DJNZ addr_skip_zeros
 
-L_1f79:
+addr_show_loop:
         LD A,(HL)
         CALL is_digit
-        JP c,L_1f83
+        JP c,addr_show_digit
         LD A,0x30
         LD (HL),A
 
-L_1f83:
+addr_show_digit:
         LD (CUR_CHAR),A
         PUSH HL
         PUSH BC
@@ -5078,21 +5135,21 @@ L_1f83:
         POP BC
         POP HL
         INC HL
-        DJNZ L_1f79
+        DJNZ addr_show_loop
         LD HL,MENU_ENTRY_BUF
         LD B,0
         PUSH HL
         PUSH BC
 
-L_1f97:
+addr_key:
         CALL menu_getchar
         LD (CUR_CHAR),A
         POP BC
         POP HL
         CP 8
-        JR z,L_1fd8
+        JR z,addr_enter
         CP 13
-        JR z,L_1fd8
+        JR z,addr_enter
         LD A,B
         CP 3
         JP z,menu_addr_invalid
@@ -5106,7 +5163,7 @@ L_1f97:
         PUSH BC
         LD A,B
         CP 1
-        JR nz,L_1fd2
+        JR nz,addr_echo_digit
         CALL clear_framebuf
         LD HL,(FB_COL)
         LD (FB_COLPTR),HL
@@ -5114,17 +5171,17 @@ L_1f97:
         LD (MENU_TEXT_PTR),HL
         CALL menu_show_text
 
-L_1fd2:
+addr_echo_digit:
         CALL glyph_lookup
-        JP L_1f97
+        JP addr_key
 
-L_1fd8:
+addr_enter:
         LD A,B
         CP 0
-        JR nz,L_1fdf
+        JR nz,addr_convert
         LD B,3
 
-L_1fdf:
+addr_convert:
         LD HL,MENU_ENTRY_BUF
         CALL ascii_dec_to_bin
         JP c,menu_addr_invalid
@@ -5135,7 +5192,7 @@ L_1fdf:
         LD (MY_ADDRESS),A
         CPL
         LD (MY_ADDRESS_INV),A
-        JP L_2173
+        JP editor_reshow2
 
 ; ---- ascii_dec_to_bin: Convert B ASCII digits at (HL) to binary in A (C set if invalid)
 ascii_dec_to_bin:
@@ -5148,7 +5205,7 @@ ascii_dec_to_bin:
         XOR A
         POP BC
 
-L_2009:
+a2b_digit_loop:
         PUSH BC
         LD E,A
         LD A,(HL)
@@ -5156,22 +5213,22 @@ L_2009:
         LD B,A
         CP 0
         LD A,E
-        JR z,L_201b
+        JR z,a2b_next
 
-L_2014:
+a2b_add_loop:
         ADD A,(IX+0)
-        JR c,L_2023
-        DJNZ L_2014
+        JR c,a2b_overflow
+        DJNZ a2b_add_loop
 
-L_201b:
+a2b_next:
         INC HL
         DEC IX
         POP BC
-        DJNZ L_2009
+        DJNZ a2b_digit_loop
         OR A
         RET
 
-L_2023:
+a2b_overflow:
         POP BC
         SCF
         RET
@@ -5182,13 +5239,13 @@ POW10_BYTES:
 ; ---- is_digit: C set if A is ASCII 0-9
 is_digit:
         CP 0x3a
-        JR nc,L_2033
+        JR nc,not_digit
         CP 0x30
-        JR c,L_2033
+        JR c,not_digit
         SCF
         RET
 
-L_2033:
+not_digit:
         OR A
         RET
 
@@ -5199,19 +5256,20 @@ menu_addr_invalid:
         LD HL,MENU_STR_INVALID
         LD (MENU_MSG_PTR),HL
         CALL editor_redraw
-        JP L_1f3a
+        JP menu_address
 
-L_2046:
+; ---- editor_goto_end: B3
+editor_goto_end:
         LD HL,(STORE_CURSOR)
 
-L_2049:
+gotoend_loop:
         LD A,(HL)
         CP 3
-        JR z,L_2051
+        JR z,gotoend_back
         INC HL
-        JR L_2049
+        JR gotoend_loop
 
-L_2051:
+gotoend_back:
         DEC HL
         LD (STORE_CURSOR),HL
         LD HL,(STORE_CURSOR)
@@ -5222,22 +5280,23 @@ L_2051:
         JP nc,editor_loop
         DEC HL
         LD (STORE_CURSOR),HL
-        JP L_2087
+        JP show_top_of_msg
 
-L_206a:
+editor_reshow:
         LD HL,(STORE_CURSOR)
         LD A,(HL)
         CP 0xd0
         JP c,editor_loop
         CP 0xdb
         JP nc,editor_loop
-        JP L_2087
+        JP show_top_of_msg
 
 ; ---- data 207b-2086:
 STR_TOP_OF_MSG:
         db "TOP OF MSG ",0x00
 
-L_2087:
+; ---- show_top_of_msg: 05 and after most edits: "TOP OF MSG nn"
+show_top_of_msg:
         CALL init_render
         LD HL,(FB_COL)
         LD (FB_COLPTR),HL
@@ -5247,22 +5306,22 @@ L_2087:
         LD B,2
         LD HL,(STORE_CURSOR)
 
-L_209e:
+top_digit_loop:
         LD A,(HL)
         CP 0xda
-        JR nz,L_20a7
+        JR nz,top_digit
         LD A,0x44
-        JR L_20b4
+        JR top_emit
 
-L_20a7:
+top_digit:
         AND 15
         OR 0x30
         CALL is_digit
-        JP c,L_20b4
+        JP c,top_emit
         LD A,0x30
         LD (HL),A
 
-L_20b4:
+top_emit:
         LD (CUR_CHAR),A
         PUSH HL
         PUSH BC
@@ -5270,10 +5329,11 @@ L_20b4:
         POP BC
         POP HL
         INC HL
-        DJNZ L_209e
-        JP L_1ad5
+        DJNZ top_digit_loop
+        JP editor_next_key
 
-L_20c4:
+; ---- menu_clear_all: 03: CLR ALL Y/N
+menu_clear_all:
         CALL init_render
         LD HL,(FB_COL)
         LD (FB_COLPTR),HL
@@ -5287,16 +5347,17 @@ L_20c4:
         CALL store_clear_all
         CALL store_finalize
         LD A,0
-        JP L_2219
+        JP editor_select_chan
 
-L_20eb:
+editor_clear_msg:
         LD A,(CHAN_LOCK)
         OR A
-        JP nz,L_206a
-        CALL sub_20f8
-        JP L_2087
+        JP nz,editor_reshow
+        CALL delete_chan_text
+        JP show_top_of_msg
 
-sub_20f8:
+; ---- delete_chan_text: remove the selected channel's text up to its 03
+delete_chan_text:
         LD HL,(STORE_CURSOR)
         LD DE,MSG_STORE
         OR A
@@ -5306,35 +5367,35 @@ sub_20f8:
         CP 0xd0
         LD HL,(STORE_CURSOR)
 
-L_2108:
+deltext_find_marker:
         LD A,(HL)
         CP 0xd0
-        JP c,L_2115
+        JP c,deltext_back
         CP 0xdb
-        JP nc,L_2115
-        JR L_211f
+        JP nc,deltext_back
+        JR deltext_marker_end
 
-L_2115:
+deltext_back:
         DEC HL
         DEC BC
         LD A,B
         OR C
         JP z,pkt_process_end
-        JP L_2108
+        JP deltext_find_marker
 
-L_211f:
+deltext_marker_end:
         INC HL
         LD A,(HL)
         CP 0xd0
-        JP c,L_212d
+        JP c,deltext_one_byte
         CP 0xdb
-        JP nc,L_212d
-        JR L_212e
+        JP nc,deltext_one_byte
+        JR deltext_move
 
-L_212d:
+deltext_one_byte:
         DEC HL
 
-L_212e:
+deltext_move:
         LD (STORE_CURSOR),HL
         INC HL
         LD (MOVE_DST),HL
@@ -5369,21 +5430,21 @@ L_212e:
         LD (STORE_CURSOR),HL
         RET
 
-L_216c:
+editor_toggle_caps:
         LD A,(CAPS_LOCK)
         CPL
         LD (CAPS_LOCK),A
 
-L_2173:
+editor_reshow2:
         LD HL,(STORE_CURSOR)
         LD A,(HL)
         CP 0xd0
         JP c,editor_loop
         CP 0xdb
         JP nc,editor_loop
-        JP L_2087
+        JP show_top_of_msg
 
-L_2184:
+editor_toggle_euro:
         LD A,(EURO_STATE)
         CPL
         LD (EURO_STATE),A
@@ -5393,77 +5454,78 @@ L_2184:
         JP c,editor_loop
         CP 0xdb
         JP nc,editor_loop
-        JP L_2087
+        JP show_top_of_msg
 
-L_219c:
+editor_key_speed:
         LD HL,(STORE_CURSOR)
         LD A,(HL)
         CP 3
         JP z,editor_loop
         LD A,(CHAN_LOCK)
         OR A
-        JP nz,L_1c4e
+        JP nz,editor_show_invalid
         LD A,0xff
-        LD (VAR_43CF),A
+        LD (SPEED_PENDING),A
         JP editor_loop
 
-L_21b4:
+editor_key_graph:
         LD HL,(STORE_CURSOR)
         LD A,(HL)
         CP 3
         JP z,editor_loop
         LD A,(CHAN_LOCK)
         OR A
-        JP nz,L_1c4e
+        JP nz,editor_show_invalid
         LD A,0xff
-        LD (VAR_4221),A
+        LD (GRAPH_PENDING),A
         JP editor_loop
 
-L_21cc:
+editor_key_color:
         LD HL,(STORE_CURSOR)
         LD A,(HL)
         CP 3
         JP z,editor_loop
         LD A,(CHAN_LOCK)
         OR A
-        JP nz,L_1c4e
+        JP nz,editor_show_invalid
         LD A,0xff
-        LD (VAR_4220),A
+        LD (COLOR_PENDING),A
         JP editor_loop
 
-L_21e4:
+editor_key_func:
         LD A,0xff
-        LD (VAR_43CA),A
+        LD (FUNC_PENDING),A
         JP editor_loop
 
-L_21ec:
+editor_key_bgrnd:
         LD HL,(STORE_CURSOR)
         LD A,(HL)
         CP 3
         JP z,editor_loop
         LD A,(CHAN_LOCK)
         OR A
-        JP nz,L_1c4e
+        JP nz,editor_show_invalid
         LD A,0xff
-        LD (FB_TMP),A
+        LD (BGRND_PENDING),A
         JP editor_loop
         CP 0x30
-        JR nz,L_220b
+        JR nz,digit_dec_wrap
         LD A,0x39
         RET
 
-L_220b:
+digit_dec_wrap:
         DEC A
         RET
 
-L_220d:
+; ---- menu_prog_msg: 09: PROG MSG? channel
+menu_prog_msg:
         LD HL,MENU_STR_PROG_MSG
-        CALL sub_1e25
+        CALL menu_ask_chan_cur
         CP 0x65
-        JP nc,L_220d
+        JP nc,menu_prog_msg
         LD E,A
 
-L_2219:
+editor_select_chan:
         PUSH DE
         CALL chan_select
         POP DE
@@ -5474,107 +5536,110 @@ L_2219:
         DEC HL
         LD (STORE_CURSOR),HL
         PUSH DE
-        CALL chan_find
+        CALL clear_chan_lock
         POP DE
         LD A,E
         CP 0x64
-        JR nz,L_2237
+        JR nz,editor_select_done
         LD (CHAN_LOCK),A
 
-L_2237:
-        JP L_2087
+editor_select_done:
+        JP show_top_of_msg
 
-L_223a:
+; ---- menu_seq_msg: 04: SEQ MSG? channels until blank+enter; A = all
+menu_seq_msg:
         LD A,0xff
-        LD (VAR_435A),A
+        LD (SEQ_SET),A
         LD HL,SEQ_LIST
         LD B,0x68
         LD A,0xff
 
-L_2246:
+seqmenu_clear:
         LD (HL),A
         INC HL
-        DJNZ L_2246
-        LD (VAR_4336),A
+        DJNZ seqmenu_clear
+        LD (SEQ_MENU_ACTIVE),A
         LD HL,SEQ_LIST
         LD (SEQ_PTR),HL
         LD B,0x67
 
-L_2255:
+seqmenu_loop:
         PUSH BC
         LD HL,MENU_STR_SEQ_MSG
         LD A,B
         CP 0x67
-        JR z,L_2263
-        CALL sub_1e32
-        JR L_2266
+        JR z,seqmenu_first
+        CALL menu_ask_chan
+        JR seqmenu_result
 
-L_2263:
-        CALL sub_1e25
+seqmenu_first:
+        CALL menu_ask_chan_cur
 
-L_2266:
+seqmenu_result:
         POP BC
         CP 0x98
-        JR z,L_22a5
+        JR z,seqmenu_test_prompt
         CP 0x97
-        JR z,L_228f
+        JR z,seqmenu_done
         CP 0x99
-        JR z,L_22ef
+        JR z,seqmenu_all
         CP 0x9a
-        JP z,L_1c5c
+        JP z,editor_exit
         LD HL,(SEQ_PTR)
         LD (HL),A
         INC HL
         LD (SEQ_PTR),HL
-        DJNZ L_2255
+        DJNZ seqmenu_loop
         LD HL,MENU_STR_SEQ_FULL
         INC HL
         LD (MENU_TEXT_PTR),HL
         CALL menu_show_text
-        CALL sub_2a21
+        CALL fb_rewind_window
 
-L_228f:
+seqmenu_done:
         LD A,0
-        LD (VAR_4336),A
+        LD (SEQ_MENU_ACTIVE),A
         LD HL,(STORE_CURSOR)
         LD A,(HL)
         CP 0xd0
         JP c,editor_loop
         CP 0xdb
         JP nc,editor_loop
-        JP L_2087
+        JP show_top_of_msg
 
-L_22a5:
+seqmenu_test_prompt:
         CALL menu_getchar
         CP 0x12
-        JR z,L_22a5
+        JR z,seqmenu_test_prompt
         CP 0x43
-        JR z,L_22b5
+        JR z,test_mode_enter
         CP 0x63
-        JP nz,L_228f
+        JP nz,seqmenu_done
 
-L_22b5:
+; ---- test_mode_enter: SEQ MSG? then MAGIC then C: TEST_MSG_BUF = "CURRENT
+;      TEST" + sum of ROM 0000-3FFF as 4 hex digits, shown in TEST_MODE
+test_mode_enter:
         LD A,0xff
-        LD (VAR_420F),A
+        LD (TEST_MODE),A
         LD HL,TEST_MESSAGE
-        LD DE,VAR_43A5
+        LD DE,TEST_MSG_BUF
 
-L_22c0:
+test_copy_loop:
         LD A,(HL)
         LD (DE),A
         CP 3
-        JR z,L_22ca
+        JR z,test_rom_sum
         INC HL
         INC DE
-        JR L_22c0
+        JR test_copy_loop
 
-L_22ca:
+test_rom_sum:
         PUSH DE
         LD DE,0
         LD BC,0x4000
         LD HL,0
 
-L_22d4:
+test_sum_loop:
         LD A,(DE)
         PUSH DE
         LD D,0
@@ -5585,27 +5650,27 @@ L_22d4:
         DEC BC
         LD A,C
         OR B
-        JR nz,L_22d4
+        JR nz,test_sum_loop
         POP DE
-        CALL sub_2a41
+        CALL word_to_hex4
         INC DE
         INC DE
         INC DE
         INC DE
         LD A,3
         LD (DE),A
-        JP L_1c5c
+        JP editor_exit
 
-L_22ef:
+seqmenu_all:
         LD HL,SEQ_LIST
         LD A,0
         LD B,0x64
 
-L_22f6:
+seqmenu_all_fill:
         LD (HL),A
         INC HL
         INC A
-        DJNZ L_22f6
+        DJNZ seqmenu_all_fill
         LD (HL),0xff
         INC HL
         LD (HL),0xff
@@ -5613,12 +5678,12 @@ L_22f6:
         LD (HL),0xff
         INC HL
         LD (HL),0xff
-        JP L_1c5c
+        JP editor_exit
 
 ; ---- menu_getchar
 menu_getchar:
         CALL editor_getkey
-        LD A,(RX_LASTCMD)
+        LD A,(EDIT_KEY)
         AND A
         JR z,menu_getchar
         RET
@@ -5627,97 +5692,97 @@ menu_getchar:
 editor_getkey:
         LD A,(KEY_ECHO_TX)
         AND A
-        JR z,L_231c
+        JR z,getkey_serial
         CALL tx_send_byte
 
-L_231c:
+getkey_serial:
         CALL rx_fifo_get
-        JP c,L_233f
+        JP c,getkey_ir
         AND A
-        JR z,L_233f
+        JR z,getkey_ir
         XOR A
         LD (EURO_STATE),A
-        LD A,(VAR_4226)
-        LD (VAR_4227),A
-        LD A,(RX_LASTCMD)
-        LD (VAR_4226),A
+        LD A,(PREV_KEY)
+        LD (PREV_KEY2),A
+        LD A,(EDIT_KEY)
+        LD (PREV_KEY),A
         LD A,(RX_BYTE)
-        LD (RX_LASTCMD),A
+        LD (EDIT_KEY),A
         LD (KEY_ECHO_TX),A
         RET
 
-L_233f:
+getkey_ir:
         LD A,(IR_CODE)
         AND A
-        JR z,L_237d
+        JR z,getkey_none
         AND 0x3f
-        LD (VAR_4387),A
+        LD (IR_KEYNUM),A
         XOR A
         LD (IR_CODE),A
-        LD A,(VAR_4387)
+        LD A,(IR_KEYNUM)
         CP 0x3e
-        JR z,L_2376
+        JR z,getkey_released
         LD C,A
         LD A,(IR_KEY)
         CP C
-        JR nz,L_2384
-        LD A,(VAR_4377)
+        JR nz,getkey_first_frame
+        LD A,(IR_DEBOUNCE)
         AND A
-        JR nz,L_2393
+        JR nz,getkey_accept
         CP 0x24
-        JR z,L_237d
+        JR z,getkey_none
         LD HL,(GEN_COUNTDOWN)
         LD A,H
         OR L
-        JR nz,L_237d
+        JR nz,getkey_none
         LD HL,0x012c
         LD (GEN_COUNTDOWN),HL
-        JP L_23a3
+        JP getkey_check_shift
 
-L_2376:
+getkey_released:
         XOR A
         LD (IR_KEY),A
-        LD (VAR_4377),A
+        LD (IR_DEBOUNCE),A
 
-L_237d:
+getkey_none:
         XOR A
-        LD (VAR_4229),A
-        JP L_2418
+        LD (IR_KEY_CHAR),A
+        JP getkey_return
 
-L_2384:
-        LD A,(VAR_4387)
+getkey_first_frame:
+        LD A,(IR_KEYNUM)
         LD (IR_KEY),A
-        LD (VAR_4377),A
+        LD (IR_DEBOUNCE),A
         XOR A
         LD (IR_CODE),A
-        JR L_237d
+        JR getkey_none
 
-L_2393:
-        LD A,(VAR_4387)
+getkey_accept:
+        LD A,(IR_KEYNUM)
         LD (IR_KEY),A
         LD HL,0x0514
         LD (GEN_COUNTDOWN),HL
         XOR A
-        LD (VAR_4377),A
+        LD (IR_DEBOUNCE),A
 
-L_23a3:
-        LD A,(VAR_4387)
+getkey_check_shift:
+        LD A,(IR_KEYNUM)
         CP 0x1d
-        JR nz,L_23c1
-        CALL sub_0f48
+        JR nz,getkey_translate
+        CALL beep_start
         LD A,(SHIFT_STATE)
         CPL
         LD (SHIFT_STATE),A
         AND A
         LD A,0x1d
-        JR nz,L_23bb
+        JR nz,getkey_shift_code
         LD A,0x9f
 
-L_23bb:
-        LD (VAR_4229),A
-        JP L_2408
+getkey_shift_code:
+        LD (IR_KEY_CHAR),A
+        JP getkey_history
 
-L_23c1:
+getkey_translate:
         LD HL,IR_KEY_TABLE
         LD D,0
         LD E,A
@@ -5727,49 +5792,49 @@ L_23c1:
         LD A,(EURO_STATE)
         LD HL,CHARSET_EURO
         OR A
-        JR nz,L_23f5
+        JR nz,getkey_lookup
         LD A,(SHIFT_STATE)
         LD HL,CHARSET_LOWER
         AND A
-        JR z,L_23ec
+        JR z,getkey_caps
         LD HL,CHARSET_UPPER2
         LD A,(CAPS_LOCK)
         AND A
-        JR z,L_23f5
+        JR z,getkey_lookup
         LD HL,CHARSET_LOWER2
-        JR L_23f5
+        JR getkey_lookup
 
-L_23ec:
+getkey_caps:
         LD A,(CAPS_LOCK)
         AND A
-        JR z,L_23f5
+        JR z,getkey_lookup
         LD HL,CHARSET_UPPER
 
-L_23f5:
+getkey_lookup:
         LD A,(RX_BYTE)
         LD E,A
         LD D,0
         ADD HL,DE
         LD A,(HL)
-        LD (VAR_4229),A
+        LD (IR_KEY_CHAR),A
         LD A,0
         LD (SHIFT_STATE),A
-        CALL sub_0f48
+        CALL beep_start
 
-L_2408:
+getkey_history:
         XOR A
         LD (EURO_STATE),A
-        LD A,(VAR_4226)
-        LD (VAR_4227),A
-        LD A,(RX_LASTCMD)
-        LD (VAR_4226),A
+        LD A,(PREV_KEY)
+        LD (PREV_KEY2),A
+        LD A,(EDIT_KEY)
+        LD (PREV_KEY),A
 
-L_2418:
-        LD A,(VAR_4229)
-        LD (RX_LASTCMD),A
+getkey_return:
+        LD A,(IR_KEY_CHAR)
+        LD (EDIT_KEY),A
         XOR A
         LD (KEY_ECHO_TX),A
-        LD A,(RX_LASTCMD)
+        LD A,(EDIT_KEY)
         AND A
         RET
 
@@ -5780,26 +5845,27 @@ IR_KEY_TABLE:
         db 0x31,0x30,0x37,0x36,0x35,0x08,0x32,0x34,0x01,0x00,0x07,0x06,0x05,0x38,0x02,0x04
         db 0x11,0x10,0x17,0x16,0x15,0x28,0x12,0x14,0x21,0x20,0x27,0x26,0x25,0x18
 
-L_2465:
+editor_key_shift:
         LD HL,(STORE_CURSOR)
         LD A,(HL)
         CP 3
         JP z,editor_loop
         LD A,(SHIFT_STATE)
         OR A
-        JR z,L_247f
+        JR z,shift_done
         LD A,0xff
-        LD (VAR_4241),A
+        LD (SHIFT_LABEL),A
         LD HL,STR_SHIFT
         LD (MENU_MSG_PTR),HL
 
-L_247f:
+shift_done:
         JP editor_loop
 
-L_2482:
+; ---- editor_delete: 7F: delete the byte under the cursor
+editor_delete:
         LD A,(CHAN_LOCK)
         OR A
-        JP nz,L_206a
+        JP nz,editor_reshow
         LD A,(CTRL_LATCH_SHADOW)
         OR 15
         LD (CTRL_LATCH_SHADOW),A
@@ -5809,18 +5875,18 @@ L_2482:
         CP 3
         JP z,editor_loop
         CP 0xd0
-        JP c,L_24aa
+        JP c,delete_do
         CP 0xdb
-        JP nc,L_24aa
-        JP L_2087
+        JP nc,delete_do
+        JP show_top_of_msg
 
-L_24aa:
+delete_do:
         LD A,0
-        LD (EFFECT_ACTIVE),A
+        LD (DISP_ON),A
         LD HL,(STORE_END)
         DEC HL
         LD (STORE_END),HL
-        CALL sub_0cea
+        CALL unfetch_char
         LD HL,(STORE_CURSOR)
         INC HL
         LD (MOVE_DST),HL
@@ -5836,7 +5902,7 @@ L_24aa:
         LD DE,(MOVE_DST)
         LDIR
         LD A,0xff
-        LD (EFFECT_ACTIVE),A
+        LD (DISP_ON),A
         LD HL,(STORE_CURSOR)
         LD A,(HL)
         CP 0xd0
@@ -5845,53 +5911,56 @@ L_24aa:
         JP nc,editor_loop
         DEC HL
         LD (STORE_CURSOR),HL
-        JP L_2087
+        JP show_top_of_msg
         db 0xc3,0xd2,0x1a
 
-L_24f4:
+; ---- cursor_right: 0A
+cursor_right:
         LD HL,(STORE_CURSOR)
         LD A,(HL)
         CP 3
-        JR z,L_250c
+        JR z,cursor_right_done
         INC HL
         LD A,(HL)
         CP 0xd0
-        JP c,L_2509
+        JP c,cursor_right_set
         CP 0xdb
-        JP nc,L_2509
+        JP nc,cursor_right_set
         INC HL
 
-L_2509:
+cursor_right_set:
         LD (STORE_CURSOR),HL
 
-L_250c:
+cursor_right_done:
         JP editor_loop
 
-L_250f:
+; ---- cursor_right_8: 0C
+cursor_right_8:
         LD B,8
         LD HL,(STORE_CURSOR)
 
-L_2514:
+right8_loop:
         LD A,(HL)
         CP 3
-        JR z,L_251f
+        JR z,right8_done
         INC HL
         LD (STORE_CURSOR),HL
-        DJNZ L_2514
+        DJNZ right8_loop
 
-L_251f:
+right8_done:
         JP editor_loop
 
-L_2522:
+; ---- cursor_left: 08
+cursor_left:
         LD IX,(STORE_CURSOR)
         LD A,(IX+0)
         CP 0xd0
-        JP c,L_2536
+        JP c,cursor_left_do
         CP 0xdb
-        JP nc,L_2536
-        JP L_2087
+        JP nc,cursor_left_do
+        JP show_top_of_msg
 
-L_2536:
+cursor_left_do:
         DEC IX
         LD (STORE_CURSOR),IX
         LD A,(IX+0)
@@ -5901,55 +5970,57 @@ L_2536:
         JP nc,editor_loop
         DEC IX
         LD (STORE_CURSOR),IX
-        JP L_2087
+        JP show_top_of_msg
 
-L_2552:
+; ---- cursor_left_8: 0B
+cursor_left_8:
         LD B,8
         LD HL,(STORE_CURSOR)
         LD A,(HL)
         CP 0xd0
-        JP c,L_2565
+        JP c,left8_step
         CP 0xdb
-        JP nc,L_2565
-        JP L_2087
+        JP nc,left8_step
+        JP show_top_of_msg
 
-L_2565:
+left8_step:
         DEC HL
         LD (STORE_CURSOR),HL
         LD A,(HL)
         CP 0xd0
-        JP c,L_2552
+        JP c,cursor_left_8
         CP 0xdb
-        JP nc,L_2552
+        JP nc,cursor_left_8
         DEC HL
         LD (STORE_CURSOR),HL
-        JP L_2087
-        DJNZ L_2565
+        JP show_top_of_msg
+        DJNZ left8_step
         JP editor_loop
 
-L_2580:
+; ---- editor_insert: insert EDIT_KEY at the cursor (MEMORY FULL / 100 KEYS LEFT)
+editor_insert:
         LD (CUR_CHAR),A
         LD A,(CHAN_LOCK)
         OR A
-        JP nz,L_206a
+        JP nz,editor_reshow
         LD HL,(STORE_CURSOR)
         LD A,(HL)
         CP 3
-        JP z,L_2615
+        JP z,insert_done
         CP 0xd0
-        JP c,L_25a1
+        JP c,insert_do
         CP 0xdb
-        JP nc,L_25a1
+        JP nc,insert_do
         INC HL
         LD (STORE_CURSOR),HL
 
-L_25a1:
+insert_do:
         LD A,(CTRL_LATCH_SHADOW)
         OR 15
         LD (CTRL_LATCH_SHADOW),A
         LD (CTRL_LATCH),A
         LD A,0
-        LD (EFFECT_ACTIVE),A
+        LD (DISP_ON),A
         LD HL,(STORE_END)
         INC HL
         LD (STORE_TMP),HL
@@ -5958,14 +6029,14 @@ L_25a1:
         SBC HL,DE
         LD A,H
         OR L
-        JR nz,L_25d1
+        JR nz,insert_shift
         LD A,0xff
         LD (MENU_MSG_FLAG),A
         LD HL,MENU_STR_MEM_FULL
         LD (MENU_MSG_PTR),HL
         JP editor_loop
 
-L_25d1:
+insert_shift:
         LD HL,(STORE_TMP)
         LD (STORE_END),HL
         CALL store_make_room
@@ -5986,16 +6057,16 @@ L_25d1:
         LD A,(CUR_CHAR)
         LD (HL),A
         LD HL,(STORE_END)
-        LD DE,(VAR_43DE)
+        LD DE,(STORE_WARN_LIMIT)
         OR A
         SBC HL,DE
-        JR nz,L_2615
+        JR nz,insert_done
         LD A,0xff
         LD (MENU_MSG_FLAG),A
         LD HL,MENU_STR_100_KEYS
         LD (MENU_MSG_PTR),HL
 
-L_2615:
+insert_done:
         JP editor_loop
 
 ; ---- store_make_room
@@ -6006,153 +6077,159 @@ store_make_room:
         LD (STORE_CURSOR),HL
         OR A
         SBC HL,DE
-        JR nz,L_263b
+        JR nz,makeroom_ret
         LD A,(MENU_ACTIVE)
         AND A
-        JR nz,L_2636
+        JR nz,makeroom_wrap_flag
         LD HL,MSG_STORE
         LD (STORE_CURSOR),HL
-        JR L_263b
+        JR makeroom_ret
 
-L_2636:
+makeroom_wrap_flag:
         LD A,0xff
-        LD (VAR_4236),A
+        LD (STORE_WRAPPED),A
 
-L_263b:
+makeroom_ret:
         RET
 
-sub_263c:
-        CALL sub_264c
-        CALL sub_26d1
-        CALL sub_2661
+; ---- editor_translate_key: apply the GRAPH/COLOR/BGRND/SPEED/FUNC prefixes
+editor_translate_key:
+        CALL apply_graph_prefix
+        CALL apply_colour_prefix
+        CALL apply_speed_prefix
         CALL editor_key_to_attr
-        CALL rx_cmd_check
+        CALL editor_query_hook
         RET
 
-sub_264c:
-        LD A,(VAR_4221)
+; ---- apply_graph_prefix: GRAPH n -> A0|n
+apply_graph_prefix:
+        LD A,(GRAPH_PENDING)
         OR A
         RET z
-        LD A,(RX_LASTCMD)
+        LD A,(EDIT_KEY)
         AND 15
         OR 0xa0
-        LD (RX_LASTCMD),A
+        LD (EDIT_KEY),A
         LD A,0
-        LD (VAR_4221),A
+        LD (GRAPH_PENDING),A
         RET
 
-sub_2661:
-        LD A,(VAR_43CF)
+; ---- apply_speed_prefix: SPEED n -> F0|(n&7)
+apply_speed_prefix:
+        LD A,(SPEED_PENDING)
         AND A
         RET z
-        LD A,(RX_LASTCMD)
+        LD A,(EDIT_KEY)
         AND 7
         OR 0xf0
-        LD (RX_LASTCMD),A
+        LD (EDIT_KEY),A
         XOR A
-        LD (VAR_43CF),A
+        LD (SPEED_PENDING),A
         RET
 
-; ---- editor_key_to_attr: Translate editor function keys to message bytes: 1E->B8 graphic,11->B9 thin,19->BA wait,14->B0 remark,12->06 pause,15->BC rainbow, 8F.. colours etc.
+; ---- editor_key_to_attr: FUNC (B7) second functions: GRAPH->B8 DRAW, NORM->B9 THIN,
+;      PAUSE->BA WAIT, FLASH->B0 REM, BOLD->06 HALT, COLOR->BC RAINBOW, Q->?, X->!,
+;      MAGIC->5E (ADDRESS? menu), BIG->BE TINY; anything else cancels
 editor_key_to_attr:
-        LD A,(VAR_43CA)
+        LD A,(FUNC_PENDING)
         AND A
         RET z
         XOR A
-        LD (VAR_43CA),A
-        LD A,(RX_LASTCMD)
+        LD (FUNC_PENDING),A
+        LD A,(EDIT_KEY)
         LD C,0xb8
         CP 0x1e
-        JR z,L_26cc
+        JR z,func_store
         INC C
         CP 0x11
-        JR z,L_26cc
+        JR z,func_store
         INC C
         CP 0x19
-        JR z,L_26cc
+        JR z,func_store
         LD C,0xb0
         CP 0x14
-        JR z,L_26cc
+        JR z,func_store
         LD C,6
         CP 0x12
-        JR z,L_26cc
+        JR z,func_store
         LD C,0xbc
         CP 0x15
-        JR z,L_26cc
+        JR z,func_store
         CP 0x8f
-        JR z,L_26cc
+        JR z,func_store
         LD C,0x3f
         CP 0x51
-        JR z,L_26cc
+        JR z,func_store
         CP 0x71
-        JR z,L_26cc
+        JR z,func_store
         LD C,0x21
         CP 0x58
-        JR z,L_26cc
+        JR z,func_store
         CP 0x78
-        JR z,L_26cc
+        JR z,func_store
         LD C,0x5e
         CP 0x1f
-        JR z,L_26cc
+        JR z,func_store
         LD C,0xbe
         CP 0x10
-        JR z,L_26cc
+        JR z,func_store
         POP HL
         POP HL
-        JP L_206a
+        JP editor_reshow
 
-L_26cc:
+func_store:
         LD A,C
-        LD (RX_LASTCMD),A
+        LD (EDIT_KEY),A
         RET
 
-sub_26d1:
-        LD A,(VAR_4220)
+; ---- apply_colour_prefix: COLOR n -> FG_IDX_TABLE, BGRND n -> BG_IDX_TABLE
+apply_colour_prefix:
+        LD A,(COLOR_PENDING)
         AND A
-        JR nz,L_26de
-        LD A,(FB_TMP)
+        JR nz,prefix_fore
+        LD A,(BGRND_PENDING)
         AND A
-        JR nz,L_26fb
+        JR nz,prefix_back
         RET
 
-L_26de:
-        LD A,(RX_LASTCMD)
+prefix_fore:
+        LD A,(EDIT_KEY)
         AND 15
         DEC A
         CP 10
-        JR c,L_26ea
+        JR c,prefix_fore_lookup
         LD A,2
 
-L_26ea:
+prefix_fore_lookup:
         NOP
         LD HL,FG_IDX_TABLE
         LD C,A
         LD B,0
         ADD HL,BC
         LD A,(HL)
-        LD (RX_LASTCMD),A
+        LD (EDIT_KEY),A
         XOR A
-        LD (VAR_4220),A
+        LD (COLOR_PENDING),A
         RET
 
-L_26fb:
-        LD A,(RX_LASTCMD)
+prefix_back:
+        LD A,(EDIT_KEY)
         AND 7
         DEC A
         CP 6
-        JR c,L_2707
+        JR c,prefix_back_lookup
         LD A,5
 
-L_2707:
+prefix_back_lookup:
         NOP
         LD HL,BG_IDX_TABLE
         LD C,A
         LD B,0
         ADD HL,BC
         LD A,(HL)
-        LD (RX_LASTCMD),A
+        LD (EDIT_KEY),A
         XOR A
-        LD (FB_TMP),A
+        LD (BGRND_PENDING),A
         RET
 
 ; ---- data 2718-2721: cmd 15 n: foreground colour codes (Red,Orange,Yellow,Lime,Green,84,8E,Black,8B,81)
@@ -6168,187 +6245,187 @@ editor_redraw:
         CALL clear_txbuf
         CALL init_render
         XOR A
-        LD (EFFECT_ACTIVE),A
+        LD (DISP_ON),A
         LD A,(CTRL_LATCH_SHADOW)
         OR 15
         LD (CTRL_LATCH_SHADOW),A
         LD (CTRL_LATCH),A
-        LD A,(VAR_4243)
+        LD A,(PROG_MSG_FORCE)
         AND A
-        JP nz,L_28f3
-        LD A,(VAR_4336)
+        JP nz,redraw_status
+        LD A,(SEQ_MENU_ACTIVE)
         BIT 7,A
-        JP nz,L_28f3
-        LD A,(VAR_4399)
+        JP nz,redraw_status
+        LD A,(MAGIC_MSG_CHAN)
         AND A
-        JP nz,L_28f3
+        JP nz,redraw_status
         LD HL,(STORE_CURSOR)
         LD A,(HL)
         CP 0xd0
-        JP c,L_2764
+        JP c,redraw_window
         CP 0xdb
-        JP nc,L_2764
-        JP L_28f3
+        JP nc,redraw_window
+        JP redraw_status
 
-L_2764:
+redraw_window:
         LD DE,0x15
         OR A
         SBC HL,DE
-        LD (VAR_4344),HL
+        LD (REDRAW_FROM),HL
         LD DE,(INS_PTR)
         OR A
         SBC HL,DE
-        JR nc,L_277a
+        JR nc,redraw_start
         EX DE,HL
-        LD (VAR_4344),HL
+        LD (REDRAW_FROM),HL
 
-L_277a:
+redraw_start:
         LD HL,(INS_PTR)
-        LD (VAR_425A),HL
+        LD (REDRAW_PTR),HL
 
-L_2780:
-        LD HL,(VAR_425A)
+redraw_loop:
+        LD HL,(REDRAW_PTR)
         LD A,(HL)
         LD (CUR_CHAR),A
         LD A,0xff
         LD (TINY_MODE),A
         LD A,(CUR_CHAR)
         CP 0x20
-        JR nz,L_27a4
-        LD A,(VAR_439A)
+        JR nz,redraw_classify
+        LD A,(REDRAW_MAGIC)
         AND A
-        JP z,L_28b0
+        JP z,redraw_char_check
         XOR A
-        LD (VAR_433B),A
+        LD (FORCE_BOLD),A
         LD (FONT_MODE),A
-        JP L_28b0
+        JP redraw_char_check
 
-L_27a4:
+redraw_classify:
         BIT 7,A
-        JP nz,L_27b0
+        JP nz,redraw_high
         AND 0x60
-        JR z,L_27d3
-        JP L_28b0
+        JR z,redraw_attr
+        JP redraw_char_check
 
-L_27b0:
+redraw_high:
         LD A,(CUR_CHAR)
         CP 0x94
-        JP c,L_27d3
+        JP c,redraw_attr
         CP 0x9f
-        JP c,L_28b0
+        JP c,redraw_char_check
         AND 0xf0
         CP 0xc0
-        JP z,L_28b0
+        JP z,redraw_char_check
         CP 0xe0
-        JP z,L_28b0
+        JP z,redraw_char_check
         CP 0xd0
-        JP z,L_28b0
+        JP z,redraw_char_check
         CP 0xa0
-        JP z,L_28b0
+        JP z,redraw_char_check
 
-L_27d3:
+redraw_attr:
         LD A,(CUR_CHAR)
         CP 0x15
-        JP z,L_28b0
+        JP z,redraw_char_check
         CP 0x16
-        JP z,L_28b0
+        JP z,redraw_char_check
         CP 0xbd
-        JR nz,L_27eb
+        JR nz,redraw_attr2
         XOR A
-        LD (VAR_439A),A
+        LD (REDRAW_MAGIC),A
         LD A,(CUR_CHAR)
 
-L_27eb:
+redraw_attr2:
         CP 15
-        JP z,L_2869
+        JP z,redraw_fx_attr
         CP 0x19
-        JP z,L_2869
+        JP z,redraw_fx_attr
         CP 0x1a
-        JP z,L_2869
+        JP z,redraw_fx_attr
         CP 0x1b
-        JP z,L_2869
+        JP z,redraw_fx_attr
         CP 0x18
-        JP z,L_2878
+        JP z,redraw_left_attr
         CP 0x11
-        JP nz,L_2812
+        JP nz,redraw_not_norm
         XOR A
-        LD (VAR_421E),A
+        LD (FLASH_BIT),A
         LD (FONT_MODE),A
-        JR L_287d
+        JR redraw_label_check
 
-L_2812:
+redraw_not_norm:
         CP 0x14
-        JP nz,L_281e
+        JP nz,redraw_not_flash
         LD A,0x10
-        LD (VAR_43A2),A
-        JR L_287d
+        LD (FLASH_PENDING),A
+        JR redraw_label_check
 
-L_281e:
+redraw_not_flash:
         CP 0x13
-        JP nz,L_282a
+        JP nz,redraw_not_italic
         LD A,0x64
         LD (FONT_MODE),A
-        JR L_287d
+        JR redraw_label_check
 
-L_282a:
+redraw_not_italic:
         CP 0x12
-        JP nz,L_2837
+        JP nz,redraw_not_bold
         XOR A
         SET 1,A
         LD (FONT_MODE),A
-        JR L_287d
+        JR redraw_label_check
 
-L_2837:
+redraw_not_bold:
         CP 0x10
-        JP nz,L_2847
+        JP nz,redraw_not_big
         XOR A
         SET 1,A
         SET 3,A
         LD (FONT_MODE),A
-        JP L_287d
+        JP redraw_label_check
 
-L_2847:
+redraw_not_big:
         CP 0xb9
-        JP nz,L_2858
+        JP nz,redraw_not_thin
         LD A,0xff
-        LD (VAR_43D6),A
+        LD (THIN_MODE),A
         XOR A
-        LD (VAR_433B),A
-        JP L_287d
+        LD (FORCE_BOLD),A
+        JP redraw_label_check
 
-L_2858:
+redraw_not_thin:
         CP 0x1f
-        JP nz,L_287d
+        JP nz,redraw_label_check
         XOR A
         LD (FONT_MODE),A
         LD A,0xff
-        LD (VAR_439A),A
-        JP L_287d
+        LD (REDRAW_MAGIC),A
+        JP redraw_label_check
 
-L_2869:
-        LD A,(VAR_43D6)
+redraw_fx_attr:
+        LD A,(THIN_MODE)
         AND A
-        JP nz,L_287d
+        JP nz,redraw_label_check
         LD A,0xff
-        LD (VAR_433B),A
-        JP L_287d
+        LD (FORCE_BOLD),A
+        JP redraw_label_check
 
-L_2878:
+redraw_left_attr:
         LD A,0
-        LD (VAR_433B),A
+        LD (FORCE_BOLD),A
 
-L_287d:
-        LD HL,(VAR_425A)
-        LD DE,(VAR_4344)
+redraw_label_check:
+        LD HL,(REDRAW_PTR)
+        LD DE,(REDRAW_FROM)
         OR A
         EX DE,HL
         SBC HL,DE
         EX DE,HL
-        JP c,L_2892
-        JP z,L_2892
-        JP L_28e0
+        JP c,redraw_show_label
+        JP z,redraw_show_label
+        JP redraw_next
 
-L_2892:
+redraw_show_label:
         LD HL,ATTR_LABEL_TABLE
         LD A,(CUR_CHAR)
         LD E,A
@@ -6362,95 +6439,95 @@ L_2892:
         LD (MENU_TEXT_PTR),DE
         CALL menu_show_text
         LD A,(CUR_CHAR)
-        JP L_28e0
+        JP redraw_next
 
-L_28b0:
-        LD HL,(VAR_425A)
-        LD DE,(VAR_4344)
+redraw_char_check:
+        LD HL,(REDRAW_PTR)
+        LD DE,(REDRAW_FROM)
         OR A
         EX DE,HL
         SBC HL,DE
         EX DE,HL
-        JP c,L_28c5
-        JP z,L_28c5
-        JP L_28e0
+        JP c,redraw_char
+        JP z,redraw_char
+        JP redraw_next
 
-L_28c5:
+redraw_char:
         XOR A
         LD (TINY_MODE),A
         LD A,(CUR_CHAR)
         AND 0xf0
         CP 0xa0
         LD A,(CUR_CHAR)
-        JR nz,L_28da
+        JR nz,redraw_char_glyph
         AND 15
         LD (CUR_CHAR),A
 
-L_28da:
-        CALL sub_072a
+redraw_char_glyph:
+        CALL track_flash_space
         CALL glyph_lookup
 
-L_28e0:
-        LD HL,(VAR_425A)
+redraw_next:
+        LD HL,(REDRAW_PTR)
         INC HL
-        LD (VAR_425A),HL
+        LD (REDRAW_PTR),HL
         LD DE,(STORE_CURSOR)
         EX DE,HL
         OR A
         SBC HL,DE
         EX DE,HL
-        JP nc,L_2780
+        JP nc,redraw_loop
 
-L_28f3:
+redraw_status:
         LD A,0xff
         LD (TINY_MODE),A
-        LD A,(VAR_4221)
+        LD A,(GRAPH_PENDING)
         AND A
-        JR z,L_2904
+        JR z,status_not_graph
         LD HL,STR_GRAPH
-        JP L_2988
+        JP status_show
 
-L_2904:
-        LD A,(VAR_4220)
+status_not_graph:
+        LD A,(COLOR_PENDING)
         OR A
-        JR z,L_2910
+        JR z,status_not_color
         LD HL,STR_COLOR
-        JP L_2988
+        JP status_show
 
-L_2910:
-        LD A,(FB_TMP)
+status_not_color:
+        LD A,(BGRND_PENDING)
         OR A
-        JR z,L_291c
+        JR z,status_not_bgrnd
         LD HL,STR_BGRND
-        JP L_2988
+        JP status_show
 
-L_291c:
-        LD A,(VAR_43CA)
+status_not_bgrnd:
+        LD A,(FUNC_PENDING)
         OR A
-        JR z,L_2928
+        JR z,status_not_func
         LD HL,STR_FUNC
-        JP L_2988
+        JP status_show
 
-L_2928:
+status_not_func:
         LD A,(EURO_STATE)
         OR A
-        JR z,L_2934
+        JR z,status_not_euro
         LD HL,STR_EURO
-        JP L_2988
+        JP status_show
 
-L_2934:
-        LD A,(VAR_43CF)
+status_not_euro:
+        LD A,(SPEED_PENDING)
         OR A
-        JP z,L_2941
+        JP z,status_not_speed
         LD HL,STR_SPEED
-        JP L_2988
+        JP status_show
 
-L_2941:
-        LD A,(VAR_4399)
+status_not_speed:
+        LD A,(MAGIC_MSG_CHAN)
         OR A
-        JP z,L_298e
+        JP z,status_shift_msg
         XOR A
-        LD (VAR_4399),A
+        LD (MAGIC_MSG_CHAN),A
         CALL init_render
         LD HL,(FB_COL)
         LD (FB_COLPTR),HL
@@ -6462,7 +6539,7 @@ L_2941:
         DEC HL
         DEC HL
 
-L_2965:
+magicmsg_digits:
         LD A,(HL)
         AND 15
         OR 0x30
@@ -6473,79 +6550,80 @@ L_2965:
         POP BC
         POP HL
         INC HL
-        DJNZ L_2965
-        JR L_298e
+        DJNZ magicmsg_digits
+        JR status_shift_msg
 
 ; ---- data 2979-2987:
 STR_MAGIC_MSG:
         db "    MAGIC MSG ",0x00
 
-L_2988:
+status_show:
         LD (MENU_TEXT_PTR),HL
         CALL menu_show_text
 
-L_298e:
-        LD A,(VAR_4241)
+status_shift_msg:
+        LD A,(SHIFT_LABEL)
         AND A
-        JR z,L_299d
+        JR z,status_menu_msg
         LD HL,(MENU_MSG_PTR)
         LD (MENU_TEXT_PTR),HL
         CALL menu_show_text
 
-L_299d:
+status_menu_msg:
         LD A,(MENU_MSG_FLAG)
         OR A
-        JR z,L_29ad
+        JR z,redraw_finish
         LD HL,(MENU_MSG_PTR)
         INC HL
         LD (MENU_TEXT_PTR),HL
         CALL menu_show_text
 
-L_29ad:
-        CALL sub_2a21
+redraw_finish:
+        CALL fb_rewind_window
         LD A,(MENU_MSG_FLAG)
         OR A
-        JR z,L_29d3
-        CALL sub_29d9
+        JR z,redraw_ret
+        CALL redraw_hold
         LD A,0
         LD (MENU_MSG_FLAG),A
         LD HL,(STORE_CURSOR)
         LD A,(HL)
         CP 0xd0
-        JP c,L_29d0
+        JP c,redraw_again
         CP 0xdb
-        JP nc,L_29d0
+        JP nc,redraw_again
         POP HL
-        JP L_2087
+        JP show_top_of_msg
 
-L_29d0:
+redraw_again:
         JP editor_redraw
 
-L_29d3:
+redraw_ret:
         LD A,0xff
-        LD (EFFECT_ACTIVE),A
+        LD (DISP_ON),A
         RET
 
-sub_29d9:
+; ---- redraw_hold: let one frame out, then hold 0x50 frames
+redraw_hold:
         LD A,0xff
-        LD (EFFECT_ACTIVE),A
+        LD (DISP_ON),A
 
-L_29de:
+hold_wait_row3:
         LD A,(ROW_INDEX)
         CP 3
-        JR nz,L_29de
+        JR nz,hold_wait_row3
 
-L_29e5:
+hold_wait_row2:
         LD A,(ROW_INDEX)
         CP 2
-        JR nz,L_29e5
+        JR nz,hold_wait_row2
         LD A,0x50
-        LD (VAR_4244),A
+        LD (FRAME_DELAY),A
 
-L_29f1:
-        LD A,(VAR_4244)
+hold_wait_frames:
+        LD A,(FRAME_DELAY)
         AND A
-        JR nz,L_29f1
+        JR nz,hold_wait_frames
         RET
 
 ; ---- menu_show_text: Render the NUL-terminated string at MENU_TEXT_PTR in tiny font
@@ -6558,25 +6636,26 @@ menu_show_text:
         LD A,0xff
         LD (TINY_MODE),A
 
-L_2a08:
+showtext_loop:
         LD A,(HL)
         INC HL
         OR A
-        JR z,L_2a18
+        JR z,showtext_done
         LD (CUR_CHAR),A
         PUSH HL
         CALL glyph_lookup
         POP HL
-        JP L_2a08
+        JP showtext_loop
 
-L_2a18:
+showtext_done:
         POP AF
         LD (CUR_CHAR),A
         POP AF
         LD (TINY_MODE),A
         RET
 
-sub_2a21:
+; ---- fb_rewind_window: FB_COL = FB_COLPTR - 86 (ring wrap)
+fb_rewind_window:
         LD HL,(FB_COLPTR)
         LD DE,0x56
         XOR A
@@ -6585,24 +6664,25 @@ sub_2a21:
         LD DE,FRAMEBUF
         XOR A
         SBC HL,DE
-        JP nc,L_2a3d
+        JP nc,rewind_ret
         LD DE,FB_COLPTR
         ADD HL,DE
         LD (FB_COL),HL
 
-L_2a3d:
+rewind_ret:
         RET
 
 ; ---- pkt_process_end
 pkt_process_end:
         JP RESET
 
-sub_2a41:
+; ---- word_to_hex4: HL -> 4 ASCII hex digits at (DE)
+word_to_hex4:
         PUSH DE
         LD B,2
         LD C,H
 
-L_2a45:
+hex_byte_loop:
         LD A,C
         SRL A
         SRL A
@@ -6617,7 +6697,7 @@ L_2a45:
         LD (DE),A
         INC DE
         LD C,L
-        DJNZ L_2a45
+        DJNZ hex_byte_loop
         POP DE
         RET
 
@@ -6643,13 +6723,13 @@ pkt_process:
         LD HL,(STORE_CURSOR)
         LD A,(HL)
         CP 0xd0
-        JP c,L_2a90
+        JP c,pkt_find_marker
         CP 0xdb
-        JP nc,L_2a90
+        JP nc,pkt_find_marker
         DEC HL
         LD (STORE_CURSOR),HL
 
-L_2a90:
+pkt_find_marker:
         PUSH HL
         LD DE,MSG_STORE
         OR A
@@ -6659,23 +6739,23 @@ L_2a90:
         POP HL
         DEC HL
 
-L_2a9b:
+pkt_marker_loop:
         LD A,(HL)
         CP 0xd0
-        JP c,L_2aa8
+        JP c,pkt_marker_back
         CP 0xdb
-        JP nc,L_2aa8
-        JR L_2ab1
+        JP nc,pkt_marker_back
+        JR pkt_set_ins
 
-L_2aa8:
+pkt_marker_back:
         DEC HL
         DEC BC
         LD A,C
         OR B
-        JR nz,L_2a9b
+        JR nz,pkt_marker_loop
         JP pkt_process_end
 
-L_2ab1:
+pkt_set_ins:
         LD (STORE_CURSOR),HL
         INC HL
         LD (INS_PTR),HL
@@ -6686,14 +6766,14 @@ L_2ab1:
         LD B,A
         LD HL,PKT_BUF
 
-L_2ac6:
+pkt_byte_loop:
         LD A,(HL)
         PUSH HL
         PUSH BC
         LD (CUR_CHAR),A
         CALL is_ignored_byte
         AND A
-        JP z,L_2b61
+        JP z,pkt_next
         CP 2
         JP z,cmd_02_speed
         CP 3
@@ -6723,15 +6803,15 @@ L_2ac6:
 pkt_insert_text:
         LD A,(CHAN_LOCK)
         OR A
-        JP nz,L_2b61
+        JP nz,pkt_next
         LD HL,(STORE_CURSOR)
         LD A,(HL)
         CP 3
-        JR nz,L_2b22
+        JR nz,pkt_ins_check_full
         DEC HL
         LD (STORE_CURSOR),HL
 
-L_2b22:
+pkt_ins_check_full:
         LD HL,(STORE_END)
         INC HL
         LD (STORE_TMP),HL
@@ -6740,7 +6820,7 @@ L_2b22:
         SBC HL,DE
         LD A,H
         OR L
-        JR z,L_2b61
+        JR z,pkt_next
         LD HL,(STORE_TMP)
         LD (STORE_END),HL
         CALL store_make_room
@@ -6761,12 +6841,12 @@ L_2b22:
         LD A,(CUR_CHAR)
         LD (HL),A
 
-L_2b61:
+pkt_next:
         POP BC
         POP HL
         INC HL
         DEC B
-        JP nz,L_2ac6
+        JP nz,pkt_byte_loop
 
 ; ---- pkt_process_done: clear PKT_READY/PKT_STATE, re-init and return to main loop
 pkt_process_done:
@@ -6775,7 +6855,7 @@ pkt_process_done:
         LD (PKT_READY),A
         LD (PKT_STATE),A
         LD (MENU_ACTIVE),A
-        LD (VAR_433B),A
+        LD (FORCE_BOLD),A
         LD HL,SEQ_LIST
         LD (SEQ_PTR),HL
         ; B2: cmd_17_set_time clears CLK_RUN before fetching its five argument
@@ -6783,16 +6863,17 @@ pkt_process_done:
         ; never restarts. Restoring it on the way out covers every early exit.
         LD A,0xff
         LD (CLK_RUN),A
-        CALL sub_2b84
-        JP L_000f
+        CALL shift_chain_clear
+        JP restart_display
 
-sub_2b84:
+; ---- shift_chain_clear: clock 85 zeros through port 40, strobe
+shift_chain_clear:
         LD B,0x55
         XOR A
 
-L_2b87:
+chainclr_loop:
         OUT (PORT_40_OUT),A
-        DJNZ L_2b87
+        DJNZ chainclr_loop
         OUT (PORT_STROBE),A
         RET
 
@@ -6800,13 +6881,13 @@ L_2b87:
 cmd_03_clear_all:
         CALL store_clear_all
         CALL store_finalize
-        JP L_2cba
+        JP select_chan_common
 
 ; ---- cmd_0E_delete_text: delete existing text of the selected channel (from INS_PTR to its 0x03 terminator)
 cmd_0E_delete_text:
         LD A,(CHAN_LOCK)
         OR A
-        JP nz,L_2b61
+        JP nz,pkt_next
         LD HL,(INS_PTR)
         DEC HL
         LD (STORE_CURSOR),HL
@@ -6824,7 +6905,7 @@ cmd_0E_delete_text:
         CPIR
         LD A,B
         OR C
-        JP z,L_2b61
+        JP z,pkt_next
         DEC HL
         LD (MOVE_SRC),HL
         LD DE,(STORE_LIMIT)
@@ -6838,7 +6919,7 @@ cmd_0E_delete_text:
         LD DE,(MOVE_DST)
         LDIR
         CALL store_finalize
-        JP L_2b61
+        JP pkt_next
 
 ; ---- cmd_B4_query: B4 n: '0' rom id, '1' memory, '2' nop, '3' dump
 ;      B1: the EI below plus the query -> tx_send_frame -> tx_send_byte ->
@@ -6847,7 +6928,7 @@ cmd_0E_delete_text:
 ;      Fixed by the relocated stack below; nothing here changes.
 cmd_B4_query:
         CALL clear_framebuf
-        CALL sub_2b84
+        CALL shift_chain_clear
         EI
         CALL pkt_next_byte
         CP 0x30
@@ -6855,16 +6936,16 @@ cmd_B4_query:
         CP 0x31
         CALL z,query_1_memory
         CP 0x32
-        CALL z,sub_17ef
+        CALL z,query_2_nop
         CP 0x33
         CALL z,query_3_dump
 
-L_2bf9:
+query_wait_tx:
         LD A,(TX_STATUS)
         AND 3
-        JR nz,L_2bf9
+        JR nz,query_wait_tx
         DI
-        JP z,L_2b61
+        JP z,pkt_next
 
 ; ---- cmd_1E_colour_A0: 1E n -> insert 0xA0|(n&15)
 cmd_1E_colour_A0:
@@ -6909,25 +6990,25 @@ cmd_17_set_time:
         LD HL,CLK_H10
         LD B,4
 
-L_2c3c:
+settime_digits:
         CALL pkt_next_byte
         LD (CUR_CHAR),A
         AND 15
         LD (HL),A
         INC HL
-        DJNZ L_2c3c
+        DJNZ settime_digits
         CALL pkt_next_byte
         AND 0x5f
         CP 0x59
         LD A,0xff
-        JR nz,L_2c54
+        JR nz,settime_store_pm
         XOR A
 
-L_2c54:
+settime_store_pm:
         LD (CLK_PM),A
         LD A,0xff
         LD (CLK_RUN),A
-        JP L_2b61
+        JP pkt_next
 
 ; ---- pkt_next_byte: Fetch next payload byte (A); if none left, jump to pkt_process_done
 pkt_next_byte:
@@ -6955,24 +7036,24 @@ cmd_02_speed:
 cmd_B3_append:
         LD HL,(STORE_CURSOR)
 
-L_2c83:
+append_find_end:
         LD A,(HL)
         CP 3
-        JR z,L_2c8b
+        JR z,append_seat
         INC HL
-        JR L_2c83
+        JR append_find_end
 
-L_2c8b:
+append_seat:
         DEC HL
         LD (STORE_CURSOR),HL
         LD A,(HL)
         CP 0xd0
-        JP c,L_2b61
+        JP c,pkt_next
         CP 0xdb
-        JP nc,L_2b61
+        JP nc,pkt_next
         DEC HL
         LD (STORE_CURSOR),HL
-        JP L_2b61
+        JP pkt_next
 
 ; ---- cmd_09_channel: 09 d d: select channel (2 ASCII digits, 0-99) ; channel 100 sets CHAN_LOCK
 cmd_09_channel:
@@ -6987,7 +7068,7 @@ cmd_09_channel:
         CALL ascii_dec_to_bin
         LD E,A
 
-L_2cba:
+select_chan_common:
         PUSH DE
         CALL chan_select
         POP DE
@@ -6996,15 +7077,15 @@ L_2cba:
         DEC HL
         LD (STORE_CURSOR),HL
         PUSH DE
-        CALL chan_find
+        CALL clear_chan_lock
         POP DE
         LD A,E
         CP 0x64
-        JR nz,L_2cd4
+        JR nz,select_chan_done
         LD (CHAN_LOCK),A
 
-L_2cd4:
-        JP L_2b61
+select_chan_done:
+        JP pkt_next
 
 ; ---- cmd_04_sequence: 04 dd dd ... [D|d]: rebuild SEQ_LIST from 2-digit channel numbers
 cmd_04_sequence:
@@ -7012,11 +7093,11 @@ cmd_04_sequence:
         LD A,0
         LD B,0x64
 
-L_2cde:
+seq_default_fill:
         LD (HL),A
         INC HL
         INC A
-        DJNZ L_2cde
+        DJNZ seq_default_fill
         LD (HL),0xff
         INC HL
         LD (HL),0xff
@@ -7028,29 +7109,29 @@ L_2cde:
         LD (SEQ_PTR),HL
         LD B,0x67
 
-L_2cf6:
+seq_pair_loop:
         CALL pkt_next_byte
         CP 0x44
-        JR z,L_2d3e
+        JR z,seq_pair_demo
         CP 0x64
-        JR z,L_2d3e
+        JR z,seq_pair_demo
         LD (CUR_CHAR),A
         CP 0x3a
-        JP nc,L_2b61
+        JP nc,pkt_next
         CP 0x30
-        JP c,L_2b61
+        JP c,pkt_next
         AND 15
         LD (CHAN_D10),A
         CALL pkt_next_byte
         CP 0x44
-        JR z,L_2d3e
+        JR z,seq_pair_demo
         CP 0x64
-        JR z,L_2d3e
+        JR z,seq_pair_demo
         LD (CUR_CHAR),A
         CP 0x3a
-        JP nc,L_2b61
+        JP nc,pkt_next
         CP 0x30
-        JP c,L_2b61
+        JP c,pkt_next
         AND 15
         LD (CHAN_D1),A
         PUSH BC
@@ -7060,18 +7141,18 @@ L_2cf6:
         CALL ascii_dec_to_bin
         POP HL
         POP BC
-        JR L_2d40
+        JR seq_pair_store
 
-L_2d3e:
+seq_pair_demo:
         LD A,0x64
 
-L_2d40:
+seq_pair_store:
         LD (HL),A
         INC HL
         LD A,0xff
         LD (HL),A
-        DJNZ L_2cf6
-        JP L_2b61
+        DJNZ seq_pair_loop
+        JP pkt_next
 
 ; ---- is_ignored_byte: Z (A=0) if A is in IGNORE_TABLE: 00 01 05 08 0A 0B 0C 1C 1D 7F
 is_ignored_byte:
@@ -7589,7 +7670,7 @@ FONT:
         db 0x30,0x48,0x4c,0x4a,0x30,0x00,0x00,0x05           ; glyph 190 width 5
 
 ; ---- CHAR_FLAGS: 256 bytes, indexed by character code. Bit 0 is tested by
-;      sub_04e5 (substitutes 0x3F for the character), bit 1 by the message
+;      store_fix_bad_bytes (substitutes 0x3F for the character), bit 1 by the message
 ;      scanners to decide whether a byte is printable text. Rendered as part
 ;      of FONT by the original disassembly, but it is not glyph data - FONT
 ;      holds glyphs 0..190 and this table begins immediately after.
@@ -7707,7 +7788,7 @@ DEMO_MESSAGE:
         db ". CUSTOM GRAPHICS ",0xa2,0xa3,0xa5,0xaa,0xab,"..... OR YOUR OWN LOGO..... "
         db 0xbe,"TINY PRICE          ",0x10,"LARGE  IMPACT!!",0x03,0xdb
 
-; ---- TEST_MESSAGE: built-in test pattern (L_22b5). Sits inside the demo
+; ---- TEST_MESSAGE: built-in test pattern (test_mode_enter). Sits inside the demo
 ;      text block but is a separate message with its own 0x03 terminator.
 TEST_MESSAGE:
         db "CURRENT TEST  "

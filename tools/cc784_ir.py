@@ -37,24 +37,25 @@ RELEASE = 0x3E
 
 # Key index -> (unshifted, shifted) as the firmware's charsets resolve them
 # (IR_KEY_TABLE -> glyph index -> CHARSET_UPPER / CHARSET_UPPER2). Control values are
-# the editor/message control bytes; labels in <> are best-effort names.
+# the editor/message control bytes; labels in <> are the remote's key legends
+# (confirmed by the owner) or the sign's own attribute names.
 KEYS = {
      0: ('T', 'T'),          1: ('C', 'C'),          2: ('Z', 'Z'),          3: ('%', "'"),
      4: ('W', 'W'),          5: ('<DEL 7F>', '<DEL 7F>'), 6: (')', '&'),      7: ('Y', 'Y'),
      8: ('P', 'P'),          9: ('R', 'R'),         10: ('7', '7'),         11: ('4', '4'),
-    12: ('3', '3'),         13: ('<0A>', '<0C>'),   14: ('1', '1'),         15: ('U', 'U'),
+    12: ('3', '3'),         13: ('<RIGHT 0A>', '<RIGHT-8 0C>'),   14: ('1', '1'),         15: ('U', 'U'),
     16: ('S', 'S'),         17: ('H', 'H'),         18: ('+', '-'),         19: ('*', '#'),
-    20: ('9', '9'),         21: ('<1C>', '<B6>'),   22: ('(', '$'),         23: ('X', 'X'),
+    20: ('9', '9'),         21: ('<UPPER/LOWER 1C>', '<EUROPE B6>'),   22: ('(', '$'),         23: ('X', 'X'),
     24: ('Q', 'Q'),         25: ('M', 'M'),         26: ('8', '8'),         27: ('5', '5'),
     28: ('6', '6'),         29: ('<SHIFT>', '<SHIFT>'), 30: ('2', '2'),      31: ('V', 'V'),
-    32: ('J', 'J'),         33: ('O', 'O'),         34: ('<15>', '<16>'),   35: ('<BEEP 07>', '<WIPE-BACK 0F>'),
-    36: ('<STOP/START 0D>', '<B7>'), 37: ('<SPACE>', '<SPACE>'), 38: ('B', 'B'),  39: ('E', 'E'),
-    40: ('F', 'F'),         41: ('K', 'K'),         42: ('<1E>', '_'),      43: ('<NORMAL 11>', '<17>'),
-    44: ('<CLEAR 0E>', '<CLEAR-ALL 03>'), 45: ('<BS 08>', '<0B>'), 46: ('<BOLD 12>', '<CRAWL 18>'), 47: ('A', 'A'),
+    32: ('J', 'J'),         33: ('O', 'O'),         34: ('<COLOR 15>', '<BGRND 16>'),   35: ('<BEEP 07>', '<WIPE-BACK 0F>'),
+    36: ('<STOP/START 0D>', '<FUNC B7>'), 37: ('<SPACE>', '<SPACE>'), 38: ('B', 'B'),  39: ('E', 'E'),
+    40: ('F', 'F'),         41: ('K', 'K'),         42: ('<GRAPH 1E>', '<TIME 5F>'),      43: ('<NORMAL 11>', '<ADJ-TIME 17>'),
+    44: ('<CLEAR 0E>', '<CLEAR-ALL 03>'), 45: ('<LEFT 08>', '<LEFT-8 0B>'), 46: ('<BOLD 12>', '<CRAWL 18>'), 47: ('A', 'A'),
     48: ('I', 'I'),         49: ('N', 'N'),         50: ('<JUMP 19>', '<JUMP 19>'), 51: ('<WIPE-UP 1A>', '<WIPE-DOWN 1B>'),
-    52: ('<09>', '<02>'),   53: ('.', ':'),         54: ('<MAGIC 1F>', '<RESTART BD>'), 55: ('D', 'D'),
+    52: ('<PROG 09>', '<SPEED 02>'),   53: ('.', ':'),         54: ('<MAGIC 1F>', '<RESTART BD>'), 55: ('D', 'D'),
     56: ('G', 'G'),         57: ('L', 'L'),         58: ('<FLASH 14>', '<FLASH 14>'), 59: ('<LARGE 10>', '<ITALIC 13>'),
-    60: ('<04>', '<BB>'),   61: ('0', '0'),
+    60: ('<SEQ 04>', '<HOLD BB>'),   61: ('0', '0'),
 }
 # Special handling in the firmware:
 #   36 (STOP/START): in display mode stops the display and enters the editor/menu; never auto-repeats

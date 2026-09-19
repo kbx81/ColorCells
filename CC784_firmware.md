@@ -30,7 +30,7 @@ hardware; **[M]** structure understood, details inferred; **[L]** hypothesis.
 | `4040–4197` | `FRAMEBUF` — 4 × 86 bytes |
 | `4198–41A1` | frame-buffer pointers/temps |
 | `41A2–41F7` | `TXBUF` — reply frame buffer (len byte + up to 0x55 data) |
-| `41F8–43E1` | variables (see `equ` block in the source; `VAR_xxxx` names are honest placeholders for locations whose purpose is not yet established, not abbreviations) |
+| `41F8–43E1` | variables (see the `equ` block in the source; every referenced location is now named from its use, and the handful the firmware writes but never reads are marked "never read" in their comments) |
 | `43CB/43CC` | `MY_ADDRESS` / its complement (RAM-validity check at boot) |
 | `43E2–5EF0` | `MSG_STORE` — message store (see §6); `STORE_LIMIT` at `43D8` |
 | `5EF0` | `PKT_READY` flag |
@@ -51,12 +51,12 @@ glyph pointers and was never referenced), `MENU_STRINGS 2FF3`, `FONT 3135`
 
 `CHAR_FLAGS` (`372D`, 256 bytes indexed by character code) was rendered as 32
 further `FONT` glyphs by the original disassembly, but it is a flags table: bit
-0 is tested by `sub_04e5`, bit 1 by the message scanners to decide whether a
+0 is tested by `store_fix_bad_bytes`, bit 1 by the message scanners to decide whether a
 byte is printable text. `TEST_MESSAGE` is a built-in test pattern ("CURRENT
 TEST" plus seven `17` bytes) sitting inside the demo text with its own `03`.
 
 `INIT_DATA` is four RAM images copied out by `init_vars` — to `FB_COLPTR`
-(10 bytes), `EFFECT_TMP` (8), `CLK_RUN` (90) and `4336` (36) — so every byte
+(10 bytes), `STAGE_PTR` (8), `CLK_RUN` (90) and `4336` (36) — so every byte
 maps to a known variable; the source is annotated accordingly. Offsets
 `+12..+17` and `+72` are copied nowhere and are dead. Six entries hold **ROM
 addresses as data** (`RX_TIMING` ×2, `rx_st_wait_start` ×2, `TX_TIMING` ×2):
@@ -83,11 +83,25 @@ serial engine with no build error. Note the two `RX_TIMING` copies land at
   step; loop. The rendering engine (`render_next_char`, `attr_dispatch`, `fx_*`)
   runs here. Note the `PKT_READY` test runs **once, on entry** — the inner loop
   at `00A7` never falls back to `009A`. Re-entry is via `fx_end_of_channel`
-  (`0F5E`, end of a display cycle) or `JP RESET`/`L_000F`. The `JR nz` at `00B0`
-  tests `effect_step`'s flags, not `RENDER_DONE`: `LD A,(nn)` sets no flags.
+  (`0F5E`, end of a display cycle) or `JP RESET`/`restart_display`. The `JR nz` at `00B0`
+  tests `effect_step`'s flags, not `MAGIC_MODE`: `LD A,(nn)` sets no flags.
 
 Timing: one display row refresh is an `OTIR` of 86 bytes (~1,900 T). Serial
 bit = 4.33 tick6 = 3.33 ms.
+
+**Row refresh cadence [H]:** a row takes three tick6 periods. The 86 bytes are
+written twice with identical data, first to port `40+row` and then to
+`48+row` (`ROW_PORT` selects the group; `ROW_OUT_PENDING` marks the row as
+still owed), and the third tick advances `ROW_INDEX`. 21 ticks per frame gives
+a **62 Hz frame rate**. In plain LEFT crawl `SCROLL_SPEED` (0–7, from
+`F0`–`F7`) adds that many *blanked* ticks after each frame via `BLANK_TIMER`,
+which is the entire speed mechanism; effects and the editor skip it. Each row
+is preceded by one colour byte (`ROW_COLOUR`) on the same port, and bit 5 of
+the port address is set while `BEEP_TICKS` is non-zero, so the beeper is an
+I/O decode, not a latch bit. `CTRL_LATCH` bit 7 (`LATCH_BIT7`) is toggled by
+the firmware every 13 frames (≈210 ms, a 2.4 Hz square wave): **it is the
+FLASH blink clock** [H — a build with 7 instead of 13 blinked at ~5 Hz on the
+sign]. The patched source exposes the count as `FLASH_HALF_PERIOD`.
 
 ## 3. Serial link [H]
 
@@ -238,7 +252,7 @@ artwork as a string of hex values and paints it **column by column**.
 **The model name is the geometry:** the panel is **7 rows × 84 columns** —
 CC**784**. The firmware carries 86 bytes per row, not 84 (`FRAMEBUF` is
 4 × 86 = 344, the `0x0158` constant; one row refresh is an `OTIR` of 86), and
-`sub_2B84` clocks 85 zeros to flush the LS164 chain. So there are one or two
+`shift_chain_clear` clocks 85 zeros to flush the LS164 chain. So there are one or two
 positions of slack beyond the visible 84.
 
 ### Behaviour [M]
@@ -257,6 +271,52 @@ that layer is active (`2928`). They are *not* graphics: built-in graphics are
 the `1E` GRAPH attribute and user-drawn ones the `B8` DRAW attribute.
 Movement effects are state machines in `fx_*` driven from `main_loop` via
 `EFFECT_VECTOR`.
+
+### Engine internals [H — traced; not yet all seen on hardware]
+
+- **Fetch/render pipeline.** `fetch_char` reads one store byte into
+  `CUR_CHAR`; `render_next_char` runs the attribute checks (`attr_*_check`),
+  then `glyph_lookup` → `glyph_bold`/`glyph_italic`/`glyph_big` build the
+  styled glyph in `GLYPH_BUF*` and `glyph_blit` writes a colour byte plus the
+  columns into the 344-byte `FRAMEBUF` ring at `FB_COLPTR`. The panel is fed
+  from the output window `FB_OUT_PTR`/`FB_OUT_LEN` (+`FB_EXTRA_LEN` after the
+  wrap); `SCROLLING` is set until the window has caught up with `FB_COLPTR`,
+  one column per frame, and `effect_step` waits for that.
+- **Effects stage through `TXBUF`.** With any `EFFECT_ID` other than 0 (LEFT),
+  glyphs are staged into `TXBUF` via `STAGE_PTR` instead of the frame buffer.
+  When the stage fills (`COL_COUNT` reaches 0) or a movement attribute
+  arrives, the handler in `EFFECT_VECTOR` moves the staged frame onto the
+  panel: `fxv_pause` (19) copies it at once and holds `FRAME_DELAY` = 0x50
+  frames (~1.3 s); `fxv_right` (0F) copies one column per frame left to right;
+  `fxv_hold` (BB) blanks and copies right to left; `fxv_wipe_updown` (1A/1B)
+  makes eight passes through a growing row mask. The text is centred by
+  `STAGE_OFFSET` = free columns / 2. `FLUSH_PENDING` defers an attribute until
+  the stage has been shown. `06` HALT is `fx_halt`: hold 0x50 frames with every
+  frame-buffer colour byte reset to `8F` by `fb_colours_default`.
+- **FLASH is per word.** `14` sets `FLASH_PENDING`; the next printable byte
+  moves it into `FLASH_BIT` (0x10), which is OR-ed into the colour bytes until
+  the next space. Two spaces in a row clear the background colour bits.
+- **MAGIC mode** (`MAGIC_MODE`, 1F…BD) is `magic_preprocess`: each word gets a
+  random font (words of six or more letters stay NORM), the colour changes
+  every 2–5 words or at `. ! ? : ,`, walking `MAGIC_COLOUR_CYCLE` while
+  skipping the too-similar pairs in `MAGIC_CLASH_PAIRS`; spaces are 9 columns
+  wide (`WIDE_SPACE_GLYPH`); a word starting with `$` flashes; text is pushed
+  off (`scroll_off_text`) before each movement attribute.
+- **RAINBOW** (`BC`) cycles red, orange, yellow, lime, green per character
+  (`RAINBOW_COLOURS`, `RAINBOW_IDX`) until a colour attribute.
+- **DRAW** (`B8`): hex digit pairs are packed by `RRD` into `DRAW_BUF`, up to
+  16 columns, ended by the first non-hex byte (a `03` there is pushed back).
+  Consecutive DRAW items butt together with no gap column (`DRAW_NO_GAP`).
+- **Glyphs `00`–`0F` are 14-column pairs:** `glyph_lookup` doubles their width
+  so the second glyph slot is read as the right half.
+- **The clock** (`5F`) is `render_clock`: it re-enters `glyph_lookup` once per
+  character for `H:MM AM/PM` (leading zero suppressed) using
+  `CLK_RENDER_STEP`/`CLK_RENDER_PTR`, and afterwards forces a LEFT crawl
+  (`CLK_RENDERED`).
+- **`BE` TINY** renders into `FRAMEBUF_TINY` with `TINY_FRAME_READY`
+  handshaking the copy to the panel, and ends at the first attribute byte.
+- **`1D` SHIFT** is only a key: as a message byte it is ignored by
+  `attr_dispatch` and dropped from packets by `IGNORE_TABLE`.
 
 ## 8. IR remote decoder (`ir_*`, `1482–1571`) [H — verified against a capture of the sign's own receiver]
 
@@ -302,6 +362,43 @@ driven from a terminal. `editor_key_to_attr` (`2675`) maps function keys
 latch upper nibble and the input mux; it is reached only through the IR
 handler path (`IR_CODE` A4/A5) and no keypad is fitted on this unit
 (earlier models had a wired keypad on a 10-pin IDC header).
+
+### Editor keys [H — from `editor_dispatch`; remote labels from the owner]
+
+| Byte | Remote key | Action |
+|---|---|---|
+| `08` / `0A` | ← / → | cursor left / right one byte |
+| `0B` / `0C` | SHIFT ← / SHIFT → | cursor left / right eight |
+| `7F` | DEL | delete the byte under the cursor |
+| `0E` / `03` | CLEAR / SHIFT CLEAR | clear the message / CLR ALL Y/N |
+| `0D` (and `B1`) | STOP/START | leave the editor, resume display |
+| `B7` | SHIFT STOP/START = **FUNC** | next key picks a second function (below) |
+| `1C` / `B6` | UPPER/LOWER / SHIFT = **EUROPE** | `CAPS_LOCK` / `EURO_STATE` |
+| `1D` / `9F` | SHIFT (shows SHIFT) | `9F` is the shift-off code, ignored |
+| `15` / `16` | COLOR / SHIFT = **BGRND** | then a digit |
+| `09` / `02` | PROG / SHIFT = **SPEED** | PROG MSG? / speed digit |
+| `04` / `BB` | SEQ / SHIFT = **HOLD** | SEQ MSG? / insert HOLD |
+| `1E` / `5F` | GRAPH / SHIFT = **TIME** | digit → `A0–AF` / insert the clock |
+| `11` / `17` | NORMAL / SHIFT = **ADJ TIME** | NORM / TIME? HHMM, AM? Y/N |
+| `05` / `B3` | *(no key)* | to top / end of message — serial only |
+| `5E` | *(FUNC + MAGIC)* | ADDRESS? |
+| other | | insert into the message |
+
+`B7` FUNC gives each function key a second meaning (`editor_key_to_attr`):
+GRAPH → `B8` DRAW, NORM → `B9` THIN, PAUSE → `BA` WAIT, FLASH → `B0` REM,
+BOLD → `06` HALT, COLOR → `BC` RAINBOW, BIG → `BE` TINY, MAGIC → ADDRESS?
+menu, Q → `?`, X → `!`. The editor shows FUNC/COLOR/BGRND/GRAPH/SPEED/EURO
+while a prefix is pending (`*_PENDING`). MAGIC as the *first* key after
+entering the editor (or on the demo channel) is `magic_new_message`: it takes
+the first empty channel (asking "FULL!! MSG# ?" if none), makes it the whole
+sequence and announces "MAGIC MSG nn". Leaving the editor adds the edited
+channel to `SEQ_LIST` if it is not there and shows it first (`NEXT_CHAN`),
+unless the sequence was set by hand (`SEQ_SET`).
+
+**Test mode:** in SEQ MSG?, MAGIC then `C` copies `TEST_MESSAGE` to
+`TEST_MSG_BUF`, appends the 16-bit sum of ROM `0000–3FFF` as four hex digits
+and displays that instead of the sequence (`TEST_MODE`) until the next key —
+a factory ROM-checksum check.
 
 ### Key layers [H]
 
@@ -421,14 +518,14 @@ other difference is drift and should be reconciled.
    `fx_end_of_channel` `0F5E`, `menu_enter` `19CA`, `key_handler` `1A0D`,
    `1CEE`, `pkt_process` `2A70`, `pkt_process_done` `2B68`. Worst-case demand
    is ~120 bytes (query chain ~40 + `tick6_service`/`rx_consume` ~40 + INT and
-   NMI frames), so 256 is comfortable. `ir_init`'s four store constants all
+   NMI frames), so 256 is comfortable. `store_init`'s four store constants all
    shift down by `0x100` together (`STORE_TOP` `5DEF`, warn `5D8B`,
-   `STORE_SIZE` `1A0E`, free-text bound `18E1`); the `0xDA` store terminator
-   had to move out of line (`patch_store_term`) because it is no longer one
-   byte below the `5EF0–5FFF` page that `ir_init` zeroes.
-2. **Restore the clock** (fixes B2). `pkt_process_done`'s `CALL sub_2b84`
-   becomes `CALL patch_clk_restore`, which sets `CLK_RUN=FF` and tail-jumps to
-   `sub_2b84`. This covers every early exit, not just `cmd_17`'s.
+   `STORE_SIZE` `1A0E`, free-text bound `18E1`); `store_init` now writes the
+   `0xDA` store terminator through `STORE_LIMIT` before zeroing the
+   `5EF0–5FFF` page, because the terminator no longer sits one byte below it.
+2. **Restore the clock** (fixes B2). `pkt_process_done` sets `CLK_RUN=FF`
+   inline, just before its `CALL shift_chain_clear`. This covers every early
+   exit, not just `cmd_17`'s.
    `cmd_17_set_time` itself cannot be fixed in place: `pkt_next_byte` reads the
    caller's stack frame (`POP IX/DE/IY`), so no helper can be interposed.
 3. **Fix the cursor store** (fixes B6). `32` → `22` at `2B1F`.
@@ -442,14 +539,14 @@ other difference is drift and should be reconciled.
 ### Rejected
 
 - **Always defer processing** (proposed for B3) — *regression*. `main_loop`
-  tests `PKT_READY` only on entry at `009A`; the `L_00A7` render loop never
+  tests `PKT_READY` only on entry at `009A`; the `render_loop` render loop never
   falls back to it. Re-entry happens only via `fx_end_of_channel` (`0F5E`) or
   the `BA` wait-for-key spin (`0A49`), so a deferred packet waits for the
   current channel to finish — potentially many seconds after its ACK, during
   which `02DD` refuses every further `B1`. Immediate mode is what makes NETCC
   responsive. B3 stands as documented, but patch 1 removes its only known
   trigger: `pkt_process` resets SP on entry and `pkt_process_done` resets it
-  again before jumping to `L_000F`, so the abandoned interrupt frame is
+  again before jumping to `restart_display`, so the abandoned interrupt frame is
   harmless as long as the stack is large enough.
 - **Send ACK after processing** (proposed for B4) — *regression*. Zero-length
   frames are ACKed in `pkt_st_cksum` but never set `PKT_READY`, so they would
@@ -482,6 +579,12 @@ other difference is drift and should be reconciled.
   discovering the packet ended. That corruption is inherent to the command,
   not to the patch — a following full `17` puts it right.
 
+### Verified on hardware, 2026-09-19
+
+- **FLASH blink clock** — `LATCH_BIT7`'s toggle count changed from 13 to 7
+  and FLASH text blinked visibly faster, about 5 Hz against the stock ~2.4 Hz.
+  Closes hardware question H3 for Q7. Restored to 13 as `FLASH_HALF_PERIOD`.
+
 ## 12. Rebuilding
 
 ```
@@ -501,8 +604,17 @@ instead — see `CC784_hardware.md` §2 and `AT28C256.md`.
 
 ## 13. What is still unknown in the firmware
 
-- Exact *behaviour* of `BB` (HOLD), `BD` (MAGIC OFF), `B9` (THIN) and `1D`
-  (SHIFT). Named from `ATTR_LABEL_TABLE` (§7), but named is not traced.
+- `BB`/`BD`/`B9`/`1D` are now traced (§7 engine internals) but not yet seen
+  on hardware; nor is the "3 ticks per row, two port groups" refresh (hardware
+  H11 — the panel's alternating red/green columns are the likely reason).
+- `8F` is **YELLOW** [H — owner], the default text colour. `fx_halt` and WAIT
+  reset every frame-buffer colour byte to it and effects force the row lead
+  colour to it, so HALT/WAIT should turn the held text yellow. Not yet
+  watched for on the sign.
+- A bare `03` packet leaves `chan_select` fed with a garbage channel (A is
+  `store_finalize`'s leftover `B|C`) and the error return unchecked, so the
+  cursor lands near channel 99's marker. NETCC always follows `03` with
+  `09 dd 0E`, which re-seats it, so this is a trap only for hand-built packets.
 - Background codes `94–9F`. `COLOUR_NAME_TABLE` shows only four distinct
   background names (B-BLK, B-RED, B-YEL, B-GRE) repeated four times across the
   16 slots, so `94–9F` may simply alias `90–93`. Untested on hardware.

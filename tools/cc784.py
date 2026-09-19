@@ -294,7 +294,7 @@ def run(link, a, ap):
         # keystroke path, not the B1 parser, so there is no address, no
         # checksum and no ACK. 0x01 is caught at 0x02F1 (CP 1 -> key_handler)
         # and drops the sign into the editor; 0x0D is the STOP/START key's
-        # own character (CP 13 -> L_1C5C in the editor dispatch) and resumes
+        # own character (CP 13 -> editor_exit in the editor dispatch) and resumes
         # the display. 0x0D only does anything if the sign is already stopped.
         #
         # While stopped, rx_consume returns immediately on MENU_ACTIVE, so the

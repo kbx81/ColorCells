@@ -115,10 +115,16 @@ would probably work through the 220 Ω but is unverified.
 - Frame buffer 4 × 86 bytes; 7 physical rows (TR1–TR7 via LS145; latch low
   nibble = row, `0F` = no row = blank).
 - Row refresh: `OTIR` 86 bytes to `48+row`, strobe on `80`. Port `40` clocks
-  the LS164 column shift chain; 85 zero-writes clear it (`sub_2B84`).
-- Colour: two LED dies per pixel (red/green) with 2-bit intensity each
-  (16 foreground codes), consistent with the 4 planes in the buffer being PWM
-  planes. Exact plane→intensity mapping not traced.
+  the LS164 column shift chain; 85 zero-writes clear it (`shift_chain_clear`).
+- Colour [H — from the owner]: the panel is **alternating columns of red and
+  green LEDs**, not two dies per pixel. Stationary text is visibly striped
+  red/green; moving text blends in the eye, which is why everything scrolls.
+  The 16 foreground codes are 2-bit red and green intensities (orange = full
+  red, dim green), so some intensity control exists on the panel side; not
+  traced. The frame buffer is a 344-byte ring of single columns, not planes.
+  Each row's 86 bytes are written twice, to `40+row` then `48+row` (firmware
+  notes §2); with a red/green column layout, A3 plausibly selects which
+  colour's columns take the data [L].
 
 ## 6. Connectors
 
@@ -166,7 +172,13 @@ Identified so far:
   pin 14 (Q10).
 - **H3. Control-latch bit map.** Follow the `8000` LS273's Q0–Q7: expect
   Q0–Q3 → LS145 (rows), Q4 → LS244 pin 2 (TX), Q4–Q6 → LS151 select lines.
-  **Q7 is unassigned in the firmware analysis** — beeper drive? brightness?
+  **Q7 is driven by the firmware**: `LATCH_BIT7` is toggled every 13 frames
+  (≈210 ms, a 2.4 Hz square wave) and OR-ed into every latch write. **It is
+  the FLASH blink clock** [H — verified 2026-09-19: with the compare changed
+  from 13 to 7 (`FLASH_HALF_PERIOD` in the patched source) the sign blinked
+  at about 5 Hz]; colour-byte bit 4 marks the columns that follow it. The beeper is
+  *not* a latch bit: it is port-address bit 5 (`OUT (68+row)` while
+  `BEEP_TICKS` runs).
 - **H4. Input mux map.** LS151 inputs (U7/U8): which carry IR (bit 1), RX
   (bit 3), keypad columns, and whether DB9 pins 1/4/7 reach the mux at all.
 - **H5. SK2 pins 10–12** and any remaining pins; what's on the panel side
@@ -185,7 +197,10 @@ Identified so far:
 - **H10. Background colour codes `94–9F`** and effects `BB/BD/BE`: send with
   `cc784.py msg 0 "@{9a}TEST"` etc. and record what appears.
 - **H11. `OUT (40)`** electrical role confirmation (LS164 clock) — one probe
-  during a `clearall`.
+  during a `clearall`. Note the refresh writes every row's 86 bytes **twice**,
+  first to `40+row` and then to `48+row` (firmware notes §2), so A3 selects
+  something on the panel side — given the alternating red/green columns (§5),
+  most likely which colour's shift chain takes the data.
 
 ## 10. Verified-on-hardware summary
 
