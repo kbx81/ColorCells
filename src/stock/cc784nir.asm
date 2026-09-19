@@ -123,6 +123,75 @@ PORT_ROW0            equ 0x48
 PORT_STROBE          equ 0x80
 PORT_IN              equ 0xc0
 
+; ---- RAM locations the reconstruction never named. Those with a real
+;      name below are the ones whose purpose is established; VAR_xxxx is
+;      an honest placeholder, not an abbreviation - rename as they are
+;      traced. Listed so no bare hex address is left in the code.
+MENU_MSG_PTR         equ 0x420a   ; message the editor is showing (set with MENU_MSG_FLAG)
+VAR_420F             equ 0x420f
+VAR_4213             equ 0x4213
+VAR_4214             equ 0x4214
+VAR_421B             equ 0x421b
+VAR_421D             equ 0x421d
+VAR_421E             equ 0x421e
+VAR_421F             equ 0x421f
+VAR_4220             equ 0x4220
+VAR_4221             equ 0x4221
+MENU_MSG_FLAG        equ 0x4224   ; FF = editor has a message to display
+VAR_4226             equ 0x4226
+VAR_4227             equ 0x4227
+VAR_4229             equ 0x4229
+VAR_4236             equ 0x4236
+VAR_4241             equ 0x4241
+VAR_4242             equ 0x4242
+VAR_4243             equ 0x4243
+VAR_4244             equ 0x4244
+VAR_424C             equ 0x424c
+VAR_425A             equ 0x425a
+VAR_425E             equ 0x425e
+VAR_4260             equ 0x4260
+VAR_42D6             equ 0x42d6
+VAR_42F6             equ 0x42f6
+VAR_4316             equ 0x4316
+VAR_4336             equ 0x4336
+SHIFT_STATE          equ 0x4337   ; SHIFT latch, toggled by key 29 (see section 9)
+VAR_4338             equ 0x4338
+VAR_433B             equ 0x433b
+VAR_4344             equ 0x4344
+VAR_4358             equ 0x4358
+VAR_435A             equ 0x435a
+VAR_4360             equ 0x4360
+VAR_4361             equ 0x4361
+VAR_4362             equ 0x4362
+VAR_4363             equ 0x4363
+VAR_4364             equ 0x4364
+VAR_4365             equ 0x4365
+VAR_4377             equ 0x4377
+VAR_4381             equ 0x4381
+VAR_4387             equ 0x4387
+VAR_438C             equ 0x438c
+VAR_438F             equ 0x438f
+VAR_4390             equ 0x4390
+VAR_4391             equ 0x4391
+VAR_4392             equ 0x4392
+VAR_4395             equ 0x4395
+VAR_4399             equ 0x4399
+VAR_439A             equ 0x439a
+VAR_439B             equ 0x439b
+VAR_43A2             equ 0x43a2
+VAR_43A3             equ 0x43a3
+VAR_43A4             equ 0x43a4
+VAR_43A5             equ 0x43a5
+VAR_43CA             equ 0x43ca
+VAR_43CD             equ 0x43cd
+VAR_43CF             equ 0x43cf
+VAR_43D2             equ 0x43d2
+VAR_43D4             equ 0x43d4
+VAR_43D6             equ 0x43d6
+KEY_ECHO_TX          equ 0x43d7   ; non-zero = echo accepted keys on serial TX
+VAR_43DC             equ 0x43dc
+VAR_43DE             equ 0x43de
+
         org 0x0000
 
 ; ---- RESET: cold start: set SP, run init routines, EI, jump to main loop
@@ -359,7 +428,7 @@ L_018e:
 
 L_01a5:
         LD C,A
-        LD A,(0x421f)
+        LD A,(VAR_421F)
         OR C
         AND 0x8f
         LD C,A
@@ -393,13 +462,13 @@ L_01ce:
         JP c,L_0303
         LD A,0
         LD (ROW_INDEX),A
-        LD A,(0x43cd)
+        LD A,(VAR_43CD)
         LD (BLANK_TIMER),A
-        LD A,(0x4244)
+        LD A,(VAR_4244)
         AND A
         JR z,L_01f3
         DEC A
-        LD (0x4244),A
+        LD (VAR_4244),A
         JP L_0281
 
 L_01f3:
@@ -440,12 +509,12 @@ L_0237:
         BIT 7,(HL)
         JR z,L_0242
         LD A,(HL)
-        LD (0x421b),A
+        LD (VAR_421B),A
 
 L_0242:
         LD A,(PAUSE_FLAG)
         AND A
-        LD A,(0x421b)
+        LD A,(VAR_421B)
         JR z,L_024f
         AND 0x10
         OR 0x8f
@@ -476,23 +545,23 @@ L_027e:
         LD (FB_EXTRA_LEN),HL
 
 L_0281:
-        LD A,(0x421d)
+        LD A,(VAR_421D)
         INC A
-        LD (0x421d),A
+        LD (VAR_421D),A
         CP 13
         JR nz,L_02a1
         XOR A
-        LD (0x421d),A
-        LD A,(0x421f)
+        LD (VAR_421D),A
+        LD A,(VAR_421F)
         AND A
         JR z,L_029c
         XOR A
-        LD (0x421f),A
+        LD (VAR_421F),A
         JR L_02a1
 
 L_029c:
         LD A,0x80
-        LD (0x421f),A
+        LD (VAR_421F),A
 
 L_02a1:
         NOP
@@ -633,7 +702,7 @@ L_0366:
 
 ; ---- init_display_state
 init_display_state:
-        LD A,(0x420f)
+        LD A,(VAR_420F)
         INC A
         JP z,L_0410
         LD A,(MENU_FLAG)
@@ -732,14 +801,14 @@ L_03f8:
         JP L_03ae
 
 L_0410:
-        LD HL,0x43a5
+        LD HL,VAR_43A5
         LD (STORE_CURSOR),HL
         CALL chan_find
         RET
 
 ; ---- chan_find: Locate channel marker (D0+n) in MSG_STORE
 chan_find:
-        LD HL,0x4260
+        LD HL,VAR_4260
         LD B,11
         LD A,0
 
@@ -817,7 +886,7 @@ init_vars2:
         LD A,0xd0
         LD D,0xd0
         LD E,A
-        LD BC,(0x43dc)
+        LD BC,(VAR_43DC)
 
 L_0485:
         LD (HL),E
@@ -902,7 +971,7 @@ L_04dc:
 sub_04e5:
         LD HL,MSG_STORE
         LD BC,(STORE_SIZE)
-        LD IY,0x4363
+        LD IY,VAR_4363
         LD (IY+0),0
         LD D,0
 
@@ -942,7 +1011,7 @@ L_051d:
         RET
 
 sub_0524:
-        LD IX,0x43e4
+        LD IX,MSG_STORE+2
         LD BC,(STORE_SIZE)
         DEC BC
         DEC BC
@@ -986,25 +1055,25 @@ L_055f:
         LD (HL),A
         INC HL
         DJNZ L_055f
-        LD (0x439b),A
-        LD (0x4360),A
-        LD (0x4364),A
-        LD (0x4213),A
-        LD (0x4361),A
-        LD (0x43a2),A
+        LD (VAR_439B),A
+        LD (VAR_4360),A
+        LD (VAR_4364),A
+        LD (VAR_4213),A
+        LD (VAR_4361),A
+        LD (VAR_43A2),A
         LD (MENU_TMP2),A
         LD (MENU_TMP),A
-        LD (0x43a4),A
-        LD (0x439a),A
-        LD (0x4399),A
-        LD (0x4395),A
-        LD (0x4391),A
-        LD (0x43a3),A
-        LD (0x43d6),A
-        LD (0x43d7),A
-        LD (0x43cf),A
-        LD (0x43ca),A
-        LD (0x43cd),A
+        LD (VAR_43A4),A
+        LD (VAR_439A),A
+        LD (VAR_4399),A
+        LD (VAR_4395),A
+        LD (VAR_4391),A
+        LD (VAR_43A3),A
+        LD (VAR_43D6),A
+        LD (KEY_ECHO_TX),A
+        LD (VAR_43CF),A
+        LD (VAR_43CA),A
+        LD (VAR_43CD),A
         LD (BLANK_TIMER),A
         LD (TICK6_COUNT),A
         LD A,0xff
@@ -1042,8 +1111,8 @@ L_05cc:
         LD DE,CLK_RUN
         LD BC,0x5a
         LDIR
-        LD HL,INIT_DATA+0x73             ; -> 0x4336..
-        LD DE,0x4336
+        LD HL,INIT_DATA+0x73             ; -> VAR_4336..
+        LD DE,VAR_4336
         LD BC,0x24
         LDIR
         IM 1
@@ -1068,8 +1137,8 @@ INIT_DATA:
 init_render:
         CALL clear_framebuf
         XOR A
-        LD (0x439b),A
-        LD (0x4360),A
+        LD (VAR_439B),A
+        LD (VAR_4360),A
         LD (TINY_RENDER),A
         LD (ROW_PHASE),A
         LD A,0xff
@@ -1082,29 +1151,29 @@ init_render:
         LD HL,0x56
         LD (DISP_FLAGS),HL
         LD A,1
-        LD (0x438c),A
+        LD (VAR_438C),A
         XOR A
         LD (RENDER_DONE),A
         LD (EFFECT_PHASE),A
-        LD (0x4213),A
+        LD (VAR_4213),A
         LD (RENDER_DONE),A
-        LD (0x421e),A
+        LD (VAR_421E),A
         LD (MENU_TMP),A
-        LD (0x439a),A
+        LD (VAR_439A),A
         LD (MENU_TMP2),A
         LD (RND_VAL),A
         LD (PAUSE_FLAG),A
-        LD (0x4244),A
-        LD (0x43a2),A
-        LD (0x43a3),A
-        LD (0x43a4),A
-        LD (0x43cd),A
-        LD (0x433b),A
+        LD (VAR_4244),A
+        LD (VAR_43A2),A
+        LD (VAR_43A3),A
+        LD (VAR_43A4),A
+        LD (VAR_43CD),A
+        LD (VAR_433B),A
         LD (TINY_MODE),A
         LD (FONT_MODE),A
-        LD (0x43d6),A
+        LD (VAR_43D6),A
         LD A,0x8f
-        LD (0x421b),A
+        LD (VAR_421B),A
         LD (ROW_DATA_LATCH),A
         LD (CUR_COLOUR),A
         LD HL,fx_none
@@ -1124,7 +1193,7 @@ sub_072a:
         CP 0x20
         JR z,L_0757
         XOR A
-        LD (0x4338),A
+        LD (VAR_4338),A
         LD A,(CUR_CHAR)
         LD D,0
         LD E,A
@@ -1133,27 +1202,27 @@ sub_072a:
         BIT 1,(HL)
         JR nz,L_0776
         LD A,0xff
-        LD (0x43a3),A
-        LD A,(0x43a2)
+        LD (VAR_43A3),A
+        LD A,(VAR_43A2)
         AND A
         JR z,L_0776
-        LD (0x421e),A
+        LD (VAR_421E),A
         XOR A
-        LD (0x43a2),A
+        LD (VAR_43A2),A
         JR L_0776
 
 L_0757:
         XOR A
-        LD (0x421e),A
-        LD A,(0x4338)
+        LD (VAR_421E),A
+        LD A,(VAR_4338)
         AND A
         JR nz,L_0768
         LD A,1
-        LD (0x4338),A
+        LD (VAR_4338),A
         JR L_0776
 
 L_0768:
-        LD A,(0x420f)
+        LD A,(VAR_420F)
         INC A
         JR z,L_0776
         LD A,(CUR_COLOUR)
@@ -1240,13 +1309,13 @@ glyph_lookup:
         CALL draw_glyph
         CALL sub_0de3
         CALL sub_0d97
-        LD A,(0x4213)
+        LD A,(VAR_4213)
         CP 0xff
         JR nz,L_0826
         XOR A
-        LD (0x4213),A
+        LD (VAR_4213),A
         LD A,0xff
-        LD (0x4361),A
+        LD (VAR_4361),A
 
 L_0826:
         LD A,(CUR_CHAR)
@@ -1261,9 +1330,9 @@ L_0826:
         LD A,(GLYPH_WIDTH)
         LD C,A
         LD B,0
-        LD DE,0x42d6
+        LD DE,VAR_42D6
         LDIR
-        LD HL,0x42d6
+        LD HL,VAR_42D6
         LD (GLYPH_PTR),HL
 
 L_084d:
@@ -1286,7 +1355,7 @@ L_085c:
 
 L_0869:
         LD A,0
-        LD (0x438c),A
+        LD (VAR_438C),A
 
 sub_086e:
         LD A,(RENDER_DONE)
@@ -1316,16 +1385,16 @@ L_0887:
         JR nz,L_08b7
 
 L_08a5:
-        LD A,(0x4391)
+        LD A,(VAR_4391)
         AND A
         JR z,L_08b3
         XOR A
-        LD (0x4391),A
+        LD (VAR_4391),A
         LD A,0x10
         JR L_08b6
 
 L_08b3:
-        LD A,(0x421e)
+        LD A,(VAR_421E)
 
 L_08b6:
         LD C,A
@@ -1345,11 +1414,11 @@ L_08c3:
         OR C
         SET 7,A
         LD (HL),A
-        LD A,(0x439b)
+        LD A,(VAR_439B)
         AND A
         CALL z,sub_0e16
         XOR A
-        LD (0x439b),A
+        LD (VAR_439B),A
 
 L_08d7:
         LD A,(DE)
@@ -1383,13 +1452,13 @@ L_08fc:
         SBC HL,DE
         JP nc,L_0efc
         LD DE,(EFFECT_TMP)
-        LD A,(0x421e)
+        LD A,(VAR_421E)
         OR 0x8f
         LD (DE),A
-        LD A,(0x439b)
+        LD A,(VAR_439B)
         AND A
         LD A,0
-        LD (0x439b),A
+        LD (VAR_439B),A
         JR nz,L_0925
         INC DE
 
@@ -1441,7 +1510,7 @@ sub_0968:
         LD A,(PAUSE_FLAG)
         AND A
         JR z,L_097d
-        LD A,(0x4361)
+        LD A,(VAR_4361)
         AND A
         JR z,L_097d
         LD A,0x18
@@ -1455,7 +1524,7 @@ L_097e:
         LD (STORE_CURSOR),HL
         LD (CUR_CHAR),A
         XOR A
-        LD (0x4361),A
+        LD (VAR_4361),A
         POP AF
         POP HL
         RET
@@ -1479,13 +1548,13 @@ sub_0996:
 
 L_09a9:
         LD A,1
-        LD (0x43a4),A
+        LD (VAR_43A4),A
         LD (MENU_TMP),A
         POP HL
         JP render_next_char
 
 L_09b5:
-        LD A,(0x43a4)
+        LD A,(VAR_43A4)
         AND A
         LD A,(CUR_CHAR)
         RET z
@@ -1497,7 +1566,7 @@ L_09b5:
         ADD IX,DE
         BIT 1,(IX+0)
         RET nz
-        LD A,(0x43a4)
+        LD A,(VAR_43A4)
         INC A
         AND 7
         JR nz,L_09d8
@@ -1518,7 +1587,7 @@ L_09e9:
         AND 15
         LD (CUR_COLOUR),A
         LD A,E
-        LD (0x43a4),A
+        LD (VAR_43A4),A
         LD A,(CUR_CHAR)
         RET
 
@@ -1586,7 +1655,7 @@ sub_0a53:
         LD A,(CUR_CHAR)
         CP 0xb9
         RET nz
-        LD (0x43d6),A
+        LD (VAR_43D6),A
         POP HL
         JP render_next_char
 
@@ -1598,16 +1667,16 @@ attr_graphic:
         CP 0xb8
         JR z,L_0a70
         LD A,0
-        LD (0x4360),A
+        LD (VAR_4360),A
         LD A,(CUR_CHAR)
         RET
 
 L_0a70:
-        LD A,(0x4360)
-        LD (0x439b),A
+        LD A,(VAR_4360)
+        LD (VAR_439B),A
         LD A,0xff
-        LD (0x4360),A
-        LD HL,0x4365
+        LD (VAR_4360),A
+        LD HL,VAR_4365
         PUSH HL
         PUSH HL
         LD B,0x10
@@ -1648,7 +1717,7 @@ L_0ab3:
         AND A
         JP nz,L_0ac9
         XOR A
-        LD (0x439b),A
+        LD (VAR_439B),A
         LD A,0x20
         LD (CUR_CHAR),A
         RET
@@ -1720,7 +1789,7 @@ L_0b2e:
         LD A,(CUR_CHAR)
         CP 0x20
         JR nz,L_0b62
-        LD HL,0x4395
+        LD HL,VAR_4395
         INC (HL)
         LD A,2
         LD (FONT_MODE),A
@@ -1753,12 +1822,12 @@ L_0b72:
         XOR A
         LD (MENU_TMP2),A
         LD (MENU_TMP),A
-        LD A,(0x4390)
+        LD A,(VAR_4390)
         AND A
         RET nz
         LD A,0xff
-        LD (0x4390),A
-        LD A,(0x43a3)
+        LD (VAR_4390),A
+        LD A,(VAR_43A3)
         AND A
         RET z
         LD A,(CUR_CHAR)
@@ -1787,7 +1856,7 @@ L_0b8e:
 
 L_0bb7:
         XOR A
-        LD (0x4390),A
+        LD (VAR_4390),A
         LD A,(CUR_CHAR)
         CP 0xb8
         JP z,L_0bd4
@@ -1812,7 +1881,7 @@ L_0be4:
         LD (MENU_CHAR),A
         CP 0x24
         JR nz,L_0bf1
-        LD (0x4391),A
+        LD (VAR_4391),A
 
 L_0bf1:
         AND 0xf0
@@ -1862,7 +1931,7 @@ L_0c3e:
         LD (FONT_MODE),A
 
 L_0c42:
-        LD A,(0x4395)
+        LD A,(VAR_4395)
         CP 3
         JP nc,L_0c73
         LD A,(RND_VAL)
@@ -1897,8 +1966,8 @@ L_0c73:
 
 L_0c83:
         XOR A
-        LD (0x43a4),A
-        LD A,(0x4362)
+        LD (VAR_43A4),A
+        LD A,(VAR_4362)
         INC A
         LD E,A
         LD A,(NMI_COUNT)
@@ -1906,7 +1975,7 @@ L_0c83:
 
 L_0c90:
         AND 15
-        LD (0x4362),A
+        LD (VAR_4362),A
         LD E,A
         LD D,0
         LD HL,0x0cda
@@ -1931,7 +2000,7 @@ L_0c90:
         LD (CUR_COLOUR),A
 
 L_0cc0:
-        LD A,(0x4362)
+        LD A,(VAR_4362)
         INC A
         JR L_0c90
 
@@ -1944,7 +2013,7 @@ L_0cc6:
 
 L_0ccf:
         XOR A
-        LD (0x4395),A
+        LD (VAR_4395),A
 
 L_0cd3:
         RET
@@ -1969,13 +2038,13 @@ L_0cfc:
 
 ; ---- draw_glyph: Copy the glyph columns into FRAMEBUF at the current column
 draw_glyph:
-        LD A,(0x433b)
+        LD A,(VAR_433B)
         AND A
         JR nz,L_0d36
         LD A,(PAUSE_FLAG)
         AND A
         JR z,L_0d2f
-        LD A,(0x43d6)
+        LD A,(VAR_43D6)
         AND A
         JR z,L_0d36
         LD A,(FONT_MODE)
@@ -1987,9 +2056,9 @@ draw_glyph:
         INC A
         LD (GLYPH_WIDTH),A
         LD HL,(GLYPH_PTR)
-        LD DE,0x42d6
+        LD DE,VAR_42D6
         LDIR
-        LD HL,0x42d6
+        LD HL,VAR_42D6
         LD (GLYPH_PTR),HL
         RET
 
@@ -2002,7 +2071,7 @@ L_0d36:
         LD A,(GLYPH_WIDTH)
         LD B,A
         LD HL,(GLYPH_PTR)
-        LD DE,0x42d6
+        LD DE,VAR_42D6
         LD C,0
 
 L_0d42:
@@ -2032,9 +2101,9 @@ L_0d4c:
 
 L_0d5b:
         LD (GLYPH_WIDTH),A
-        LD HL,0x42d6
+        LD HL,VAR_42D6
         LD (GLYPH_PTR),HL
-        LD IX,0x42d6
+        LD IX,VAR_42D6
         LD B,4
 
 L_0d6a:
@@ -2075,13 +2144,13 @@ sub_0d97:
         LD HL,(GLYPH_PTR)
         LD A,(GLYPH_WIDTH)
         LD C,A
-        LD DE,0x42f6
+        LD DE,VAR_42F6
         LD B,0
         LDIR
         LD B,A
         LD E,B
         LD D,0
-        LD HL,0x42f6
+        LD HL,VAR_42F6
         ADD HL,DE
         PUSH HL
         POP IX
@@ -2106,7 +2175,7 @@ L_0db7:
         INC A
         INC A
         LD (GLYPH_WIDTH),A
-        LD HL,0x42f6
+        LD HL,VAR_42F6
         LD (GLYPH_PTR),HL
 
 L_0de2:
@@ -2119,7 +2188,7 @@ sub_0de3:
         LD A,(GLYPH_WIDTH)
         LD B,A
         LD HL,(GLYPH_PTR)
-        LD DE,0x4316
+        LD DE,VAR_4316
         LD C,0
 
 L_0df6:
@@ -2146,7 +2215,7 @@ L_0e00:
         LD A,C
         DEC A
         LD (GLYPH_WIDTH),A
-        LD HL,0x4316
+        LD HL,VAR_4316
         LD (GLYPH_PTR),HL
 
 L_0e15:
@@ -2197,7 +2266,7 @@ L_0e41:
 
 ; ---- effect_step: Called from main loop: jump to EFFECT_VECTOR (current movement effect handler)
 effect_step:
-        LD A,(0x4244)
+        LD A,(VAR_4244)
         AND A
         JR nz,effect_step
 
@@ -2230,7 +2299,7 @@ L_0e6e:
         CP 0xba
         JR nz,L_0e7a
         XOR A
-        LD (0x4244),A
+        LD (VAR_4244),A
 
 L_0e7a:
         LD A,(PAUSE_FLAG)
@@ -2243,13 +2312,13 @@ L_0e7a:
         LD (CUR_COLOUR),A
 
 L_0e8b:
-        LD A,(0x4242)
+        LD A,(VAR_4242)
         CPL
         AND A
-        LD (0x4242),A
+        LD (VAR_4242),A
         JR z,L_0e9b
         XOR A
-        LD (0x4242),A
+        LD (VAR_4242),A
         LD A,0x56
 
 L_0e9b:
@@ -2267,7 +2336,7 @@ attr_dispatch:
         CP 0x11
         JP nz,L_0eba
         XOR A
-        LD (0x421e),A
+        LD (VAR_421E),A
         LD (FONT_MODE),A
         JP L_0ee1
 
@@ -2287,7 +2356,7 @@ L_0ece:
         CP 0x14
         JP nz,L_0edb
         LD A,0x10
-        LD (0x43a2),A
+        LD (VAR_43A2),A
         JP render_next_char
 
 L_0edb:
@@ -2310,7 +2379,7 @@ L_0ef1:
         AND A
         JR z,L_0f0f
         LD A,0xff
-        LD (0x4242),A
+        LD (VAR_4242),A
 
 L_0efc:
         LD HL,(EFFECT_TMP)
@@ -2426,24 +2495,24 @@ fx_wipe_down:
 ; ---- set_effect_vector: HL -> EFFECT_VECTOR, A -> effect id
 set_effect_vector:
         LD (PAUSE_FLAG),A
-        LD (0x438c),A
+        LD (VAR_438C),A
         LD (EFFECT_VECTOR),HL
         JP render_next_char
 
 ; ---- fx_magic
 fx_magic:
         XOR A
-        LD (0x43a2),A
+        LD (VAR_43A2),A
         LD (MENU_TMP),A
         LD (MENU_TMP2),A
-        LD (0x43a4),A
-        LD (0x4390),A
+        LD (VAR_43A4),A
+        LD (VAR_4390),A
         LD A,0xff
         LD (RENDER_DONE),A
         LD A,0x20
         LD (MENU_CHAR),A
         LD A,1
-        LD (0x4395),A
+        LD (VAR_4395),A
         LD A,(NMI_COUNT)
         LD E,A
         AND 3
@@ -2459,10 +2528,10 @@ sub_0ffc:
         LD A,(PAUSE_FLAG)
         AND A
         RET nz
-        LD A,(0x4362)
+        LD A,(VAR_4362)
         INC A
         AND 15
-        LD (0x4362),A
+        LD (VAR_4362),A
         LD E,A
         LD D,0
         LD HL,0x0cda
@@ -2492,13 +2561,13 @@ fx_pause:
         JR nz,L_1042
 
 L_103c:
-        LD A,(0x4244)
+        LD A,(VAR_4244)
         AND A
         JR nz,L_103c
 
 L_1042:
         LD A,0x50
-        LD (0x4244),A
+        LD (VAR_4244),A
         CALL sub_1062
         LD HL,(STORE_CURSOR)
         LD A,(HL)
@@ -2529,10 +2598,10 @@ L_1072:
         LD A,C
         OR B
         JR nz,L_1068
-        LD A,(0x421b)
+        LD A,(VAR_421B)
         AND 0x10
         OR 0x8f
-        LD (0x421b),A
+        LD (VAR_421B),A
         LD (ROW_DATA_LATCH),A
         LD E,A
         LD A,(RENDER_DONE)
@@ -2560,7 +2629,7 @@ attr_colour_speed:
 ; ---- attr_fore_colour
 attr_fore_colour:
         XOR A
-        LD (0x43a4),A
+        LD (VAR_43A4),A
         LD A,(RENDER_DONE)
         AND A
         JR z,L_10c2
@@ -2591,7 +2660,7 @@ attr_back_colour:
 
 L_10e7:
         XOR A
-        LD (0x43a4),A
+        LD (VAR_43A4),A
         LD HL,0
         LD DE,0x20
         LD A,(CUR_CHAR)
@@ -2617,7 +2686,7 @@ L_10fc:
 attr_speed:
         LD A,(CUR_CHAR)
         AND 7
-        LD (0x43cd),A
+        LD (VAR_43CD),A
         JP render_next_char
 
 ; ---- attr_tiny: 0xBE: switch to tiny (28-char) font mode and render
@@ -2737,7 +2806,7 @@ L_11c7:
         POP HL
 
 sub_11ea:
-        LD DE,0x40ec
+        LD DE,FRAMEBUF_TINY+1
         LD B,0
         LD A,(GLYPH_WIDTH)
         LD C,A
@@ -2757,7 +2826,7 @@ sub_11fe:
         INC A
 
 L_1202:
-        LD HL,0x4041
+        LD HL,FRAMEBUF+1
         LD DE,FRAMEBUF
         LD BC,0xbc
         LDIR
@@ -2770,7 +2839,7 @@ L_1202:
 
 sub_1216:
         LD HL,FRAMEBUF
-        LD DE,0x410a
+        LD DE,FRAMEBUF_TINY+31
         LD BC,0x56
         LD A,(ROW_PHASE)
         AND A
@@ -2821,7 +2890,7 @@ L_125f:
 
 ; ---- disp_blank_row: Send 0x8F (all off) to the current row
 disp_blank_row:
-        LD HL,0x410a
+        LD HL,FRAMEBUF_TINY+31
         LD B,0x56
         LD C,0x48
         LD A,(ROW_INDEX)
@@ -2844,7 +2913,7 @@ disp_blank_row:
 
 L_1296:
         LD C,A
-        LD A,(0x421f)
+        LD A,(VAR_421F)
         OR C
         AND 0x8f
         LD C,A
@@ -2909,15 +2978,15 @@ L_12fe:
         LD A,0xff
         LD (EFFECT_ACTIVE),A
         LD A,1
-        LD (0x4244),A
+        LD (VAR_4244),A
 
 L_1313:
-        LD A,(0x4244)
+        LD A,(VAR_4244)
         AND A
         JR nz,L_1313
         DJNZ L_12fe
         LD A,0x50
-        LD (0x4244),A
+        LD (VAR_4244),A
         XOR A
         LD (EFFECT_PHASE),A
         JP L_0e6e
@@ -2963,15 +3032,15 @@ L_134b:
         LD A,0xff
         LD (EFFECT_ACTIVE),A
         LD A,1
-        LD (0x4244),A
+        LD (VAR_4244),A
 
 L_1360:
-        LD A,(0x4244)
+        LD A,(VAR_4244)
         AND A
         JR nz,L_1360
         DJNZ L_134b
         LD A,0x50
-        LD (0x4244),A
+        LD (VAR_4244),A
         XOR A
         LD (EFFECT_PHASE),A
         JP L_0e6e
@@ -2984,7 +3053,7 @@ fx_scroll_copy:
         LD C,A
         LDIR
         LD A,0x50
-        LD (0x4244),A
+        LD (VAR_4244),A
         XOR A
         LD (EFFECT_PHASE),A
         JP L_0e6e
@@ -3038,10 +3107,10 @@ L_13bf:
         LD A,0xff
         LD (EFFECT_ACTIVE),A
         LD A,3
-        LD (0x4244),A
+        LD (VAR_4244),A
 
 L_13ce:
-        LD A,(0x4244)
+        LD A,(VAR_4244)
         AND A
         JR nz,L_13ce
         POP BC
@@ -3063,7 +3132,7 @@ L_13e6:
         DEC A
         JR nz,L_13a4
         LD A,0x50
-        LD (0x4244),A
+        LD (VAR_4244),A
         XOR A
         LD (EFFECT_PHASE),A
         JP L_0e6e
@@ -3119,9 +3188,9 @@ ir_init:
         LD (STORE_LIMIT),HL
         LD (STORE_END),HL
         LD HL,0x5e8b
-        LD (0x43de),HL
+        LD (VAR_43DE),HL
         LD HL,0x19e1
-        LD (0x43dc),HL
+        LD (VAR_43DC),HL
         LD HL,0x1b0e
         LD (STORE_SIZE),HL
         LD HL,0x5eef
@@ -3139,10 +3208,10 @@ L_144d:
         LD HL,rx_st_wait_start
         LD (RX_STATE),HL
         LD HL,rx_st_wait_start
-        LD (0x425e),HL
+        LD (VAR_425E),HL
         XOR A
         LD (RX_TICKS),A
-        LD (0x424c),A
+        LD (VAR_424C),A
         RET
         db 0xaa,"U"
 
@@ -3150,12 +3219,12 @@ L_144d:
 ir_init2:
         PUSH AF
         XOR A
-        LD (0x4377),A
+        LD (VAR_4377),A
         LD (IR_CODE),A
-        LD (0x4387),A
+        LD (VAR_4387),A
         LD (IR_KEY),A
         LD (GEN_COUNTDOWN),A
-        LD (0x4381),A
+        LD (VAR_4381),A
         LD (TICK1_COUNT),A
 
 ; ---- ir_reset: IR decoder: reset state, wait for leader (port C0 bit1)
@@ -3534,7 +3603,7 @@ rx_fifo_get:
         LD (RX_BYTE),A
         LD A,(RX_COUNT)
         LD BC,8
-        LD HL,0x424e
+        LD HL,RX_FIFO+1
         LD DE,RX_FIFO
         LDIR
         DEC A
@@ -4036,7 +4105,7 @@ L_19b3:
 clear_glyph_tmp:
         PUSH HL
         PUSH BC
-        LD HL,0x42d6
+        LD HL,VAR_42D6
         LD B,0x60
 
 L_19c2:
@@ -4056,16 +4125,16 @@ menu_enter:
         CALL init_render
         XOR A
         LD (RX_BYTE),A
-        LD (0x4229),A
-        LD (0x4226),A
-        LD (0x4227),A
+        LD (VAR_4229),A
+        LD (VAR_4226),A
+        LD (VAR_4227),A
         LD (BEEP_TIMER),A
         LD (RX_LASTCMD),A
-        LD (0x43d7),A
+        LD (KEY_ECHO_TX),A
         CALL menu_getchar
         PUSH AF
         LD A,0
-        LD (0x43d7),A
+        LD (KEY_ECHO_TX),A
         POP AF
         LD HL,MY_ADDRESS
         CP (HL)
@@ -4077,9 +4146,9 @@ menu_enter:
 ; ---- key_handler: Handle a key / IR code: menu navigation (ADDRESS?, TIME?, PROG MSG?, SEQ MSG? ...)
 key_handler:
         LD A,0xff
-        LD (0x4358),A
+        LD (VAR_4358),A
         LD A,1
-        LD (0x43d7),A
+        LD (KEY_ECHO_TX),A
 
 L_1a0d:
         LD SP,0x403f
@@ -4113,16 +4182,16 @@ L_1a40:
         CALL ir_init2
         XOR A
         LD (RX_BYTE),A
-        LD (0x4229),A
-        LD (0x4226),A
-        LD (0x4227),A
+        LD (VAR_4229),A
+        LD (VAR_4226),A
+        LD (VAR_4227),A
         LD (BEEP_TIMER),A
-        LD (0x435a),A
-        LD A,(0x420f)
+        LD (VAR_435A),A
+        LD A,(VAR_420F)
         INC A
         JR nz,L_1a69
         XOR A
-        LD (0x420f),A
+        LD (VAR_420F),A
         CALL chan_select
         LD (STORE_CURSOR),HL
         CALL chan_find
@@ -4182,15 +4251,15 @@ L_1ab0:
         LD (INS_PTR),HL
         CALL store_finalize
         XOR A
-        LD (0x43cf),A
-        LD (0x43ca),A
-        LD (0x4221),A
-        LD (0x4220),A
+        LD (VAR_43CF),A
+        LD (VAR_43CA),A
+        LD (VAR_4221),A
+        LD (VAR_4220),A
         LD (FB_TMP),A
-        LD (0x4241),A
-        LD (0x4224),A
+        LD (VAR_4241),A
+        LD (MENU_MSG_FLAG),A
         LD A,0xff
-        LD (0x4392),A
+        LD (VAR_4392),A
 
 ; ---- editor_loop: Editor main loop: get key, dispatch
 editor_loop:
@@ -4204,23 +4273,23 @@ L_1ad5:
         CP 0x1d
         LD A,0
         JR z,L_1af0
-        LD (0x4220),A
+        LD (VAR_4220),A
         LD (FB_TMP),A
-        LD (0x43ca),A
+        LD (VAR_43CA),A
 
 L_1af0:
-        LD (0x4241),A
-        LD A,(0x4243)
+        LD (VAR_4241),A
+        LD A,(VAR_4243)
         OR A
         JP nz,L_220d
-        LD A,(0x4336)
+        LD A,(VAR_4336)
         BIT 7,A
         JP nz,L_223a
         LD A,(RX_LASTCMD)
         CP 0x1f
         CALL z,sub_1b91
         XOR A
-        LD (0x4392),A
+        LD (VAR_4392),A
         LD A,(RX_LASTCMD)
         CP 1
         JP z,L_1ad5
@@ -4278,7 +4347,7 @@ sub_1b91:
         LD A,(CHAN_LOCK)
         OR A
         JP nz,L_1b9d
-        LD A,(0x4392)
+        LD A,(VAR_4392)
         AND A
         RET z
 
@@ -4335,7 +4404,7 @@ L_1be7:
         JP nc,L_1be7
 
 L_1bf2:
-        LD (0x438f),A
+        LD (VAR_438F),A
         CALL chan_select
         AND A
         JP nz,pkt_process_end
@@ -4345,7 +4414,7 @@ L_1bf2:
         CALL sub_20f8
         LD A,0x1f
         LD (RX_LASTCMD),A
-        LD A,(0x438f)
+        LD A,(VAR_438F)
         LD E,A
         JP L_1c1a
 
@@ -4375,7 +4444,7 @@ L_1c2e:
         INC HL
         DJNZ L_1c2e
         LD A,E
-        LD (0x4399),A
+        LD (VAR_4399),A
         RET
 
 ; ---- store_finalize: Fix up MSG_STORE terminators after an edit
@@ -4394,16 +4463,16 @@ store_finalize:
 
 L_1c4e:
         LD A,0xff
-        LD (0x4224),A
+        LD (MENU_MSG_FLAG),A
         LD HL,MENU_STR_INVALID
-        LD (0x420a),HL
+        LD (MENU_MSG_PTR),HL
         JP editor_loop
 
 L_1c5c:
         XOR A
-        LD (0x4336),A
-        LD (0x4243),A
-        LD A,(0x43d7)
+        LD (VAR_4336),A
+        LD (VAR_4243),A
+        LD A,(KEY_ECHO_TX)
         AND A
         JR z,L_1c6f
         CALL tx_send_byte
@@ -4440,7 +4509,7 @@ L_1c89:
 L_1c9f:
         LD A,0xff
         LD (MENU_FLAG),A
-        LD A,(0x435a)
+        LD A,(VAR_435A)
         AND A
         JP nz,L_1cee
         LD HL,(INS_PTR)
@@ -4472,9 +4541,9 @@ L_1cc9:
 
 L_1cd5:
         LD A,E
-        LD HL,0x42d1
+        LD HL,SEQ_LIST+102
         LD (HL),0xff
-        LD DE,0x42d2
+        LD DE,SEQ_LIST+103
         LD BC,0x67
         LDDR
 
@@ -4491,7 +4560,7 @@ L_1cee:
         LD SP,0x403f
         XOR A
         LD (MENU_ACTIVE),A
-        LD (0x433b),A
+        LD (VAR_433B),A
         LD HL,SEQ_LIST
         LD (SEQ_PTR),HL
         JP L_000f
@@ -4541,10 +4610,10 @@ L_1d1e:
 
 L_1d50:
         LD A,0x50
-        LD (0x4244),A
+        LD (VAR_4244),A
 
 L_1d55:
-        LD A,(0x4244)
+        LD A,(VAR_4244)
         AND A
         JR nz,L_1d55
         CALL init_render
@@ -4586,25 +4655,25 @@ L_1d90:
         RES 2,(HL)
 
 L_1da2:
-        LD A,(0x4213)
-        LD HL,(0x4214)
+        LD A,(VAR_4213)
+        LD HL,(VAR_4214)
         AND A
         JR nz,L_1dc2
         LD HL,CLK_H10
         LD A,(HL)
         AND A
-        LD A,(0x4213)
+        LD A,(VAR_4213)
         JR nz,L_1dc2
-        LD A,(0x4213)
+        LD A,(VAR_4213)
         INC A
-        LD (0x4213),A
+        LD (VAR_4213),A
         INC HL
-        LD (0x4214),HL
+        LD (VAR_4214),HL
         JR L_1d90
 
 L_1dc2:
         INC A
-        LD (0x4213),A
+        LD (VAR_4213),A
         CP 3
         JR nz,L_1dd2
         LD A,0x3a
@@ -4644,8 +4713,8 @@ L_1dfd:
         OR 0x30
         LD (CUR_CHAR),A
         INC HL
-        LD A,(0x4213)
-        LD (0x4214),HL
+        LD A,(VAR_4213)
+        LD (VAR_4214),HL
 
 L_1e0c:
         CALL sub_0cea
@@ -4656,7 +4725,7 @@ L_1e0c:
 
 L_1e1a:
         LD A,0xff
-        LD (0x4213),A
+        LD (VAR_4213),A
         LD A,(CUR_CHAR)
         JP glyph_lookup
 
@@ -4667,7 +4736,7 @@ sub_1e25:
         PUSH HL
         PUSH IX
         PUSH IY
-        LD (0x43d4),HL
+        LD (VAR_43D4),HL
         JR L_1e40
 
 sub_1e32:
@@ -4677,7 +4746,7 @@ sub_1e32:
         PUSH HL
         PUSH IX
         PUSH IY
-        LD (0x43d4),HL
+        LD (VAR_43D4),HL
         JP L_1f14
 
 L_1e40:
@@ -4713,7 +4782,7 @@ L_1e65:
         CALL init_render
         LD HL,(FB_COL)
         LD (FB_COLPTR),HL
-        LD HL,(0x43d4)
+        LD HL,(VAR_43D4)
         LD (MENU_TEXT_PTR),HL
         CALL menu_show_text
         LD B,2
@@ -4786,14 +4855,14 @@ L_1eeb:
         CALL ascii_dec_to_bin
 
 L_1f05:
-        LD (0x43d2),A
+        LD (VAR_43D2),A
         POP IY
         POP IX
         POP HL
         POP DE
         POP BC
         POP AF
-        LD A,(0x43d2)
+        LD A,(VAR_43D2)
         RET
 
 L_1f14:
@@ -4992,9 +5061,9 @@ L_2033:
 ; ---- menu_addr_invalid
 menu_addr_invalid:
         LD A,0xff
-        LD (0x4224),A
+        LD (MENU_MSG_FLAG),A
         LD HL,MENU_STR_INVALID
-        LD (0x420a),HL
+        LD (MENU_MSG_PTR),HL
         CALL editor_redraw
         JP L_1f3a
 
@@ -5167,9 +5236,9 @@ L_212e:
         RET
 
 L_216c:
-        LD A,(0x4358)
+        LD A,(VAR_4358)
         CPL
-        LD (0x4358),A
+        LD (VAR_4358),A
 
 L_2173:
         LD HL,(STORE_CURSOR)
@@ -5181,9 +5250,9 @@ L_2173:
         JP L_2087
 
 L_2184:
-        LD A,(0x4364)
+        LD A,(VAR_4364)
         CPL
-        LD (0x4364),A
+        LD (VAR_4364),A
         LD HL,(STORE_CURSOR)
         LD A,(HL)
         CP 0xd0
@@ -5201,7 +5270,7 @@ L_219c:
         OR A
         JP nz,L_1c4e
         LD A,0xff
-        LD (0x43cf),A
+        LD (VAR_43CF),A
         JP editor_loop
 
 L_21b4:
@@ -5213,7 +5282,7 @@ L_21b4:
         OR A
         JP nz,L_1c4e
         LD A,0xff
-        LD (0x4221),A
+        LD (VAR_4221),A
         JP editor_loop
 
 L_21cc:
@@ -5225,12 +5294,12 @@ L_21cc:
         OR A
         JP nz,L_1c4e
         LD A,0xff
-        LD (0x4220),A
+        LD (VAR_4220),A
         JP editor_loop
 
 L_21e4:
         LD A,0xff
-        LD (0x43ca),A
+        LD (VAR_43CA),A
         JP editor_loop
 
 L_21ec:
@@ -5283,7 +5352,7 @@ L_2237:
 
 L_223a:
         LD A,0xff
-        LD (0x435a),A
+        LD (VAR_435A),A
         LD HL,SEQ_LIST
         LD B,0x68
         LD A,0xff
@@ -5292,7 +5361,7 @@ L_2246:
         LD (HL),A
         INC HL
         DJNZ L_2246
-        LD (0x4336),A
+        LD (VAR_4336),A
         LD HL,SEQ_LIST
         LD (SEQ_PTR),HL
         LD B,0x67
@@ -5332,7 +5401,7 @@ L_2266:
 
 L_228f:
         LD A,0
-        LD (0x4336),A
+        LD (VAR_4336),A
         LD HL,(STORE_CURSOR)
         LD A,(HL)
         CP 0xd0
@@ -5352,9 +5421,9 @@ L_22a5:
 
 L_22b5:
         LD A,0xff
-        LD (0x420f),A
+        LD (VAR_420F),A
         LD HL,0x3c09
-        LD DE,0x43a5
+        LD DE,VAR_43A5
 
 L_22c0:
         LD A,(HL)
@@ -5422,7 +5491,7 @@ menu_getchar:
 
 ; ---- editor_getkey: Editor key source: echoes the previous key on the serial TX, then takes a key from the serial RX FIFO if present, else from the IR decoder (IR_CODE). So the on-sign editor can be driven from a serial terminal as well as the remote.
 editor_getkey:
-        LD A,(0x43d7)
+        LD A,(KEY_ECHO_TX)
         AND A
         JR z,L_231c
         CALL tx_send_byte
@@ -5433,14 +5502,14 @@ L_231c:
         AND A
         JR z,L_233f
         XOR A
-        LD (0x4364),A
-        LD A,(0x4226)
-        LD (0x4227),A
+        LD (VAR_4364),A
+        LD A,(VAR_4226)
+        LD (VAR_4227),A
         LD A,(RX_LASTCMD)
-        LD (0x4226),A
+        LD (VAR_4226),A
         LD A,(RX_BYTE)
         LD (RX_LASTCMD),A
-        LD (0x43d7),A
+        LD (KEY_ECHO_TX),A
         RET
 
 L_233f:
@@ -5448,17 +5517,17 @@ L_233f:
         AND A
         JR z,L_237d
         AND 0x3f
-        LD (0x4387),A
+        LD (VAR_4387),A
         XOR A
         LD (IR_CODE),A
-        LD A,(0x4387)
+        LD A,(VAR_4387)
         CP 0x3e
         JR z,L_2376
         LD C,A
         LD A,(IR_KEY)
         CP C
         JR nz,L_2384
-        LD A,(0x4377)
+        LD A,(VAR_4377)
         AND A
         JR nz,L_2393
         CP 0x24
@@ -5474,44 +5543,44 @@ L_233f:
 L_2376:
         XOR A
         LD (IR_KEY),A
-        LD (0x4377),A
+        LD (VAR_4377),A
 
 L_237d:
         XOR A
-        LD (0x4229),A
+        LD (VAR_4229),A
         JP L_2418
 
 L_2384:
-        LD A,(0x4387)
+        LD A,(VAR_4387)
         LD (IR_KEY),A
-        LD (0x4377),A
+        LD (VAR_4377),A
         XOR A
         LD (IR_CODE),A
         JR L_237d
 
 L_2393:
-        LD A,(0x4387)
+        LD A,(VAR_4387)
         LD (IR_KEY),A
         LD HL,0x0514
         LD (GEN_COUNTDOWN),HL
         XOR A
-        LD (0x4377),A
+        LD (VAR_4377),A
 
 L_23a3:
-        LD A,(0x4387)
+        LD A,(VAR_4387)
         CP 0x1d
         JR nz,L_23c1
         CALL sub_0f48
-        LD A,(0x4337)
+        LD A,(SHIFT_STATE)
         CPL
-        LD (0x4337),A
+        LD (SHIFT_STATE),A
         AND A
         LD A,0x1d
         JR nz,L_23bb
         LD A,0x9f
 
 L_23bb:
-        LD (0x4229),A
+        LD (VAR_4229),A
         JP L_2408
 
 L_23c1:
@@ -5521,23 +5590,23 @@ L_23c1:
         ADD HL,DE
         LD A,(HL)
         LD (RX_BYTE),A
-        LD A,(0x4364)
+        LD A,(VAR_4364)
         LD HL,CHARSET_GRAPHICS
         OR A
         JR nz,L_23f5
-        LD A,(0x4337)
+        LD A,(SHIFT_STATE)
         LD HL,CHARSET_LOWER
         AND A
         JR z,L_23ec
         LD HL,CHARSET_UPPER2
-        LD A,(0x4358)
+        LD A,(VAR_4358)
         AND A
         JR z,L_23f5
         LD HL,CHARSET_LOWER2
         JR L_23f5
 
 L_23ec:
-        LD A,(0x4358)
+        LD A,(VAR_4358)
         AND A
         JR z,L_23f5
         LD HL,CHARSET_UPPER
@@ -5548,24 +5617,24 @@ L_23f5:
         LD D,0
         ADD HL,DE
         LD A,(HL)
-        LD (0x4229),A
+        LD (VAR_4229),A
         LD A,0
-        LD (0x4337),A
+        LD (SHIFT_STATE),A
         CALL sub_0f48
 
 L_2408:
         XOR A
-        LD (0x4364),A
-        LD A,(0x4226)
-        LD (0x4227),A
+        LD (VAR_4364),A
+        LD A,(VAR_4226)
+        LD (VAR_4227),A
         LD A,(RX_LASTCMD)
-        LD (0x4226),A
+        LD (VAR_4226),A
 
 L_2418:
-        LD A,(0x4229)
+        LD A,(VAR_4229)
         LD (RX_LASTCMD),A
         XOR A
-        LD (0x43d7),A
+        LD (KEY_ECHO_TX),A
         LD A,(RX_LASTCMD)
         AND A
         RET
@@ -5582,13 +5651,13 @@ L_2465:
         LD A,(HL)
         CP 3
         JP z,editor_loop
-        LD A,(0x4337)
+        LD A,(SHIFT_STATE)
         OR A
         JR z,L_247f
         LD A,0xff
-        LD (0x4241),A
+        LD (VAR_4241),A
         LD HL,0x2f9b
-        LD (0x420a),HL
+        LD (MENU_MSG_PTR),HL
 
 L_247f:
         JP editor_loop
@@ -5757,9 +5826,9 @@ L_25a1:
         OR L
         JR nz,L_25d1
         LD A,0xff
-        LD (0x4224),A
+        LD (MENU_MSG_FLAG),A
         LD HL,MENU_STR_MEM_FULL
-        LD (0x420a),HL
+        LD (MENU_MSG_PTR),HL
         JP editor_loop
 
 L_25d1:
@@ -5783,14 +5852,14 @@ L_25d1:
         LD A,(CUR_CHAR)
         LD (HL),A
         LD HL,(STORE_END)
-        LD DE,(0x43de)
+        LD DE,(VAR_43DE)
         OR A
         SBC HL,DE
         JR nz,L_2615
         LD A,0xff
-        LD (0x4224),A
+        LD (MENU_MSG_FLAG),A
         LD HL,MENU_STR_100_KEYS
-        LD (0x420a),HL
+        LD (MENU_MSG_PTR),HL
 
 L_2615:
         JP editor_loop
@@ -5813,7 +5882,7 @@ store_make_room:
 
 L_2636:
         LD A,0xff
-        LD (0x4236),A
+        LD (VAR_4236),A
 
 L_263b:
         RET
@@ -5827,7 +5896,7 @@ sub_263c:
         RET
 
 sub_264c:
-        LD A,(0x4221)
+        LD A,(VAR_4221)
         OR A
         RET z
         LD A,(RX_LASTCMD)
@@ -5835,11 +5904,11 @@ sub_264c:
         OR 0xa0
         LD (RX_LASTCMD),A
         LD A,0
-        LD (0x4221),A
+        LD (VAR_4221),A
         RET
 
 sub_2661:
-        LD A,(0x43cf)
+        LD A,(VAR_43CF)
         AND A
         RET z
         LD A,(RX_LASTCMD)
@@ -5847,16 +5916,16 @@ sub_2661:
         OR 0xf0
         LD (RX_LASTCMD),A
         XOR A
-        LD (0x43cf),A
+        LD (VAR_43CF),A
         RET
 
 ; ---- editor_key_to_attr: Translate editor function keys to message bytes: 1E->B8 graphic,11->B9 thin,19->BA wait,14->B0 remark,12->06 pause,15->BC rainbow, 8F.. colours etc.
 editor_key_to_attr:
-        LD A,(0x43ca)
+        LD A,(VAR_43CA)
         AND A
         RET z
         XOR A
-        LD (0x43ca),A
+        LD (VAR_43CA),A
         LD A,(RX_LASTCMD)
         LD C,0xb8
         CP 0x1e
@@ -5904,7 +5973,7 @@ L_26cc:
         RET
 
 sub_26d1:
-        LD A,(0x4220)
+        LD A,(VAR_4220)
         AND A
         JR nz,L_26de
         LD A,(FB_TMP)
@@ -5929,7 +5998,7 @@ L_26ea:
         LD A,(HL)
         LD (RX_LASTCMD),A
         XOR A
-        LD (0x4220),A
+        LD (VAR_4220),A
         RET
 
 L_26fb:
@@ -5970,13 +6039,13 @@ editor_redraw:
         OR 15
         LD (CTRL_LATCH_SHADOW),A
         LD (CTRL_LATCH),A
-        LD A,(0x4243)
+        LD A,(VAR_4243)
         AND A
         JP nz,L_28f3
-        LD A,(0x4336)
+        LD A,(VAR_4336)
         BIT 7,A
         JP nz,L_28f3
-        LD A,(0x4399)
+        LD A,(VAR_4399)
         AND A
         JP nz,L_28f3
         LD HL,(STORE_CURSOR)
@@ -5991,20 +6060,20 @@ L_2764:
         LD DE,0x15
         OR A
         SBC HL,DE
-        LD (0x4344),HL
+        LD (VAR_4344),HL
         LD DE,(INS_PTR)
         OR A
         SBC HL,DE
         JR nc,L_277a
         EX DE,HL
-        LD (0x4344),HL
+        LD (VAR_4344),HL
 
 L_277a:
         LD HL,(INS_PTR)
-        LD (0x425a),HL
+        LD (VAR_425A),HL
 
 L_2780:
-        LD HL,(0x425a)
+        LD HL,(VAR_425A)
         LD A,(HL)
         LD (CUR_CHAR),A
         LD A,0xff
@@ -6012,11 +6081,11 @@ L_2780:
         LD A,(CUR_CHAR)
         CP 0x20
         JR nz,L_27a4
-        LD A,(0x439a)
+        LD A,(VAR_439A)
         AND A
         JP z,L_28b0
         XOR A
-        LD (0x433b),A
+        LD (VAR_433B),A
         LD (FONT_MODE),A
         JP L_28b0
 
@@ -6052,7 +6121,7 @@ L_27d3:
         CP 0xbd
         JR nz,L_27eb
         XOR A
-        LD (0x439a),A
+        LD (VAR_439A),A
         LD A,(CUR_CHAR)
 
 L_27eb:
@@ -6069,7 +6138,7 @@ L_27eb:
         CP 0x11
         JP nz,L_2812
         XOR A
-        LD (0x421e),A
+        LD (VAR_421E),A
         LD (FONT_MODE),A
         JR L_287d
 
@@ -6077,7 +6146,7 @@ L_2812:
         CP 0x14
         JP nz,L_281e
         LD A,0x10
-        LD (0x43a2),A
+        LD (VAR_43A2),A
         JR L_287d
 
 L_281e:
@@ -6108,9 +6177,9 @@ L_2847:
         CP 0xb9
         JP nz,L_2858
         LD A,0xff
-        LD (0x43d6),A
+        LD (VAR_43D6),A
         XOR A
-        LD (0x433b),A
+        LD (VAR_433B),A
         JP L_287d
 
 L_2858:
@@ -6119,24 +6188,24 @@ L_2858:
         XOR A
         LD (FONT_MODE),A
         LD A,0xff
-        LD (0x439a),A
+        LD (VAR_439A),A
         JP L_287d
 
 L_2869:
-        LD A,(0x43d6)
+        LD A,(VAR_43D6)
         AND A
         JP nz,L_287d
         LD A,0xff
-        LD (0x433b),A
+        LD (VAR_433B),A
         JP L_287d
 
 L_2878:
         LD A,0
-        LD (0x433b),A
+        LD (VAR_433B),A
 
 L_287d:
-        LD HL,(0x425a)
-        LD DE,(0x4344)
+        LD HL,(VAR_425A)
+        LD DE,(VAR_4344)
         OR A
         EX DE,HL
         SBC HL,DE
@@ -6162,8 +6231,8 @@ L_2892:
         JP L_28e0
 
 L_28b0:
-        LD HL,(0x425a)
-        LD DE,(0x4344)
+        LD HL,(VAR_425A)
+        LD DE,(VAR_4344)
         OR A
         EX DE,HL
         SBC HL,DE
@@ -6188,9 +6257,9 @@ L_28da:
         CALL glyph_lookup
 
 L_28e0:
-        LD HL,(0x425a)
+        LD HL,(VAR_425A)
         INC HL
-        LD (0x425a),HL
+        LD (VAR_425A),HL
         LD DE,(STORE_CURSOR)
         EX DE,HL
         OR A
@@ -6201,14 +6270,14 @@ L_28e0:
 L_28f3:
         LD A,0xff
         LD (TINY_MODE),A
-        LD A,(0x4221)
+        LD A,(VAR_4221)
         AND A
         JR z,L_2904
         LD HL,0x2fe3
         JP L_2988
 
 L_2904:
-        LD A,(0x4220)
+        LD A,(VAR_4220)
         OR A
         JR z,L_2910
         LD HL,0x2f52
@@ -6222,32 +6291,32 @@ L_2910:
         JP L_2988
 
 L_291c:
-        LD A,(0x43ca)
+        LD A,(VAR_43CA)
         OR A
         JR z,L_2928
         LD HL,0x2f83
         JP L_2988
 
 L_2928:
-        LD A,(0x4364)
+        LD A,(VAR_4364)
         OR A
         JR z,L_2934
         LD HL,0x2f89
         JP L_2988
 
 L_2934:
-        LD A,(0x43cf)
+        LD A,(VAR_43CF)
         OR A
         JP z,L_2941
         LD HL,0x2fdb
         JP L_2988
 
 L_2941:
-        LD A,(0x4399)
+        LD A,(VAR_4399)
         OR A
         JP z,L_298e
         XOR A
-        LD (0x4399),A
+        LD (VAR_4399),A
         CALL init_render
         LD HL,(FB_COL)
         LD (FB_COLPTR),HL
@@ -6282,30 +6351,30 @@ L_2988:
         CALL menu_show_text
 
 L_298e:
-        LD A,(0x4241)
+        LD A,(VAR_4241)
         AND A
         JR z,L_299d
-        LD HL,(0x420a)
+        LD HL,(MENU_MSG_PTR)
         LD (MENU_TEXT_PTR),HL
         CALL menu_show_text
 
 L_299d:
-        LD A,(0x4224)
+        LD A,(MENU_MSG_FLAG)
         OR A
         JR z,L_29ad
-        LD HL,(0x420a)
+        LD HL,(MENU_MSG_PTR)
         INC HL
         LD (MENU_TEXT_PTR),HL
         CALL menu_show_text
 
 L_29ad:
         CALL sub_2a21
-        LD A,(0x4224)
+        LD A,(MENU_MSG_FLAG)
         OR A
         JR z,L_29d3
         CALL sub_29d9
         LD A,0
-        LD (0x4224),A
+        LD (MENU_MSG_FLAG),A
         LD HL,(STORE_CURSOR)
         LD A,(HL)
         CP 0xd0
@@ -6337,10 +6406,10 @@ L_29e5:
         CP 2
         JR nz,L_29e5
         LD A,0x50
-        LD (0x4244),A
+        LD (VAR_4244),A
 
 L_29f1:
-        LD A,(0x4244)
+        LD A,(VAR_4244)
         AND A
         JR nz,L_29f1
         RET
@@ -6581,7 +6650,7 @@ pkt_process_done:
         LD (PKT_READY),A
         LD (PKT_STATE),A
         LD (MENU_ACTIVE),A
-        LD (0x433b),A
+        LD (VAR_433B),A
         LD HL,SEQ_LIST
         LD (SEQ_PTR),HL
         CALL sub_2b84

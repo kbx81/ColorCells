@@ -25,7 +25,7 @@ hardware; **[M]** structure understood, details inferred; **[L]** hypothesis.
 | `4040–4197` | `FRAMEBUF` — 4 × 86 bytes |
 | `4198–41A1` | frame-buffer pointers/temps |
 | `41A2–41F7` | `TXBUF` — reply frame buffer (len byte + up to 0x55 data) |
-| `41F8–43E1` | variables (see `equ` block in the source) |
+| `41F8–43E1` | variables (see `equ` block in the source; `VAR_xxxx` names are honest placeholders for locations whose purpose is not yet established, not abbreviations) |
 | `43CB/43CC` | `MY_ADDRESS` / its complement (RAM-validity check at boot) |
 | `43E2–5EF0` | `MSG_STORE` — message store (see §6); `STORE_LIMIT` at `43D8` |
 | `5EF0` | `PKT_READY` flag |
@@ -209,6 +209,16 @@ Related tables in the same block: `COLOUR_NAME_TABLE` (`2E62`) gives the 16
 foreground names then the four background names repeated four times;
 `SPEED_STR_TABLE` (`2F42`) gives `S0`–`S7`; `MSG_TOP_TABLE` (`2F02`) gives
 "TOP OF MSG 1–10" and "TOP DEMO MSG".
+
+**`B8` DRAW vs `1E` GRAPH [H — from the sign's owner]:** GRAPH selects a
+*built-in* graphic (apparently just further glyphs); DRAW takes user-defined
+artwork as a string of hex values and paints it **column by column**.
+
+**The model name is the geometry:** the panel is **7 rows × 84 columns** —
+CC**784**. The firmware carries 86 bytes per row, not 84 (`FRAMEBUF` is
+4 × 86 = 344, the `0x0158` constant; one row refresh is an `OTIR` of 86), and
+`sub_2B84` clocks 85 zeros to flush the LS164 chain. So there are one or two
+positions of slack beyond the visible 84.
 
 ### Behaviour [M]
 
@@ -426,10 +436,8 @@ instead — see `CC784_hardware.md` §2 and `AT28C256.md`.
 
 ## 13. What is still unknown in the firmware
 
-- Exact *behaviour* of `BB` (HOLD), `BD` (MAGIC OFF), `B9` (THIN), `1D` (SHIFT)
-  and `1E` (GRAPH). All five are now named from `ATTR_LABEL_TABLE` (§7), but
-  named is not the same as traced — what HOLD holds, or how GRAPH differs from
-  `B8` DRAW, is still open.
+- Exact *behaviour* of `BB` (HOLD), `BD` (MAGIC OFF), `B9` (THIN) and `1D`
+  (SHIFT). Named from `ATTR_LABEL_TABLE` (§7), but named is not traced.
 - Background codes `94–9F`. `COLOUR_NAME_TABLE` shows only four distinct
   background names (B-BLK, B-RED, B-YEL, B-GRE) repeated four times across the
   16 slots, so `94–9F` may simply alias `90–93`. Untested on hardware.
