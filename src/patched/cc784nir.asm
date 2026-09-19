@@ -1141,9 +1141,10 @@ L_05cc:
         RET
 
 ; ---- INIT_DATA: four RAM images that init_vars LDIRs into place, annotated
-;      with the address each entry lands on. dw entries holding a ROM address
-;      must stay symbolic - moving code before them would silently break the
-;      serial engine. +12..+17 and +72 are copied nowhere: dead bytes.
+;      with the address each entry lands on. The dw entries naming a ROM
+;      label hold an address as DATA - they must stay symbolic, or moving
+;      code before them silently breaks the serial engine with no build
+;      error. +12..+17 and +72 are copied nowhere: dead bytes.
 INIT_DATA:
 ; -- +00 -> 4198 (FB_COLPTR), 10 bytes
         dw FRAMEBUF_ROW1      ; 4198 FB_COLPTR
@@ -1226,13 +1227,13 @@ INIT_DATA:
         db 0x00               ; 4253 
         db 0x00               ; 4254 
         db 0x00               ; 4255 RX_COUNT
-        dw 0x4a00             ; 4256 RX_TIMING_PTR
-        db 0x16               ; 4258 
-        dw 0x164a             ; 4259 
+        db 0x00               ; 4256 RX_TIMING_PTR
+        dw RX_TIMING          ; +69 -> 4257
+        dw RX_TIMING          ; +6b -> 4259
         db 0x00               ; 425b 
-        dw 0x2b00             ; 425c RX_STATE
-        dw 0x2b16             ; 425e VAR_425E
-        db 0x16   ; +72 dead
+        db 0x00               ; 425c RX_STATE
+        dw rx_st_wait_start   ; +6f -> 425d
+        dw rx_st_wait_start   ; +71 -> 425f
 ; -- +73 -> 4336 (VAR_4336), 36 bytes
         db 0x00               ; 4336 VAR_4336
         db 0x00               ; 4337 SHIFT_STATE
@@ -1252,14 +1253,14 @@ INIT_DATA:
         db 0x00               ; 434b TX_TICKS
         db 0x00               ; 434c TX_SHIFT
         db 0x00               ; 434d TX_STATUS
-        dw 0x1654             ; 434e TX_TIMING_PTR
+        dw TX_TIMING          ; +8b -> 434e
         db 0x00               ; 4350 
         db 0x01               ; 4351 
         db 0x00               ; 4352 
         db 0x00               ; 4353 
         db 0x00               ; 4354 
         db 0x00               ; 4355 
-        dw 0x1654             ; 4356 
+        dw TX_TIMING          ; +93 -> 4356
         db 0xff               ; 4358 VAR_4358
         db 0xff               ; 4359 DISP_ENABLE
 
@@ -3324,12 +3325,12 @@ ir_init:
         LD (VAR_43DC),HL
         LD HL,STORE_SIZE_INIT
         LD (STORE_SIZE),HL
-        ; P1: the terminator no longer sits one below the area to be zeroed,
-        ; so set HL/BC for the clear and write the 0xDA out of line. Same
-        ; 9 bytes, so L_144d stays at 0x144D.
+        ; P1: the store terminator no longer sits one byte below the page to
+        ; be cleared, so write it first, then set HL/BC for the clear.
+        LD HL,(STORE_LIMIT)
+        LD (HL),0xda
         LD BC,0x0110
         LD HL,0x5ef0
-        CALL patch_store_term
 
 L_144d:
         LD (HL),0
@@ -6780,7 +6781,9 @@ pkt_process_done:
         ; B2: cmd_17_set_time clears CLK_RUN before fetching its five argument
         ; bytes; a short packet exits here through pkt_next_byte and the clock
         ; never restarts. Restoring it on the way out covers every early exit.
-        CALL patch_clk_restore
+        LD A,0xff
+        LD (CLK_RUN),A
+        CALL sub_2b84
         JP L_000f
 
 sub_2b84:
@@ -7666,30 +7669,5 @@ DEMO_MESSAGE:
 TEST_MESSAGE:
         db "CURRENT TEST  "
         db 0x10,0x17,0x17,0x17,0x17,0x17,0x17,0x17," ",0x03
-
-; ============================================================================
-;  Patch spill-over. 0x3C21..0x7FFF is 0xFF in the dump; code placed here
-;  cannot shift any stock address.
-; ============================================================================
-
-; ---- patch_store_term: write the 0xDA store terminator at STORE_LIMIT.
-;      Called from ir_init, which needs HL/BC left pointing at the RAM page
-;      it is about to clear.
-patch_store_term:
-        PUSH HL
-        LD HL,(STORE_LIMIT)
-        LD (HL),0xda
-        POP HL
-        RET
-
-; ---- patch_clk_restore: restart the clock, then tail into sub_2b84.
-;      Replaces the CALL sub_2b84 in pkt_process_done so a packet that ends
-;      mid-cmd_17 cannot leave CLK_RUN at 0. The menu's own time editor does
-;      the same thing at 0x1D8A.
-patch_clk_restore:
-        LD A,0xff
-        LD (CLK_RUN),A
-        JP sub_2b84
-
 
         ds 0x8000-$,0xff        ; unused upper half of the 27C256
