@@ -3,7 +3,6 @@
 ;  Assemble:  sjasmplus cc784nir.asm   (produces cc784nir_patched.bin, 32768 B)
 ;  NOT byte-identical to the dump - 55 bytes differ. The untouched
 ;  reconstruction is ../stock/cc784nir.asm; diff the two to see the patches.
-;  See CC784NIR_annotated.asm for the listing with addresses/hex and full notes.
 ; ============================================================================
         DEVICE NONE
 

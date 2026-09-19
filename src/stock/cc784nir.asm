@@ -5,7 +5,6 @@
 ;      md5 c021af146a50b93a22d13535201b7eaa
 ;  FROZEN. Annotations may be added; code must not change. The patched
 ;  variant is ../patched/cc784nir.asm.
-;  See CC784NIR_annotated.asm for the listing with addresses/hex and full notes.
 ; ============================================================================
         DEVICE NONE
         OUTPUT "cc784nir.bin"

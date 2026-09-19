@@ -6,7 +6,6 @@ in `0x0000–0x3C20`, rest `0xFF`). Hand-written Z80 assembly, ROM ID string
 
 Companion files: `src/stock/cc784nir.asm` (reassembles byte-identical with
 sjasmplus) and `src/patched/cc784nir.asm` (the §11 fixes),
-`CC784NIR_annotated.asm` (listing with addresses/hex and comments),
 `CC784_protocol.md` (wire protocol), `cc784.py` / `cc784_esphome.py` (tools),
 `CC784_hardware.md` (board).
 
