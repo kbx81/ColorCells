@@ -771,7 +771,7 @@ L_03ae:
         PUSH HL
         LD B,0
         LD C,A
-        LD IX,0x372d
+        LD IX,CHAR_FLAGS
         ADD IX,BC
         BIT 1,(IX+0)
         JR z,L_03e6
@@ -787,7 +787,7 @@ L_03cd:
 L_03d7:
         LD B,0
         LD C,A
-        LD IX,0x372d
+        LD IX,CHAR_FLAGS
         ADD IX,BC
         BIT 1,(IX+0)
         JR nz,L_03cd
@@ -996,7 +996,7 @@ sub_04e5:
 
 L_04f6:
         LD E,(HL)
-        LD IX,0x372d
+        LD IX,CHAR_FLAGS
         ADD IX,DE
         BIT 0,(IX+0)
         JR z,L_0508
@@ -1062,7 +1062,8 @@ init_vars3:
         LD (NMI_PER_SEC),A
         RET
 
-; ---- init_vars: Power-on RAM init: copies data blocks from ROM (0x0601..), validates MY_ADDRESS/MY_ADDRESS_INV (resets to 0 if corrupt)
+; ---- init_vars: Power-on RAM init: copies the blocks out of INIT_DATA,
+;      validates MY_ADDRESS/MY_ADDRESS_INV (resets it if corrupt)
 init_vars:
         XOR A
         LD (TINY_RENDER),A
@@ -1139,18 +1140,128 @@ L_05cc:
         LD (SEQ_PTR),HL
         RET
 
-; ---- data 0601-0697: RAM initialisation blocks copied by init_vars
+; ---- INIT_DATA: four RAM images that init_vars LDIRs into place, annotated
+;      with the address each entry lands on. dw entries holding a ROM address
+;      must stay symbolic - moving code before them would silently break the
+;      serial engine. +12..+17 and +72 are copied nowhere: dead bytes.
 INIT_DATA:
-        db 0x96,0x40,0x56,0x40,0x40,0x95,0x40,0x01,0x01,0x00,0xa2,0x41,0x56,0x00,0x00,0x00
-        db 0x00,0x00,0x01,0x02,0x00,0x00,0x00,0x00,0x01,0x00,0x00,0x00,0x00,0x00,0x0f,0x00
-        db 0x00,0x00,0x40,0x40,0x01,0x05,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x0f,0x00
-        db 0x00,0x0a,0x00,0x00,0x00,0x0f,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
-        db 0x00,0x00,0x00,0x56,0x00,0x00,0x00,0xff,0x5f,0x00,0x00,0x00,0x00,0x00,0x00,0x00
-        db 0x00,0x00,0x00,0x00,0x01,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
-        db 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x4a,0x16,0x4a,0x16,0x00,0x00,0x2b
-        db 0x16,0x2b,0x16,0x00,0x00,0x00,0x00,0x00,0x00,0xb0,0x04,0x00,0x00,0x00,0x00,0x00
-        db 0x00,0x00,0x00,0xe2,0x43,0x00,0x01,0x00,0x00,0x00,0x00,0x54,0x16,0x00,0x01,0x00
-        db 0x00,0x00,0x00,0x54,0x16,0xff,0xff
+; -- +00 -> 4198 (FB_COLPTR), 10 bytes
+        dw FRAMEBUF_ROW1      ; 4198 FB_COLPTR
+        db 0x56               ; 419a 
+        dw FRAMEBUF           ; 419b FB_COL
+        db 0x95               ; 419d 
+        db 0x40               ; 419e 
+        db 0x01               ; 419f 
+        db 0x01               ; 41a0 
+        db 0x00               ; 41a1 FB_TMP
+; -- +0a -> 41f8 (EFFECT_TMP), 8 bytes
+        dw TXBUF              ; 41f8 EFFECT_TMP
+        db 0x56               ; 41fa 
+        dw 0x0000             ; 41fb EFFECT_TMP2
+        db 0x00               ; 41fd FLASH_TIMER
+        dw 0x0000             ; 41fe TICK_COUNTDOWN
+        db 0x01,0x02,0x00,0x00,0x00,0x00   ; +12 dead
+; -- +18 -> 4206 (CLK_RUN), 90 bytes
+        db 0x01               ; 4206 CLK_RUN
+        db 0x00               ; 4207 GLYPH_WIDTH
+        dw 0x0000             ; 4208 GLYPH_PTR
+        dw 0x0000             ; 420a MENU_MSG_PTR
+        db 0x0f               ; 420c CUR_COLOUR
+        db 0x00               ; 420d EFFECT_PHASE
+        db 0x00               ; 420e CUR_CHAR
+        db 0x00               ; 420f VAR_420F
+        dw FRAMEBUF           ; 4210 SEQ_PTR_SAVE
+        db 0x01               ; 4212 EFFECT_ACTIVE
+        db 0x05               ; 4213 VAR_4213
+        dw 0x0000             ; 4214 VAR_4214
+        db 0x00               ; 4216 
+        db 0x00               ; 4217 MENU_ACTIVE
+        dw 0x0000             ; 4218 INS_PTR
+        db 0x00               ; 421a RENDER_DONE
+        db 0x00               ; 421b VAR_421B
+        db 0x0f               ; 421c COL_COUNT
+        db 0x00               ; 421d VAR_421D
+        db 0x00               ; 421e VAR_421E
+        db 0x0a               ; 421f VAR_421F
+        db 0x00               ; 4220 VAR_4220
+        db 0x00               ; 4221 VAR_4221
+        db 0x00               ; 4222 ROW_DATA_LATCH
+        db 0x0f               ; 4223 RX_MSGFLAG
+        db 0x00               ; 4224 MENU_MSG_FLAG
+        db 0x00               ; 4225 RX_LASTCMD
+        db 0x00               ; 4226 VAR_4226
+        db 0x00               ; 4227 VAR_4227
+        db 0x00               ; 4228 RX_BYTE
+        db 0x00               ; 4229 VAR_4229
+        dw 0x0000             ; 422a BEEP_TIMER
+        db 0x00               ; 422c 
+        dw 0x0000             ; 422d CTRL_LATCH_SHADOW
+        db 0x00               ; 422f 
+        dw 0x5600             ; 4230 DISP_FLAGS
+        dw 0x0000             ; 4232 FB_EXTRA_LEN
+        dw 0xff00             ; 4234 STORE_END
+        dw 0x005f             ; 4236 VAR_4236
+        db 0x00               ; 4238 
+        db 0x00               ; 4239 
+        db 0x00               ; 423a PAUSE_FLAG
+        dw 0x0000             ; 423b EFFECT_VECTOR
+        dw 0x0000             ; 423d MENU_TEXT_PTR
+        db 0x00               ; 423f 
+        db 0x00               ; 4240 
+        db 0x00               ; 4241 VAR_4241
+        db 0x01               ; 4242 VAR_4242
+        db 0x00               ; 4243 VAR_4243
+        db 0x00               ; 4244 VAR_4244
+        db 0x00               ; 4245 ROW_INDEX
+        dw 0x0000             ; 4246 RX_BITMASK
+        db 0x00               ; 4248 
+        dw 0x0000             ; 4249 RX_SHIFT
+        db 0x00               ; 424b RX_TICKS
+        db 0x00               ; 424c VAR_424C
+        dw 0x0000             ; 424d RX_FIFO
+        db 0x00               ; 424f 
+        db 0x00               ; 4250 
+        db 0x00               ; 4251 
+        db 0x00               ; 4252 
+        db 0x00               ; 4253 
+        db 0x00               ; 4254 
+        db 0x00               ; 4255 RX_COUNT
+        dw 0x4a00             ; 4256 RX_TIMING_PTR
+        db 0x16               ; 4258 
+        dw 0x164a             ; 4259 
+        db 0x00               ; 425b 
+        dw 0x2b00             ; 425c RX_STATE
+        dw 0x2b16             ; 425e VAR_425E
+        db 0x16   ; +72 dead
+; -- +73 -> 4336 (VAR_4336), 36 bytes
+        db 0x00               ; 4336 VAR_4336
+        db 0x00               ; 4337 SHIFT_STATE
+        db 0x00               ; 4338 VAR_4338
+        db 0x00               ; 4339 FONT_MODE
+        db 0x00               ; 433a TINY_MODE
+        db 0x00               ; 433b VAR_433B
+        dw 0x04b0             ; 433c NMI_COUNT
+        dw 0x0000             ; 433e STORE_TMP
+        dw 0x0000             ; 4340 MOVE_DST
+        dw 0x0000             ; 4342 MOVE_SRC
+        dw 0x0000             ; 4344 VAR_4344
+        dw MSG_STORE          ; 4346 STORE_CURSOR
+        db 0x00               ; 4348 TX_BITIDX
+        db 0x01               ; 4349 TX_BITMASK
+        db 0x00               ; 434a TX_PENDING
+        db 0x00               ; 434b TX_TICKS
+        db 0x00               ; 434c TX_SHIFT
+        db 0x00               ; 434d TX_STATUS
+        dw 0x1654             ; 434e TX_TIMING_PTR
+        db 0x00               ; 4350 
+        db 0x01               ; 4351 
+        db 0x00               ; 4352 
+        db 0x00               ; 4353 
+        db 0x00               ; 4354 
+        db 0x00               ; 4355 
+        dw 0x1654             ; 4356 
+        db 0xff               ; 4358 VAR_4358
+        db 0xff               ; 4359 DISP_ENABLE
 
 ; ---- init_render: Reset render state for the current message
 init_render:
@@ -1216,7 +1327,7 @@ sub_072a:
         LD A,(CUR_CHAR)
         LD D,0
         LD E,A
-        LD HL,0x372d
+        LD HL,CHAR_FLAGS
         ADD HL,DE
         BIT 1,(HL)
         JR nz,L_0776
@@ -1497,21 +1608,22 @@ L_0937:
         CALL sub_0cea
         RET
 
-; ---- char_to_glyph: Map a character code to a font glyph index (tables at 0x382d..0x392d select upper/lower/tiny fonts)
+; ---- char_to_glyph: Map a character code to a font glyph index
+;      (CHARSET_LOWER..CHARSET_GRAPHICS select upper/lower/tiny fonts)
 char_to_glyph:
         PUSH AF
         AND 0xf0
         CP 0xc0
-        LD DE,0x3535
+        LD DE,FONT+8*128
         JR z,L_0963
         CP 0xd0
-        LD DE,0x36ad
+        LD DE,FONT+8*175
         JR z,L_0963
         CP 0xe0
-        LD DE,0x35b5
+        LD DE,FONT+8*144
         JR z,L_0963
         CP 0x90
-        LD DE,0x3635
+        LD DE,FONT+8*160
         JR z,L_0963
         POP AF
         RET
@@ -1562,7 +1674,7 @@ sub_0996:
         LD A,(RENDER_DONE)
         AND A
         JR z,L_09a9
-        LD A,(0x09f7)
+        LD A,(TBL_09F6+1)
         LD (CUR_COLOUR),A
 
 L_09a9:
@@ -1581,7 +1693,7 @@ L_09b5:
         RET z
         LD D,0
         LD E,A
-        LD IX,0x372d
+        LD IX,CHAR_FLAGS
         ADD IX,DE
         BIT 1,(IX+0)
         RET nz
@@ -1600,7 +1712,7 @@ L_09d8:
         CP 0xff
         JR nz,L_09e9
         LD E,1
-        LD A,(0x09f7)
+        LD A,(TBL_09F6+1)
 
 L_09e9:
         AND 15
@@ -1863,7 +1975,7 @@ L_0b8e:
         LD (EFFECT_VECTOR),HL
         LD A,6
         LD (GLYPH_WIDTH),A
-        LD HL,0x3235
+        LD HL,FONT+8*32
         LD (GLYPH_PTR),HL
         CALL sub_086e
         CALL effect_step
@@ -1997,7 +2109,7 @@ L_0c90:
         LD (VAR_4362),A
         LD E,A
         LD D,0
-        LD HL,0x0cda
+        LD HL,TBL_0CD4+6
         ADD HL,DE
         LD A,(CUR_COLOUR)
         AND 15
@@ -2553,7 +2665,7 @@ sub_0ffc:
         LD (VAR_4362),A
         LD E,A
         LD D,0
-        LD HL,0x0cda
+        LD HL,TBL_0CD4+6
         ADD HL,DE
         LD A,(HL)
         AND 15
@@ -2765,7 +2877,7 @@ L_1162:
         LD (EFFECT_VECTOR),HL
         LD A,6
         LD (GLYPH_WIDTH),A
-        LD HL,0x3235
+        LD HL,FONT+8*32
         LD (GLYPH_PTR),HL
         CALL sub_086e
         CALL effect_step
@@ -2881,7 +2993,7 @@ L_1233:
         LD (CUR_CHAR),A
         LD A,5
         LD (GLYPH_WIDTH),A
-        LD HL,0x3235
+        LD HL,FONT+8*32
         CALL sub_11ea
         CALL sub_11fe
         POP BC
@@ -4387,7 +4499,7 @@ L_1b9f:
         JR z,L_1c12
         LD B,0
         LD C,A
-        LD IX,0x372d
+        LD IX,CHAR_FLAGS
         ADD IX,BC
         BIT 1,(IX+0)
         JR z,L_1bd8
@@ -4403,7 +4515,7 @@ L_1bbd:
 L_1bc7:
         LD B,0
         LD C,A
-        LD IX,0x372d
+        LD IX,CHAR_FLAGS
         ADD IX,BC
         BIT 1,(IX+0)
         JR z,L_1bd8
@@ -4935,7 +5047,7 @@ L_1f59:
 L_1f5b:
         LD L,A
         LD IX,MENU_ENTRY_BUF
-        LD IY,0x18ec
+        LD IY,DEC_TABLE+4
         CALL sub_18cb
         LD HL,MENU_ENTRY_BUF
         LD B,3
@@ -5443,7 +5555,7 @@ L_22a5:
 L_22b5:
         LD A,0xff
         LD (VAR_420F),A
-        LD HL,0x3c09
+        LD HL,TEST_MESSAGE
         LD DE,VAR_43A5
 
 L_22c0:
@@ -5677,7 +5789,7 @@ L_2465:
         JR z,L_247f
         LD A,0xff
         LD (VAR_4241),A
-        LD HL,0x2f9b
+        LD HL,STR_SHIFT
         LD (MENU_MSG_PTR),HL
 
 L_247f:
@@ -6236,7 +6348,7 @@ L_287d:
         JP L_28e0
 
 L_2892:
-        LD HL,0x2d62
+        LD HL,ATTR_LABEL_TABLE
         LD A,(CUR_CHAR)
         LD E,A
         LD D,0
@@ -6294,42 +6406,42 @@ L_28f3:
         LD A,(VAR_4221)
         AND A
         JR z,L_2904
-        LD HL,0x2fe3
+        LD HL,STR_GRAPH
         JP L_2988
 
 L_2904:
         LD A,(VAR_4220)
         OR A
         JR z,L_2910
-        LD HL,0x2f52
+        LD HL,STR_COLOR
         JP L_2988
 
 L_2910:
         LD A,(FB_TMP)
         OR A
         JR z,L_291c
-        LD HL,0x2f59
+        LD HL,STR_BGRND
         JP L_2988
 
 L_291c:
         LD A,(VAR_43CA)
         OR A
         JR z,L_2928
-        LD HL,0x2f83
+        LD HL,STR_FUNC
         JP L_2988
 
 L_2928:
         LD A,(VAR_4364)
         OR A
         JR z,L_2934
-        LD HL,0x2f89
+        LD HL,STR_EURO
         JP L_2988
 
 L_2934:
         LD A,(VAR_43CF)
         OR A
         JP z,L_2941
-        LD HL,0x2fdb
+        LD HL,STR_SPEED
         JP L_2988
 
 L_2941:
@@ -7472,38 +7584,30 @@ FONT:
         db 0x76,0x01,0x00,0x00,0x00,0x00,0x00,0x02           ; glyph 188 width 2
         db 0x44,0x7e,0x45,0x00,0x00,0x00,0x00,0x03           ; glyph 189 width 3
         db 0x30,0x48,0x4c,0x4a,0x30,0x00,0x00,0x05           ; glyph 190 width 5
-        db 0x07,0x07,0x07,0x02,0x07,0x07,0x02,0x02           ; glyph 191 width 2
-        db 0x07,0x07,0x07,0x07,0x07,0x07,0x07,0x02           ; glyph 192 width 2
-        db 0x02,0x02,0x02,0x02,0x02,0x00,0x00,0x00           ; glyph 193 width 0
-        db 0x02,0x02,0x02,0x02,0x07,0x07,0x07,0x02           ; glyph 194 width 2
-        db 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00           ; glyph 195 width 0
-        db 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00           ; glyph 196 width 0
-        db 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00           ; glyph 197 width 0
-        db 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00           ; glyph 198 width 0
-        db 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00           ; glyph 199 width 0
-        db 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00           ; glyph 200 width 0
-        db 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00           ; glyph 201 width 0
-        db 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00           ; glyph 202 width 0
-        db 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00           ; glyph 203 width 0
-        db 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00           ; glyph 204 width 0
-        db 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00           ; glyph 205 width 0
-        db 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00           ; glyph 206 width 0
-        db 0x02,0x02,0x02,0x02,0x02,0x02,0x02,0x02           ; glyph 207 width 2
-        db 0x02,0x02,0x02,0x02,0x02,0x02,0x02,0x02           ; glyph 208 width 2
-        db 0x02,0x02,0x02,0x02,0x00,0x00,0x00,0x00           ; glyph 209 width 0
-        db 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x07           ; glyph 210 width 7
-        db 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00           ; glyph 211 width 0
-        db 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00           ; glyph 212 width 0
-        db 0x02,0x07,0x07,0x07,0x07,0x07,0x07,0x07           ; glyph 213 width 7
-        db 0x00,0x02,0x02,0x02,0x02,0x02,0x02,0x07           ; glyph 214 width 7
-        db 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00           ; glyph 215 width 0
-        db 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00           ; glyph 216 width 0
-        db 0x02,0x02,0x02,0x02,0x02,0x02,0x02,0x02           ; glyph 217 width 2
-        db 0x02,0x02,0x02,0x07,0x00,0x00,0x00,0x00           ; glyph 218 width 0
-        db 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00           ; glyph 219 width 0
-        db 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00           ; glyph 220 width 0
-        db 0x02,0x02,0x02,0x02,0x02,0x02,0x02,0x02           ; glyph 221 width 2
-        db 0x07,0x07,0x07,0x07,0x07,0x07,0x07,0x07           ; glyph 222 width 7
+
+; ---- CHAR_FLAGS: 256 bytes, indexed by character code. Bit 0 is tested by
+;      sub_04e5 (substitutes 0x3F for the character), bit 1 by the message
+;      scanners to decide whether a byte is printable text. Rendered as part
+;      of FONT by the original disassembly, but it is not glyph data - FONT
+;      holds glyphs 0..190 and this table begins immediately after.
+CHAR_FLAGS:
+        db 0x07,0x07,0x07,0x02,0x07,0x07,0x02,0x02,0x07,0x07,0x07,0x07,0x07,0x07,0x07,0x02   ; char 00-0f
+        db 0x02,0x02,0x02,0x02,0x02,0x00,0x00,0x00,0x02,0x02,0x02,0x02,0x07,0x07,0x07,0x02   ; char 10-1f
+        db 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00   ; char 20-2f
+        db 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00   ; char 30-3f
+        db 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00   ; char 40-4f
+        db 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00   ; char 50-5f
+        db 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00   ; char 60-6f
+        db 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00   ; char 70-7f
+        db 0x02,0x02,0x02,0x02,0x02,0x02,0x02,0x02,0x02,0x02,0x02,0x02,0x02,0x02,0x02,0x02   ; char 80-8f
+        db 0x02,0x02,0x02,0x02,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x07   ; char 90-9f
+        db 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00   ; char a0-af
+        db 0x02,0x07,0x07,0x07,0x07,0x07,0x07,0x07,0x00,0x02,0x02,0x02,0x02,0x02,0x02,0x07   ; char b0-bf
+        db 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00   ; char c0-cf
+        db 0x02,0x02,0x02,0x02,0x02,0x02,0x02,0x02,0x02,0x02,0x02,0x07,0x00,0x00,0x00,0x00   ; char d0-df
+        db 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00   ; char e0-ef
+        db 0x02,0x02,0x02,0x02,0x02,0x02,0x02,0x02,0x07,0x07,0x07,0x07,0x07,0x07,0x07,0x07   ; char f0-ff
+
 
 ; ---- data 382d-386c: glyph-order character lists used by char_to_glyph (lower-case font)
 CHARSET_LOWER:
@@ -7555,7 +7659,12 @@ DEMO_MESSAGE:
         db 0x11,".....INCLUDING...... CLOCK _",0x14,"  FLASH ",0x11,".....BEEP ",0x07,0x07
         db " ",0x07,"..... ",0x12,"BOLD ...... ",0x13,"ITALIC ",0x11,".....",0x14,"AND ...."
         db ". CUSTOM GRAPHICS ",0xa2,0xa3,0xa5,0xaa,0xab,"..... OR YOUR OWN LOGO..... "
-        db 0xbe,"TINY PRICE          ",0x10,"LARGE  IMPACT!!",0x03,0xdb,"CURRENT TEST  "
+        db 0xbe,"TINY PRICE          ",0x10,"LARGE  IMPACT!!",0x03,0xdb
+
+; ---- TEST_MESSAGE: built-in test pattern (L_22b5). Sits inside the demo
+;      text block but is a separate message with its own 0x03 terminator.
+TEST_MESSAGE:
+        db "CURRENT TEST  "
         db 0x10,0x17,0x17,0x17,0x17,0x17,0x17,0x17," ",0x03
 
 ; ============================================================================

@@ -46,7 +46,23 @@ Data blocks in ROM: `INIT_DATA 0601`, `RX_TIMING 164A`, `TX_TIMING 1654`,
 `IGNORE_TABLE 2D57`, `ATTR_LABEL_TABLE 2D62` (editor label tables and their
 strings run to `2FF2`; previously mislabelled `GLYPH_PTR_TABLE` — it holds no
 glyph pointers and was never referenced), `MENU_STRINGS 2FF3`, `FONT 3135`
-(8 bytes/glyph: 7 columns + width), `CHARSET_* 382D–396E`, `DEMO_MESSAGE 396F`.
+(8 bytes/glyph: 7 columns + width, **glyphs 0–190 only**), `CHAR_FLAGS 372D`,
+`CHARSET_* 382D–396E`, `DEMO_MESSAGE 396F`, `TEST_MESSAGE 3C09`.
+
+`CHAR_FLAGS` (`372D`, 256 bytes indexed by character code) was rendered as 32
+further `FONT` glyphs by the original disassembly, but it is a flags table: bit
+0 is tested by `sub_04e5`, bit 1 by the message scanners to decide whether a
+byte is printable text. `TEST_MESSAGE` is a built-in test pattern ("CURRENT
+TEST" plus seven `17` bytes) sitting inside the demo text with its own `03`.
+
+`INIT_DATA` is four RAM images copied out by `init_vars` — to `FB_COLPTR`
+(10 bytes), `EFFECT_TMP` (8), `CLK_RUN` (90) and `4336` (36) — so every byte
+maps to a known variable; the source is annotated accordingly. Offsets
+`+12..+17` and `+72` are copied nowhere and are dead. Six entries hold **ROM
+addresses as data** (`RX_TIMING` ×2, `rx_st_wait_start` ×2, `TX_TIMING` ×2):
+they must stay symbolic, or moving any code before `164A` silently breaks the
+serial engine with no build error. Note the two `RX_TIMING` copies land at
+`4257`/`4259`, *not* on `RX_TIMING_PTR` (`4256`).
 
 ## 2. Execution architecture [H]
 
