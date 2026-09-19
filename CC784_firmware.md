@@ -249,9 +249,14 @@ dispatches on the bytes above. `attr_colour_speed` handles `80–8F` foreground
 D-RED D-YEL D-LIM LIME M-RED D-ORA M-YEL LEMON RED ORANGE GOLD YELLOW), `90–9F`
 background, `A0–AF` second colour range, `F0–F7` speed. `B0` remark (skip to
 next `B0`), `B8` graphic, `BA` wait-for-key, `BC` rainbow, `5F` time.
-Glyphs: `char_to_glyph` → index → `FONT + 8*idx`; extended glyph ranges
-`94–9D`, `C0–CF`, `E0–EF`. Movement effects are state machines in `fx_*`
-driven from `main_loop` via `EFFECT_VECTOR`.
+Glyphs: `char_to_glyph` → index → `FONT + 8*idx`. Codes `94–9E`, `C0–CF`,
+`DC–DF` and `E0–EF` are the **47 European accented characters** [H] — the
+count matches the demo text's "PROGRAMS 47 EUROPEAN CHARACTERS" exactly, the
+glyphs render as Á á Ç ç Ë É é ä ö ü å, and the editor displays "EURO" while
+that layer is active (`2928`). They are *not* graphics: built-in graphics are
+the `1E` GRAPH attribute and user-drawn ones the `B8` DRAW attribute.
+Movement effects are state machines in `fx_*` driven from `main_loop` via
+`EFFECT_VECTOR`.
 
 ## 8. IR remote decoder (`ir_*`, `1482–1571`) [H — verified against a capture of the sign's own receiver]
 
@@ -275,7 +280,7 @@ one `0xBE` frame on release.
 
 Consumer (`editor_getkey 233F`): `code & 0x3F` → **`IR_KEY_TABLE` gives a glyph
 index**, which is looked up in `CHARSET_UPPER`/`CHARSET_UPPER2` (shifted) /
-`CHARSET_LOWER*` (case) / `CHARSET_GRAPHICS` to get the character or control
+`CHARSET_LOWER*` (case) / `CHARSET_EURO` (the EUROPE layer) to get the character or control
 byte. Key 29 is SHIFT (toggles `4337`, intercepted before the table). A key is
 accepted on its *second* consecutive frame (debounce), auto-repeats after ~1 s
 (`GEN_COUNTDOWN 0x514`) at ~0.23 s (`0x12C`); key 36 (STOP/START, code `0xA4`, glyph CR)
@@ -304,9 +309,9 @@ handler path (`IR_CODE` A4/A5) and no keypad is fitted on this unit
 position). That number then indexes one of five 64-byte tables to get the
 character or attribute byte, chosen at `23C1`:
 
-| `GRAPH_STATE` | `SHIFT_STATE` | `CAPS_LOCK` | table |
+| `EURO_STATE` | `SHIFT_STATE` | `CAPS_LOCK` | table |
 |---|---|---|---|
-| set | — | — | `CHARSET_GRAPHICS` |
+| set | — | — | `CHARSET_EURO` |
 | clear | clear | `00` | `CHARSET_LOWER` |
 | clear | clear | `FF` | `CHARSET_UPPER` |
 | clear | set | `00` | `CHARSET_UPPER2` |
@@ -314,8 +319,15 @@ character or attribute byte, chosen at `23C1`:
 
 So SHIFT selects the alternate *function* layer **and** flips case, while
 `CAPS_LOCK` (`4358`, toggled at `216C`, defaults to `FF`) flips case alone.
-`SHIFT_STATE` (`4337`) and `GRAPH_STATE` (`4364`, toggled at `2184`) are both
+`SHIFT_STATE` (`4337`) and `EURO_STATE` (`4364`, toggled at `2184`) are both
 one-shot — cleared after every key.
+
+Both toggles live on **one physical key**, confirmed against the remote: it is
+labelled **UPPER/LOWER**, with **EUROPE** as its shifted function. Unshifted
+(key 41, IR code `95`, byte `1C`) it toggles `CAPS_LOCK`; shifted (byte `B6`)
+it toggles `EURO_STATE`. The EUROPE layer was initially misread as a graphics
+mode — `CHARSET_EURO` was named `CHARSET_GRAPHICS` — but it selects the 47
+accented characters of §7, and the firmware displays "EURO" for it at `2928`.
 
 The tables are laid out 8 keys per row in the source with each entry glossed,
 so the full map is readable there. It cross-checks the attribute names from
