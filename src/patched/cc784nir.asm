@@ -228,22 +228,22 @@ L_000f:
         EI
         JP main_loop
 
-; ---- data 001c-0037: unused
-        ds 28,0xff
+; ---- pad to 0x0038, the Z80's fixed IM 1 interrupt vector
+        ds 0x0038-$,0xff
 
 ; ---- INT_VECTOR: IM1 interrupt entry (periodic timer, ~1300 Hz)
 INT_VECTOR:
         JP int_timer
 
-; ---- data 003b-0047: unused
-        ds 13,0xff
+; ---- pad to 0x0048, where the ID string sits
+        ds 0x0048-$,0xff
 
 ; ---- data 0048-0057: 16-byte firmware ID, returned by query B4 '0'
 ROM_ID:
         db "78409O1702930205"
 
-; ---- data 0058-0065: unused
-        ds 14,0xff
+; ---- pad to 0x0066, the Z80's fixed NMI vector
+        ds 0x0066-$,0xff
 
 ; ---- NMI_VECTOR: NMI = real-time clock tick (mains frequency); calls clock_tick
 NMI_VECTOR:
