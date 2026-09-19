@@ -98,9 +98,11 @@ def encode_text(s: str) -> bytes:
 # ---- framing --------------------------------------------------------------
 def frame(addr: int, payload: bytes, flag: int = 0x80) -> bytes:
     """flag 0x80 = firmware processes the packet inside the interrupt (NETCC default).
-    Any other value defers processing to the main loop. Queries (B4) MUST use the
-    deferred mode: processed immediately they spin-wait on the transmitter from
-    inside the interrupt service and lock the sign up."""
+    Any other value defers processing to the main loop, which only looks at the end
+    of the current display cycle - and while a deferred packet is pending, the
+    next frame's address byte 01 drops the sign into the editor (firmware notes
+    B9). Stock firmware needed deferred mode for B4 queries (stack overflow, B1);
+    the patched firmware does not."""
     if not 0 <= len(payload) <= 254:
         raise ValueError("payload must be 0..254 bytes")
     return bytes([START, addr, flag, len(payload)]) + payload + bytes([sum(payload) & 0xFF])
@@ -152,7 +154,10 @@ class Sign:
             if not expect_ack:
                 time.sleep(0.3)          # let the sign process (it does so with interrupts off)
                 return True
-            r = self.read_bytes(1, self.timeout)
+            # the ACK follows the last byte, and 300 baud moves ~27 bytes/s: a long
+            # frame is still on the wire when a fixed timeout would expire, and a
+            # retry mid-frame is what desyncs the parser
+            r = self.read_bytes(1, self.timeout + len(f) * 10 / 300.0)
             if r == bytes([ACK]):
                 print("  ACK"); return True
             if r == bytes([NAK]):
@@ -184,9 +189,13 @@ class Sign:
         return bytes(buf)
 
     def query(self, n: str):
-        # queries always reply, even to broadcast; ACK (if addressed) comes first
-        # flag 0x00: deferred processing - see frame(). Reply follows the ACK (if addressed).
-        self.send_frame(b'\xB4' + n.encode(), expect_ack=False, flag=0x00)
+        # queries always reply, even to broadcast; ACK (if addressed) comes first.
+        # Immediate mode (0x80): the patched firmware's relocated stack makes it
+        # safe, and the reply follows the ACK at once. Deferred mode (0x00) was
+        # the stock workaround, but its reply only comes at the end of the
+        # current display cycle, and while it is pending the next frame's
+        # address byte 01 drops the sign into the editor (firmware notes B9).
+        self.send_frame(b'\xB4' + n.encode(), expect_ack=False, flag=0x80)
         return self.read_reply()
 
 # ---- commands ---------------------------------------------------------------

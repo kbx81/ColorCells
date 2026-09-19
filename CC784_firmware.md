@@ -37,6 +37,19 @@ hardware; **[M]** structure understood, details inferred; **[L]** hypothesis.
 | `5FF1–5FFB` | packet-parser state (`PKT_STATE`, `PKT_CKSUM`, `PKT_FLAG`, `PKT_LEN`, `PKT_VECTOR`, `PKT_ADDR`, `PKT_PTR`, `PKT_REMAIN`) |
 | `8000` | memory-mapped write-only **control latch** (`CTRL_LATCH`), shadow copy at `422D` |
 
+Those are the stock addresses. Every RAM symbol is now written as
+`FRAMEBUF`, `FRAMEBUF_SIZE` or `RAM_VARS+offset` (the variable block's layout
+is baked into `INIT_DATA`, so only its base moves), and the **patched build
+uses a different geometry** (patch 7):
+
+| Range | Use |
+|---|---|
+| `4000–40BF` | `FRAMEBUF` — 192-byte column ring (was 344 from `4040`) |
+| `40C0–4309` | pointers, `TXBUF`, variables — same layout, 216 bytes lower |
+| `430A–5E6F` | `MSG_STORE`, **7014 bytes** (stock 6926, previous patched 6670) |
+| `5E70–5EEF` | **stack**, 128 bytes (`STACK_SIZE`) |
+| `5EF0–5FFF` | packet flag, buffer and parser state, unchanged |
+
 I/O ports: `IN C0` (input mux), `OUT 40` (column shift clock), `OUT 48–4F`
 (column data, row in A0–A2), `OUT 80` (strobe). See hardware notes.
 
@@ -101,6 +114,25 @@ I/O decode, not a latch bit. `CTRL_LATCH` bit 7 (`LATCH_BIT7`) is toggled by
 the firmware every 13 frames (≈210 ms, a 2.4 Hz square wave): **it is the
 FLASH blink clock** [H — a build with 7 instead of 13 blinked at ~5 Hz on the
 sign]. The patched source exposes the count as `FLASH_HALF_PERIOD`.
+
+**The CPU runs at 8 MHz [H by arithmetic, seen in emulation].** Per tick the
+ISR costs ~190 T and the IR handler ~100 T; six of those plus one row refresh
+(OTIR 86 bytes, ~2200 T) come to ~3900 T per `tick6_service` period. At 4 MHz
+that period is 3072 T, so the service could never finish before the next one
+was scheduled — the emulator shows exactly that runaway nesting at 4 MHz and
+a stable ~40-byte stack at 8 MHz. Hardware question H1 is settled from the
+firmware side.
+
+**Stack use, measured [H in emulation]:** `tools/cc784_sim.py stack` drives
+the ROM through the demo, a message using every effect, the three `B4`
+queries and an editor session while watching every write at SP. High-water
+marks: demo 40 bytes, effects 46, editor menus 52–62, `B4` queries **70** —
+always the NMI frame landing on top of a query's `tx_send_byte` chain with a
+tick interrupt in progress. Stock's 64-byte stack loses 6–17 bytes into ROM on
+every `B4`, which is B1 in numbers. The worst case that can be constructed by
+hand (query chain 26 + `tick6_service` 28 + a nested `tick6_service` from the
+ACK spin 28 + IR tick 10 + NMI 12) is ~108, so a 128-byte stack is the right
+size and 256 was twice too generous.
 
 ## 3. Serial link [H]
 
@@ -488,6 +520,15 @@ only `STORE_END − STORE_CURSOR + 1` bytes — 174 for channel 42 in an empty
 store, i.e. ~39× fewer; for channel 0 it is ~6900× fewer. Verified by
 simulating both loops: the resulting store is byte-identical.
 
+### B9 — a pending deferred packet turns the next frame into an editor session **[H in emulation]**
+While a packet accepted with `PKT_FLAG != 80` waits for `main_loop` to get
+round to it, `rx_idle_byte` ignores the next `B1` but not the bytes after it:
+the address byte goes through `rx_not_start`, and `CP 1 → key_handler` opens
+the on-sign editor if it is `01`. With patch 4 making address 1 the default,
+every frame to a sign that still has a deferred packet pending drops it into
+the editor, which then echoes every following byte on TX. Harmless with
+NETCC (always `80`) and with `cc784.py`; a trap for hand-built frames only.
+
 ## 11. Patches
 
 Applied in `src/patched/cc784nir.asm`. `src/stock/cc784nir.asm` is the
@@ -510,7 +551,8 @@ other difference is drift and should be reconciled.
 ### Applied
 
 1. **Relocate the stack** (fixes B1). `STACK_TOP` `403F` → `5EF0`, giving a
-   256-byte stack at `5DF0–5EEF` carved off the top of the message store.
+   stack carved off the top of the message store — originally 256 bytes,
+   now 128 (`STACK_SIZE`, see patch 7 and the measurements in §2).
    There are **seven** `LD SP,403F` sites, not three: reset `0000`,
    `fx_end_of_channel` `0F5E`, `menu_enter` `19CA`, `key_handler` `1A0D`,
    `1CEE`, `pkt_process` `2A70`, `pkt_process_done` `2B68`. Worst-case demand
@@ -546,6 +588,31 @@ other difference is drift and should be reconciled.
    channel empty and runs the demo, exactly as after a CLR ALL. With a battery
    and valid RAM the branch is skipped, as before. The clock runs from midnight
    rather than waiting to be set.
+7. **RAM re-layout: 7014-byte store** (+344 over patch 1's layout, +88 over
+   stock). Three changes, each a constant:
+   - `STACK_SIZE` 256 → 128, sized from the measured 70-byte high-water mark
+     and the ~108-byte constructed worst case (§2).
+   - `FRAMEBUF_SIZE` 344 → 192. The column ring only ever holds the 86
+     visible columns plus the glyph being written (at most 32 more; the
+     renderer waits for the scroll to catch up before the next one) — the
+     four-rows-of-86 size was never used as such. The one thing that needed
+     the extra room was TINY mode's output frame at `FRAMEBUF+202`; it now
+     lives in `TXBUF`, which is idle while TINY text is displayed (effects are
+     off, and a packet resets everything anyway). The TINY line buffer itself
+     (`FRAMEBUF_TINY`, 189 bytes from the ring start) still fits.
+   - `FRAMEBUF` `4040` → `4000`: the old 64-byte stack slot was dead space in
+     the patched build.
+   Verified in emulation: `cc784_sim.py compare` against the previous patched
+   build gives the same sequence of frames (bar a few caught one scroll step
+   apart) for effects, RAINBOW, BIG/ITALIC, DRAW, THIN, the clock, TINY and
+   the editor, and the same serial replies. **On the sign, 2026-09-19:** `B4 '1'`
+   reports `total 07014`; a message using TINY, PAUSE, BIG, UP, DOWN, RIGHT,
+   RAINBOW, FLASH and the clock loaded with one ACK; `B4 '3'` returned the
+   store intact (372 bytes, checksum OK) and `free` dropped by exactly 372.
+   The same session showed why `cc784.py` had to change: its queries used
+   deferred mode, and a fixed 3 s ACK timeout retried a 97-byte frame that was
+   still on the wire, which desynced the parser and, via B9, opened the editor.
+   Queries are now immediate and the timeout scales with frame length.
 
 ### Rejected
 
@@ -607,6 +674,18 @@ Or the `Build stock ROM` / `Build patched ROM` tasks. `src/stock/cc784nir.bin`
 must stay at md5 `c021af146a50b93a22d13535201b7eaa` — that is the regression
 test for every edit to the stock source, and the `Verify stock ROM is
 byte-identical` task asserts it.
+
+**Emulation.** `tools/cc784_sim.py` runs either build under an emulated Z80
+(kosarev's `z80` package; `uv run tools/cc784_sim.py …` fetches it) with a
+fake 300-baud line, IR receiver and mains NMI. `stack [stock|patched]` prints
+the stack high-water mark and the transmitted bytes through a scripted
+session; `compare DIR_A DIR_B` assembles two source trees and checks that the
+panel sees the same sequence of frames and the PC the same replies. It
+reproduces the hardware captures byte for byte (`B4 '0'` → `06 B1 01 10
+"78409O1702930205" 58`) and B1's overflow on stock, so it is the regression
+test for anything that moves RAM or touches the interrupt paths. MAGIC mode
+seeds its randomness from the mains counter, so frame comparisons use a
+message without it.
 
 For a W27C512 in the 27C256 socket, program the 32 KB image twice
 (`cat cc784nir.bin cc784nir.bin > w27c512.bin`): the board ties pin 1 (A15)

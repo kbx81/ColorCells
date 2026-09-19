@@ -79,9 +79,12 @@ Substitutes, given the above:
 
 8.000 MHz crystal → HC04 oscillator → HC4020. The firmware's bit tables give
 300 baud only if the interrupt is **7812.5 Hz = 8 MHz / 1024 = HC4020 Q10**.
-Whether the Z80 clock is 8 MHz (from the HC04 directly) or 4 MHz (HC4020 Q1) is
-**not yet determined** (open question H1). A 150 ns EPROM is comfortable at
-4 MHz and marginal at 8 MHz without a wait state.
+The Z80 clock is **8 MHz** (the HC04 output directly, not HC4020 Q1): the
+firmware's per-tick interrupt work plus one row refresh is ~3900 T, more than
+the 3072 T a 4 MHz CPU would have between `tick6_service` calls, so at 4 MHz
+the service could never finish before being scheduled again (firmware notes
+§2; the emulator shows the runaway). A 150 ns EPROM at 8 MHz with no wait
+state is marginal on paper, which the part evidently tolerates.
 
 NMI: 60 Hz from the AC input via a zero-cross detector (`NMI_PER_SEC = 60`).
 With a DC supply the clock would not run; the supplied PSU is AC, so it does.
@@ -166,8 +169,8 @@ Identified so far:
 
 ## 9. Open questions (ordered by value), with how to answer each
 
-- **H1. CPU clock.** Scope Z80 pin 6: 8 MHz vs 4 MHz. Or trace HC04 output /
-  HC4020 pin 9 (Q1) to Z80 pin 6.
+- ~~H1. CPU clock~~ — **8 MHz**, settled from the firmware's tick budget (§3).
+  A scope on Z80 pin 6 would only confirm it.
 - **H2. INT source.** Confirm Z80 pin 16 is ~7.8 kHz and comes from HC4020
   pin 14 (Q10).
 - **H3. Control-latch bit map.** Follow the `8000` LS273's Q0–Q7: expect
