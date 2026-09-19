@@ -1,15 +1,15 @@
 ; ============================================================================
 ;  Color Cells CC784NIR LED sign - PATCHED firmware source
 ;  Assemble:  sjasmplus cc784nir.asm   (produces cc784nir_patched.bin, 32768 B)
-;  NOT byte-identical to the dump - 55 bytes differ. The untouched
-;  reconstruction is ../stock/cc784nir.asm; diff the two to see the patches.
+;  NOT byte-identical to the dump. The untouched reconstruction is
+;  ../stock/cc784nir.asm; diff the two to see the patches.
 ; ============================================================================
         DEVICE NONE
 
-; Patched build: the five fixes in CC784_firmware.md §11 are applied here,
+; Patched build: the fixes described in CC784_firmware.md §11 are applied here,
 ; all written inline (the source is relocatable, so addresses above 0x144A
 ; differ from stock). Diff against ../stock/cc784nir.asm to see exactly what
-; changed; everything else is kept identical on purpose.
+; changed; everything else is intentionally kept identical.
 
         OUTPUT "cc784nir_patched.bin"
 
@@ -1121,6 +1121,17 @@ init_clear_addrbuf:
         LD (MY_ADDRESS),HL
         NOP
         NOP
+        ; P6: RAM is fresh, so the clock bytes are noise too - the image copy
+        ; below starts at CLK_RUN and never touches 4200-4205. Start 12:00 AM.
+        LD HL,0x0201
+        LD (CLK_H10),HL         ; CLK_H10 = 1, CLK_H1 = 2
+        LD HL,0
+        LD (CLK_M10),HL         ; CLK_M10, CLK_M1
+        LD (CLK_SEC),HL         ; CLK_SEC, CLK_PM (0 = AM)
+        ; The message store is noise as well; store_repair would only tidy it
+        ; into 100 channels of garbage. Empty it now: init_sequence then finds
+        ; every channel empty and runs the demo, as after a CLR ALL.
+        CALL store_clear_all
 
 init_copy_tables:
         LD HL,INIT_DATA

@@ -503,8 +503,6 @@ therefore written inline, which removed the two helpers along with their
 `CALL`/`RET` and register saves. Patched addresses now differ from stock above
 `144A` — that is expected and harmless.
 
-Patched image md5 `2aa8640c33a4145e18f2a9f50d1e5c0a`.
-
 `diff src/stock/cc784nir.asm src/patched/cc784nir.asm` is the authoritative
 changelog: everything outside the patches is kept identical on purpose, so any
 other difference is drift and should be reconciled.
@@ -534,6 +532,20 @@ other difference is drift and should be reconciled.
    16-bit store writes both, and `FE` is a genuine complement of `01`.
 5. **Shift only the live store** (fixes B8). `LD HL,(STORE_LIMIT)` →
    `LD HL,(STORE_END)` at `2B3D` — a two-byte operand change.
+6. **Sane defaults after RAM loss: clock at 12:00 AM, empty store, demo.**
+   `init_vars` copies its RAM image from `CLK_RUN` up, so `CLK_H10`…`CLK_PM`
+   (4200–4205) are left alone on purpose, to survive a battery-backed power
+   cycle. Without a battery they are SRAM noise: `clock_tick` only tests for
+   equality, so a garbage second count runs through 255 before wrapping, and
+   `render_clock` shows digits 10–15 as `: ; < = > ?`. The message store is
+   noise too, and `store_repair` faithfully tidies it into 100 channels of
+   garbage that the default sequence then plays. The fix sits in the branch
+   patch 4 already owns — the `MY_ADDRESS`/complement check fails exactly when
+   RAM is fresh — and writes `1 2 0 0 0 0` to the six clock bytes (12:00,
+   seconds 0, AM) and calls `store_clear_all`, so `init_sequence` sees every
+   channel empty and runs the demo, exactly as after a CLR ALL. With a battery
+   and valid RAM the branch is skipped, as before. The clock runs from midnight
+   rather than waiting to be set.
 
 ### Rejected
 
