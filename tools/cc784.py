@@ -19,6 +19,8 @@ Examples
     cc784.py seq 0 1 2                  # display sequence
     cc784.py time                       # set clock from the PC
     cc784.py raw 09 30 30 0e 48 49      # send an arbitrary payload
+    cc784.py stop                       # bare 0x01: stop the display, enter the editor
+    cc784.py start                      # bare 0x0D: resume running (only if stopped)
 
 Options
     -p PORT      serial device (default /dev/tty.usbserial-110)
@@ -26,6 +28,11 @@ Options
     -g SEC       gap between bytes (default 0 - firmware doesn't need one; try 0.05 if flaky)
     -t SEC       reply timeout (default 3)
     -v           hex-dump everything sent/received
+
+'stop' and 'start' send one bare byte each, not a B1 frame: they take the
+keystroke path rather than the packet parser, so -a is irrelevant to them and
+nothing is ACKed. While stopped the sign is in its editor and accepts typed
+characters straight off the wire, so you can compose a message by hand.
 
 Wiring notes: the sign transmits on DB9 pin 3 and receives on pin 2 (DTE-like),
 so a PC needs a crossover. If 'sniff' shows nothing and 'id' gets no reply, swap
@@ -280,6 +287,32 @@ def run(link, a, ap):
     elif c == 'raw':
         s.send_frame(bytes(int(x, 16) for x in args))
         r = s.read_reply(1.5)
+        if r: print("  reply:", hexs(r), " ", printable(r))
+
+    elif c in ('stop', 'start'):
+        # Bare bytes, not framed packets - these go through rx_consume's
+        # keystroke path, not the B1 parser, so there is no address, no
+        # checksum and no ACK. 0x01 is caught at 0x02F1 (CP 1 -> key_handler)
+        # and drops the sign into the editor; 0x0D is the STOP/START key's
+        # own character (CP 13 -> L_1C5C in the editor dispatch) and resumes
+        # the display. 0x0D only does anything if the sign is already stopped.
+        #
+        # While stopped, rx_consume returns immediately on MENU_ACTIVE, so the
+        # packet parser is bypassed entirely - ordinary commands are swallowed
+        # as keystrokes and echoed back instead of being executed. Send 'start'
+        # before anything else.
+        #
+        # Beware the reverse, too: a bare 0x01 arriving while the parser is
+        # idle always means "stop". Any frame to address 1 contains a 0x01, so
+        # a desynced or interleaved frame (retries at 300 baud will do it) can
+        # drop the sign into the editor on its own. Seen in practice.
+        b = 1 if c == 'stop' else 13
+        link.reset_input()
+        link.write(bytes([b]))
+        print("  sent %02X - %s" % (b, "stopped; sign is now in the editor and "
+                                       "takes typed characters directly"
+                                       if c == 'stop' else "running"))
+        r = s.read_reply(1.5)      # the editor echoes keys when KEY_ECHO_TX is set
         if r: print("  reply:", hexs(r), " ", printable(r))
     else:
         ap.error("unknown command " + c)
