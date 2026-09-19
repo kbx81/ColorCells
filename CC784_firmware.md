@@ -298,6 +298,30 @@ latch upper nibble and the input mux; it is reached only through the IR
 handler path (`IR_CODE` A4/A5) and no keypad is fitted on this unit
 (earlier models had a wired keypad on a 10-pin IDC header).
 
+### Key layers [H]
+
+`IR_KEY_TABLE` turns an IR code into a key number 0–63 (the 8×8 matrix
+position). That number then indexes one of five 64-byte tables to get the
+character or attribute byte, chosen at `23C1`:
+
+| `GRAPH_STATE` | `SHIFT_STATE` | `CAPS_LOCK` | table |
+|---|---|---|---|
+| set | — | — | `CHARSET_GRAPHICS` |
+| clear | clear | `00` | `CHARSET_LOWER` |
+| clear | clear | `FF` | `CHARSET_UPPER` |
+| clear | set | `00` | `CHARSET_UPPER2` |
+| clear | set | `FF` | `CHARSET_LOWER2` |
+
+So SHIFT selects the alternate *function* layer **and** flips case, while
+`CAPS_LOCK` (`4358`, toggled at `216C`, defaults to `FF`) flips case alone.
+`SHIFT_STATE` (`4337`) and `GRAPH_STATE` (`4364`, toggled at `2184`) are both
+one-shot — cleared after every key.
+
+The tables are laid out 8 keys per row in the source with each entry glossed,
+so the full map is readable there. It cross-checks the attribute names from
+§7 independently: key 2 is BOLD unshifted and LEFT shifted, key 18 is
+MAGIC/MAGIC OFF, key 55 is COLOR/BGRND. Key 25 is SHIFT in every layer.
+
 ## 10. Bugs found
 
 ### B1 — `B4` queries overflow the stack and corrupt RAM **[H, reproduced on hardware]**

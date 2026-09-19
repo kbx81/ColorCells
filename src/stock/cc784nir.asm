@@ -158,13 +158,13 @@ SHIFT_STATE          equ 0x4337   ; SHIFT latch, toggled by key 29 (see section 
 VAR_4338             equ 0x4338
 VAR_433B             equ 0x433b
 VAR_4344             equ 0x4344
-VAR_4358             equ 0x4358
+CAPS_LOCK             equ 0x4358
 VAR_435A             equ 0x435a
 VAR_4360             equ 0x4360
 VAR_4361             equ 0x4361
 VAR_4362             equ 0x4362
 VAR_4363             equ 0x4363
-VAR_4364             equ 0x4364
+GRAPH_STATE             equ 0x4364
 VAR_4365             equ 0x4365
 VAR_4377             equ 0x4377
 VAR_4381             equ 0x4381
@@ -1058,7 +1058,7 @@ L_055f:
         DJNZ L_055f
         LD (VAR_439B),A
         LD (VAR_4360),A
-        LD (VAR_4364),A
+        LD (GRAPH_STATE),A
         LD (VAR_4213),A
         LD (VAR_4361),A
         LD (VAR_43A2),A
@@ -1242,7 +1242,7 @@ INIT_DATA:
         db 0x00               ; 4354 
         db 0x00               ; 4355 
         dw TX_TIMING          ; +93 -> 4356
-        db 0xff               ; 4358 VAR_4358
+        db 0xff               ; 4358 CAPS_LOCK
         db 0xff               ; 4359 DISP_ENABLE
 
 ; ---- init_render: Reset render state for the current message
@@ -4259,7 +4259,7 @@ menu_enter:
 ; ---- key_handler: Handle a key / IR code: menu navigation (ADDRESS?, TIME?, PROG MSG?, SEQ MSG? ...)
 key_handler:
         LD A,0xff
-        LD (VAR_4358),A
+        LD (CAPS_LOCK),A
         LD A,1
         LD (KEY_ECHO_TX),A
 
@@ -5349,9 +5349,9 @@ L_212e:
         RET
 
 L_216c:
-        LD A,(VAR_4358)
+        LD A,(CAPS_LOCK)
         CPL
-        LD (VAR_4358),A
+        LD (CAPS_LOCK),A
 
 L_2173:
         LD HL,(STORE_CURSOR)
@@ -5363,9 +5363,9 @@ L_2173:
         JP L_2087
 
 L_2184:
-        LD A,(VAR_4364)
+        LD A,(GRAPH_STATE)
         CPL
-        LD (VAR_4364),A
+        LD (GRAPH_STATE),A
         LD HL,(STORE_CURSOR)
         LD A,(HL)
         CP 0xd0
@@ -5615,7 +5615,7 @@ L_231c:
         AND A
         JR z,L_233f
         XOR A
-        LD (VAR_4364),A
+        LD (GRAPH_STATE),A
         LD A,(VAR_4226)
         LD (VAR_4227),A
         LD A,(RX_LASTCMD)
@@ -5703,7 +5703,7 @@ L_23c1:
         ADD HL,DE
         LD A,(HL)
         LD (RX_BYTE),A
-        LD A,(VAR_4364)
+        LD A,(GRAPH_STATE)
         LD HL,CHARSET_GRAPHICS
         OR A
         JR nz,L_23f5
@@ -5712,14 +5712,14 @@ L_23c1:
         AND A
         JR z,L_23ec
         LD HL,CHARSET_UPPER2
-        LD A,(VAR_4358)
+        LD A,(CAPS_LOCK)
         AND A
         JR z,L_23f5
         LD HL,CHARSET_LOWER2
         JR L_23f5
 
 L_23ec:
-        LD A,(VAR_4358)
+        LD A,(CAPS_LOCK)
         AND A
         JR z,L_23f5
         LD HL,CHARSET_UPPER
@@ -5737,7 +5737,7 @@ L_23f5:
 
 L_2408:
         XOR A
-        LD (VAR_4364),A
+        LD (GRAPH_STATE),A
         LD A,(VAR_4226)
         LD (VAR_4227),A
         LD A,(RX_LASTCMD)
@@ -6411,7 +6411,7 @@ L_291c:
         JP L_2988
 
 L_2928:
-        LD A,(VAR_4364)
+        LD A,(GRAPH_STATE)
         OR A
         JR z,L_2934
         LD HL,STR_EURO
@@ -7594,42 +7594,77 @@ CHAR_FLAGS:
         db 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00   ; char e0-ef
         db 0x02,0x02,0x02,0x02,0x02,0x02,0x02,0x02,0x07,0x07,0x07,0x07,0x07,0x07,0x07,0x07   ; char f0-ff
 
+; ============================================================================
+;  Key-position -> character/attribute tables, one per input layer. Indexed by
+;  the key number that IR_KEY_TABLE yields, 64 keys laid out as the 8x8 matrix
+;  keypad_scan walks. Layer chosen at 0x23C1:
+;
+;      GRAPH_STATE set      -> CHARSET_GRAPHICS
+;      SHIFT_STATE clear    -> CHARSET_LOWER  / CHARSET_UPPER   (by CAPS_LOCK)
+;      SHIFT_STATE set      -> CHARSET_UPPER2 / CHARSET_LOWER2  (by CAPS_LOCK)
+;
+;  So SHIFT selects the alternate function layer and flips case; CAPS_LOCK
+;  flips case on its own. Both SHIFT_STATE and GRAPH_STATE are cleared after
+;  every key. Entries below 0x20 and 0xB0-0xBF are attribute bytes - the
+;  glosses are the editor's own names, from ATTR_LABEL_TABLE.
+; ============================================================================
 
-; ---- data 382d-386c: glyph-order character lists used by char_to_glyph (lower-case font)
+; ---- CHARSET_LOWER: unshifted, caps off
 CHARSET_LOWER:
-        db "kf",0x12,"pa",0x0e,0x11,0x1e," ",0x7f,")%zwyt"
-        db "ni",0x1f,"hd",0x09,0x1a,0x19,"0",0x1d,"2586k",0x00
-        db "lgvmq",0x04,0x10,0x14,".",0x1c,"(*+9xs"
-        db "ojbce",0x0d,0x07,0x15,0x08,0x0a,"1473ur"
+        db "kf",0x12,"pa",0x0e,0x11,0x1e              ; 00-07  k f BOLD p a 0E NORM GRAPH
+        db " ",0x7f,")%zwyt"                          ; 08-0f  SP 7F ) % z w y t
+        db "ni",0x1f,"hd",0x09,0x1a,0x19              ; 10-17  n i MAGIC h d PROG MSG? UP PAUSE
+        db "0",0x1d,"2586k",0x00                      ; 18-1f  0 SHIFT 2 5 8 6 k 00
+        db "lgvmq",0x04,0x10,0x14                     ; 20-27  l g v m q SEQ MSG? BIG FLASH
+        db ".",0x1c,"(*+9xs"                          ; 28-2f  . 1C ( * + 9 x s
+        db "ojbce",0x0d,0x07,0x15                     ; 30-37  o j b c e 0D BEEP COLOR
+        db 0x08,0x0a,"1473ur"                         ; 38-3f  08 0A 1 4 7 3 u r
 
-; ---- data 386d-38ac:
+; ---- CHARSET_UPPER: unshifted, caps on
 CHARSET_UPPER:
-        db "KF",0x12,"PA",0x0e,0x11,0x1e," ",0x7f,")%ZWYT"
-        db "NI",0x1f,"HD",0x09,0x1a,0x19,"0",0x1d,"2586K",0x00
-        db "LGVMQ",0x04,0x10,0x14,".",0x1c,"(*+9XS"
-        db "OJBCE",0x0d,0x07,0x15,0x08,0x0a,"1473UR"
+        db "KF",0x12,"PA",0x0e,0x11,0x1e              ; 00-07  K F BOLD P A 0E NORM GRAPH
+        db " ",0x7f,")%ZWYT"                          ; 08-0f  SP 7F ) % Z W Y T
+        db "NI",0x1f,"HD",0x09,0x1a,0x19              ; 10-17  N I MAGIC H D PROG MSG? UP PAUSE
+        db "0",0x1d,"2586K",0x00                      ; 18-1f  0 SHIFT 2 5 8 6 K 00
+        db "LGVMQ",0x04,0x10,0x14                     ; 20-27  L G V M Q SEQ MSG? BIG FLASH
+        db ".",0x1c,"(*+9XS"                          ; 28-2f  . 1C ( * + 9 X S
+        db "OJBCE",0x0d,0x07,0x15                     ; 30-37  O J B C E 0D BEEP COLOR
+        db 0x08,0x0a,"1473UR"                         ; 38-3f  08 0A 1 4 7 3 U R
 
-; ---- data 38ad-38ec:
+; ---- CHARSET_UPPER2: SHIFT held, caps off
 CHARSET_UPPER2:
-        db "KF",0x18,"PA",0x03,0x17,"_ ",0x7f,"&'ZWYT"
-        db "NI",0xbd,"HD",0x02,0x1b,0x19,"0",0x1d,"2586K",0x00
-        db "LGVMQ",0xbb,0x13,0x14,":",0xb6,"$#-9XS"
-        db "OJBCE",0xb7,0x0f,0x16,0x0b,0x0c,"1473UR"
+        db "KF",0x18,"PA",0x03,0x17,"_"               ; 00-07  K F LEFT P A END 17 _
+        db " ",0x7f,"&'ZWYT"                          ; 08-0f  SP 7F & ' Z W Y T
+        db "NI",0xbd,"HD",0x02,0x1b,0x19              ; 10-17  N I MAGIC OFF H D 02 DOWN PAUSE
+        db "0",0x1d,"2586K",0x00                      ; 18-1f  0 SHIFT 2 5 8 6 K 00
+        db "LGVMQ",0xbb,0x13,0x14                     ; 20-27  L G V M Q HOLD ITALIC FLASH
+        db ":",0xb6,"$#-9XS"                          ; 28-2f  : B6 $ # - 9 X S
+        db "OJBCE",0xb7,0x0f,0x16                     ; 30-37  O J B C E B7 RIGHT BGRND
+        db 0x0b,0x0c,"1473UR"                         ; 38-3f  0B 0C 1 4 7 3 U R
 
-; ---- data 38ed-392c:
+; ---- CHARSET_LOWER2: SHIFT held, caps on
 CHARSET_LOWER2:
-        db "kf",0x18,"pa",0x03,0x17,"_ ",0x7f,"&'zwyt"
-        db "ni",0xbd,"hd",0x02,0x1b,0x19,"0",0x1d,"2586k",0x00
-        db "lgvmq",0xbb,0x13,0x14,":",0xb6,"$#-9xs"
-        db "ojbce",0xb7,0x0f,0x16,0x0b,0x0c,"1473ur"
+        db "kf",0x18,"pa",0x03,0x17,"_"               ; 00-07  k f LEFT p a END 17 _
+        db " ",0x7f,"&'zwyt"                          ; 08-0f  SP 7F & ' z w y t
+        db "ni",0xbd,"hd",0x02,0x1b,0x19              ; 10-17  n i MAGIC OFF h d 02 DOWN PAUSE
+        db "0",0x1d,"2586k",0x00                      ; 18-1f  0 SHIFT 2 5 8 6 k 00
+        db "lgvmq",0xbb,0x13,0x14                     ; 20-27  l g v m q HOLD ITALIC FLASH
+        db ":",0xb6,"$#-9xs"                          ; 28-2f  : B6 $ # - 9 x s
+        db "ojbce",0xb7,0x0f,0x16                     ; 30-37  o j b c e B7 RIGHT BGRND
+        db 0x0b,0x0c,"1473ur"                         ; 38-3f  0B 0C 1 4 7 3 u r
 
-; ---- data 392d-396e: graphic / extended characters 0x94-0x9D, 0xC0-0xCF, 0xE0-0xEF
+; ---- CHARSET_GRAPHICS: GRAPH modifier active
 CHARSET_GRAPHICS:
-        db 0xca,0xc5,0x12,0xcf,0xc0,0xde,0x11,0x1e,0x9e,0x7f,0x9d,0x96,0xed,0xe6,0xe8,0xe3
-        db 0xcd,0xc8,0x1f,0xc7,0xc3,0xdc,0x1a,0x19,0x9b,0x1d,0x98,0xef,0xea,0x94,0xca,0x00
-        db 0xcb,0xc6,0xe5,0xcc,0xe0,0xdd,0x10,0x14,0x9c,0x1c,0x9a,0x95,0xec,0xeb,0xe7,0xe2
-        db 0xce,0xc9,0xc1,0xc2,0xc4,0xdf,0x07,0x15,0x08,0x0a,0x97,0xee,0xe9,0x99,0xe4,0xe1
-        db 0xda,0xda
+        db 0xca,0xc5,0x12,0xcf,0xc0,0xde,0x11,0x1e    ; 00-07  CA C5 BOLD CF C0 DE NORM GRAPH
+        db 0x9e,0x7f,0x9d,0x96,0xed,0xe6,0xe8,0xe3    ; 08-0f  9E 7F 9D 96 ED E6 E8 E3
+        db 0xcd,0xc8,0x1f,0xc7,0xc3,0xdc,0x1a,0x19    ; 10-17  CD C8 MAGIC C7 C3 DC UP PAUSE
+        db 0x9b,0x1d,0x98,0xef,0xea,0x94,0xca,0x00    ; 18-1f  9B SHIFT 98 EF EA 94 CA 00
+        db 0xcb,0xc6,0xe5,0xcc,0xe0,0xdd,0x10,0x14    ; 20-27  CB C6 E5 CC E0 DD BIG FLASH
+        db 0x9c,0x1c,0x9a,0x95,0xec,0xeb,0xe7,0xe2    ; 28-2f  9C 1C 9A 95 EC EB E7 E2
+        db 0xce,0xc9,0xc1,0xc2,0xc4,0xdf,0x07,0x15    ; 30-37  CE C9 C1 C2 C4 DF BEEP COLOR
+        db 0x08,0x0a,0x97,0xee,0xe9,0x99,0xe4,0xe1    ; 38-3f  08 0A 97 EE E9 99 E4 E1
+        db 0xda,0xda                                  ; 40-41  DA DA
+
 
 ; ---- data 396f-3c20: built-in demonstration message (contains control codes 10,11,12,13,14,BC,BE,8x colours,A2-AB graphics)
 DEMO_MESSAGE:
