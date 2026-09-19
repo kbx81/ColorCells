@@ -164,7 +164,7 @@ VAR_4360             equ 0x4360
 VAR_4361             equ 0x4361
 VAR_4362             equ 0x4362
 VAR_4363             equ 0x4363
-GRAPH_STATE             equ 0x4364
+EURO_STATE             equ 0x4364
 VAR_4365             equ 0x4365
 VAR_4377             equ 0x4377
 VAR_4381             equ 0x4381
@@ -1058,7 +1058,7 @@ L_055f:
         DJNZ L_055f
         LD (VAR_439B),A
         LD (VAR_4360),A
-        LD (GRAPH_STATE),A
+        LD (EURO_STATE),A
         LD (VAR_4213),A
         LD (VAR_4361),A
         LD (VAR_43A2),A
@@ -1591,7 +1591,7 @@ L_0937:
         RET
 
 ; ---- char_to_glyph: Map a character code to a font glyph index
-;      (CHARSET_LOWER..CHARSET_GRAPHICS select upper/lower/tiny fonts)
+;      (CHARSET_LOWER..CHARSET_EURO select upper/lower/tiny fonts)
 char_to_glyph:
         PUSH AF
         AND 0xf0
@@ -5363,9 +5363,9 @@ L_2173:
         JP L_2087
 
 L_2184:
-        LD A,(GRAPH_STATE)
+        LD A,(EURO_STATE)
         CPL
-        LD (GRAPH_STATE),A
+        LD (EURO_STATE),A
         LD HL,(STORE_CURSOR)
         LD A,(HL)
         CP 0xd0
@@ -5615,7 +5615,7 @@ L_231c:
         AND A
         JR z,L_233f
         XOR A
-        LD (GRAPH_STATE),A
+        LD (EURO_STATE),A
         LD A,(VAR_4226)
         LD (VAR_4227),A
         LD A,(RX_LASTCMD)
@@ -5703,8 +5703,8 @@ L_23c1:
         ADD HL,DE
         LD A,(HL)
         LD (RX_BYTE),A
-        LD A,(GRAPH_STATE)
-        LD HL,CHARSET_GRAPHICS
+        LD A,(EURO_STATE)
+        LD HL,CHARSET_EURO
         OR A
         JR nz,L_23f5
         LD A,(SHIFT_STATE)
@@ -5737,7 +5737,7 @@ L_23f5:
 
 L_2408:
         XOR A
-        LD (GRAPH_STATE),A
+        LD (EURO_STATE),A
         LD A,(VAR_4226)
         LD (VAR_4227),A
         LD A,(RX_LASTCMD)
@@ -6411,7 +6411,7 @@ L_291c:
         JP L_2988
 
 L_2928:
-        LD A,(GRAPH_STATE)
+        LD A,(EURO_STATE)
         OR A
         JR z,L_2934
         LD HL,STR_EURO
@@ -7599,12 +7599,16 @@ CHAR_FLAGS:
 ;  the key number that IR_KEY_TABLE yields, 64 keys laid out as the 8x8 matrix
 ;  keypad_scan walks. Layer chosen at 0x23C1:
 ;
-;      GRAPH_STATE set      -> CHARSET_GRAPHICS
+;      EURO_STATE  set      -> CHARSET_EURO
 ;      SHIFT_STATE clear    -> CHARSET_LOWER  / CHARSET_UPPER   (by CAPS_LOCK)
 ;      SHIFT_STATE set      -> CHARSET_UPPER2 / CHARSET_LOWER2  (by CAPS_LOCK)
 ;
+;  On the remote these are one key labelled UPPER/LOWER, whose shifted
+;  function is EUROPE: unshifted it toggles CAPS_LOCK (0x216C), shifted it
+;  toggles EURO_STATE (0x2184).
+;
 ;  So SHIFT selects the alternate function layer and flips case; CAPS_LOCK
-;  flips case on its own. Both SHIFT_STATE and GRAPH_STATE are cleared after
+;  flips case on its own. Both SHIFT_STATE and EURO_STATE are cleared after
 ;  every key. Entries below 0x20 and 0xB0-0xBF are attribute bytes - the
 ;  glosses are the editor's own names, from ATTR_LABEL_TABLE.
 ; ============================================================================
@@ -7653,8 +7657,12 @@ CHARSET_LOWER2:
         db "ojbce",0xb7,0x0f,0x16                     ; 30-37  o j b c e B7 RIGHT BGRND
         db 0x0b,0x0c,"1473ur"                         ; 38-3f  0B 0C 1 4 7 3 u r
 
-; ---- CHARSET_GRAPHICS: GRAPH modifier active
-CHARSET_GRAPHICS:
+; ---- CHARSET_EURO: EUROPE modifier active. 47 accented Latin characters in
+;      94-9E, C0-CF, DC-DF, E0-EF - the demo text advertises "PROGRAMS 47
+;      EUROPEAN CHARACTERS" and the editor displays "EURO" while this layer is
+;      live (0x2928). Not graphics: built-in graphics are the 1E GRAPH
+;      attribute, user-drawn ones the B8 DRAW attribute.
+CHARSET_EURO:
         db 0xca,0xc5,0x12,0xcf,0xc0,0xde,0x11,0x1e    ; 00-07  CA C5 BOLD CF C0 DE NORM GRAPH
         db 0x9e,0x7f,0x9d,0x96,0xed,0xe6,0xe8,0xe3    ; 08-0f  9E 7F 9D 96 ED E6 E8 E3
         db 0xcd,0xc8,0x1f,0xc7,0xc3,0xdc,0x1a,0x19    ; 10-17  CD C8 MAGIC C7 C3 DC UP PAUSE
