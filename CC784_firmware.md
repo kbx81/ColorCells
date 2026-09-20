@@ -385,14 +385,15 @@ the "clear all" sequence.
 
 ## 9. On-sign editor / menu (`19CA–2A60`) [M]
 
-`menu_enter` → `editor_loop`. `editor_getkey` (`2313`) takes keys from the
+`key_handler` → `editor_loop` (serial `01` or the STOP/START key; the
+`menu_enter` address-login gate in the ROM is unreachable and patch 9 drops
+it). `editor_getkey` (`2313`) takes keys from the
 serial RX FIFO *or* the IR decoder and **echoes the previous key on serial TX**,
 so the menu (ADDRESS?, TIME?, PROG MSG?, SEQ MSG? … in `MENU_STRINGS`) can be
 driven from a terminal. `editor_key_to_attr` (`2675`) maps function keys
 `10–1F` to message bytes. `keypad_scan` (`196A`) walks an 8×8 matrix via the
-latch upper nibble and the input mux; it is reached only through the IR
-handler path (`IR_CODE` A4/A5) and no keypad is fitted on this unit
-(earlier models had a wired keypad on a 10-pin IDC header).
+latch upper nibble and the input mux, but nothing calls it: leftover from the
+models with a wired keypad on a 10-pin IDC header. Patch 9 drops it.
 
 ### Editor keys [H — from `editor_dispatch`; remote labels from the owner]
 
@@ -644,6 +645,22 @@ other difference is drift and should be reconciled.
    and every channel's text intact, and the bytes that no longer fit were
    dropped silently as designed. The last text byte sits directly under the
    stack. B9 was reproduced on the sign in the same session.
+9. **Remove the unreachable code.** A static reachability walk over the
+   assembled listing (roots: the three vectors plus every label loaded as a
+   vector or stored as data) leaves five islands nothing can jump to:
+   `keypad_scan` (47 bytes — the notes had it reached from the IR path; it is
+   not referenced at all), `menu_enter` (48 bytes — an "enter your address or
+   `*`" gate that nothing enters; serial `01` goes to `key_handler`), and
+   three orphans behind unconditional jumps (an extra `LD A,0x20` after
+   `clock_emit`, a digit-decrement stub after `editor_key_bgrnd`, a stray
+   `DJNZ/JP` after `cursor_left_8`). Also gone: the raw bytes the disassembly
+   kept as `db` (an unreachable `JP render_loop`, a `RET`, a `JP`, the `AA 55`
+   pair), the five `NOP`s (two of them patch 4's size padding), and
+   `tick6_service`'s re-entrancy guard, which tested `(IX)==AA && (IY)==55`
+   against registers nothing ever points there. About 140 bytes of ROM, zero
+   behaviour: `compare` against patch 8 is clean. The walk also exposed the
+   last raw code address in the source, `LD HL,0xC4` for `tick6_service` in
+   `int_timer`, fixed in both trees in the patch 8 commit.
 
 ### Rejected
 
@@ -663,8 +680,8 @@ other difference is drift and should be reconciled.
   insert, which is exactly the interval the sender is trying to measure.
   Padding after each ACK remains the right mitigation. B8 shrinks the window
   it has to cover by one to three orders of magnitude.
-- **Remove dead code** — moves every address after the deletion and invalidates
-  the per-line address comments the source is verified against.
+- ~~Remove dead code~~ — the objection (it moves every address and breaks the
+  per-line address comments) died with the address comments; done as patch 9.
 
 ### Verified on hardware, 2026-09-18 (patched EPROM, ESPHome serial bridge)
 

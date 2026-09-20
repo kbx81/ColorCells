@@ -62,7 +62,7 @@ KEYS = {
 #   44 (CLEAR): shifted = CLEAR ALL (prompts CLR ALL Y/N)
 #   37 (SPACE): code 0xA5 is also recognised directly by rx_consume
 #   29 (SHIFT): toggles the shifted charset; not passed through the table
-#   47 ('A')  : code 0xAF also accepted as "enter menu" in menu_enter
+#   47 ('A')  : code 0xAF is also treated like STOP/START when leaving the editor (editor_exit)
 
 def key_index(name):
     """key by index ("36"), by label ("Y", "STOP", "CLEAR", "SHIFT"), or by control byte ("0e")"""

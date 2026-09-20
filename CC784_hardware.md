@@ -143,8 +143,9 @@ Verified by capture: module output idles high, bursts low, and lengthens each
 burst by ~250 µs relative to the transmitted half-bit (512 µs → ~780 µs).
 
 **10-pin IDC keypad header**: present on an *earlier* model instead of the DB9;
-not on this board. Explains the `keypad_scan` code (8×8 matrix through the
-latch upper nibble and the LS151 muxes).
+not on this board. Explains the `keypad_scan` code in the stock ROM (8×8
+matrix through the latch upper nibble and the LS151 muxes), which nothing
+calls; the patched build drops it.
 
 ## 7. Power / battery
 

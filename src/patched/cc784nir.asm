@@ -306,21 +306,10 @@ render_loop:
         LD (EFFECT_ID),A
         LD (EFFECT_VECTOR),HL
         JR render_loop
-        db 0xc3,0xa7,0x00
 
 ; ---- tick6_service: Runs every 6 timer ticks: serial RX/TX bit engines, countdowns, display column refresh & flashing, then the RX byte consumer.
 tick6_service:
         PUSH AF
-        LD A,(IX+0)
-        CP 0xaa
-        JR nz,tick6_run
-        LD A,(IY+0)
-        CP 0x55
-        JR nz,tick6_run
-        POP AF
-        RET
-
-tick6_run:
         PUSH BC
         PUSH DE
         PUSH HL
@@ -576,8 +565,6 @@ frame_bit7_set:
         LD (LATCH_BIT7),A
 
 frame_done:
-        NOP
-
 ; ---- rx_consume: Pop a byte from RX_FIFO; in normal mode feed the packet parser (or if IR_CODE=A4/A5 handle keypad); packet start needs 0xB1 while idle
 rx_consume:
         LD A,(MENU_ACTIVE)
@@ -1097,8 +1084,6 @@ init_clear_addrbuf:
         ; L=0x01 -> address 1 (NETCC's default), H=0xFE -> its complement.
         LD HL,0xfe01
         LD (MY_ADDRESS),HL
-        NOP
-        NOP
         ; P6: RAM is fresh, so the clock bytes are noise too - the image copy
         ; below starts at CLK_RUN and never touches CLK_H10..CLK_PM. Start 12:00 AM.
         LD HL,0x0201
@@ -3241,7 +3226,6 @@ wipev_next_pass:
         XOR A
         LD (SCROLLING),A
         JP fx_done
-        db 0xc9
 
 ; ---- store_clear_all: Reset MSG_STORE: 100 empty channels D0..? then DA
 store_clear_all:
@@ -3317,7 +3301,6 @@ store_init_zero_page:
         XOR A
         LD (RX_TICKS),A
         RET
-        db 0xaa,"U"
 
 ; ---- ir_init: clear the IR decoder state, then fall into ir_reset
 ir_init:
@@ -4139,42 +4122,6 @@ scrolloff_loop:
         DJNZ scrolloff_loop
         RET
 
-; ---- keypad_scan: 8x8 matrix scan: row select via CTRL_LATCH high nibble, read PORT_IN bit 3; result -> RX_BYTE
-keypad_scan:
-        LD L,0
-        LD H,0xf0
-        LD A,(CTRL_LATCH_SHADOW)
-        AND 0x8f
-        LD E,A
-        LD B,8
-
-kp_row_loop:
-        LD A,H
-        ADD A,0x10
-        LD H,A
-        OR E
-        LD (CTRL_LATCH),A
-        IN A,(PORT_IN)
-        BIT 3,A
-        JR z,kp_key_found
-        LD A,8
-        ADD A,L
-        LD L,A
-        DJNZ kp_row_loop
-        XOR A
-        JR kp_store
-
-kp_key_found:
-        AND 7
-        ADD A,L
-        JR nz,kp_store
-        LD A,0x1e
-
-kp_store:
-        LD (RX_BYTE),A
-        AND A
-        RET
-
 ; ---- clear_framebuf: FRAMEBUF (344 bytes) = 0x80
 clear_framebuf:
         PUSH HL
@@ -4222,30 +4169,6 @@ clrglyph_loop:
         POP BC
         POP HL
         RET
-
-; ---- menu_enter: Enter the on-sign editor/menu (MENU_ACTIVE=FF), SP reset
-menu_enter:
-        LD SP,STACK_TOP
-        LD A,0xff
-        LD (MENU_ACTIVE),A
-        EI
-        CALL init_render
-        XOR A
-        LD (RX_BYTE),A
-        LD (IR_KEY_CHAR),A
-        LD (EDIT_KEY),A
-        LD (KEY_ECHO_TX),A
-        CALL menu_getchar
-        PUSH AF
-        LD A,0
-        LD (KEY_ECHO_TX),A
-        POP AF
-        LD HL,MY_ADDRESS
-        CP (HL)
-        JR z,editor_start
-        CP 0x2a
-        JR z,editor_start
-        JP RESET
 
 ; ---- key_handler: Handle a key / IR code: menu navigation (ADDRESS?, TIME?, PROG MSG?, SEQ MSG? ...)
 key_handler:
@@ -4823,8 +4746,6 @@ clock_emit:
         CALL unfetch_char
         LD A,(CUR_CHAR)
         JP glyph_lookup
-        LD A,0x20
-        LD (CUR_CHAR),A
 
 clock_emit_last:
         LD A,0xff
@@ -5424,14 +5345,6 @@ editor_key_bgrnd:
         LD A,0xff
         LD (BGRND_PENDING),A
         JP editor_loop
-        CP 0x30
-        JR nz,digit_dec_wrap
-        LD A,0x39
-        RET
-
-digit_dec_wrap:
-        DEC A
-        RET
 
 ; ---- menu_prog_msg: 09: PROG MSG? channel
 menu_prog_msg:
@@ -5820,7 +5733,6 @@ delete_do:
         DEC HL
         LD (STORE_CURSOR),HL
         JP show_top_of_msg
-        db 0xc3,0xd2,0x1a
 
 ; ---- cursor_right: 0A
 cursor_right:
@@ -5902,8 +5814,6 @@ left8_step:
         DEC HL
         LD (STORE_CURSOR),HL
         JP show_top_of_msg
-        DJNZ left8_step
-        JP editor_loop
 
 ; ---- editor_insert: insert EDIT_KEY at the cursor (MEMORY FULL / 100 KEYS LEFT)
 editor_insert:
@@ -6104,7 +6014,6 @@ prefix_fore:
         LD A,2
 
 prefix_fore_lookup:
-        NOP
         LD HL,FG_IDX_TABLE
         LD C,A
         LD B,0
@@ -6124,7 +6033,6 @@ prefix_back:
         LD A,5
 
 prefix_back_lookup:
-        NOP
         LD HL,BG_IDX_TABLE
         LD C,A
         LD B,0
