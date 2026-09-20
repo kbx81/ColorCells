@@ -679,9 +679,39 @@ other difference is drift and should be reconciled.
   lose their ACK entirely; and a valid ACK would be delayed by the whole
   insert, which is exactly the interval the sender is trying to measure.
   Padding after each ACK remains the right mitigation. B8 shrinks the window
-  it has to cover by one to three orders of magnitude.
+  it has to cover by one to three orders of magnitude — but see the
+  completion byte below, which replaces the padding with a real handshake.
 - ~~Remove dead code~~ — the objection (it moves every address and breaks the
   per-line address comments) died with the address comments; done as patch 9.
+
+### Proposed: a completion byte (patch 10 candidate)
+
+Keep the ACK where it is and add a second reply, DONE, when processing has
+finished: ACK = "received, processing", DONE = "you may send again". This is
+the handshake B4 has always needed — the deaf window varies from 0.25 s to
+0.75 s with the store and sequence, and today `cc784.py` guesses at it with a
+fixed 1 s pause.
+
+- **Where:** `pkt_process_done`, the single exit of every processed packet.
+  TX is idle there (the ACK finished before `DI`; query replies finish inside
+  their handlers), so a non-blocking `tx_try_queue` of the byte is enough —
+  about ten bytes of ROM. The byte leaves on `restart_display`'s `EI`, i.e.
+  the instant the sign is receptive again, and reaches the sender ~40 ms
+  later regardless of how long the window was.
+- **Opt-in, so NETCC is untouched:** the parser tests `PKT_FLAG == 80` for
+  immediate mode; make it "bit 7 set" and let bit 0 request DONE. NETCC's
+  `80` behaves exactly as today; `81` gets ACK, processing, DONE. NETCC's
+  reader would otherwise find a stray byte after each ACK.
+- **Rules:** DONE follows only an ACK that led to processing, i.e. addressed
+  frames with `len > 0` (zero-length frames are ACKed and finished; broadcast
+  frames get neither, so a multi-sign bus never has two talkers). NAK, or a
+  parser error that resets, means no DONE — the sender times out and retries
+  as now. A deferred frame (`01`) still gets its DONE when `main_loop` gets
+  round to it, which makes the B9 wait visible instead of silent.
+- **Value:** anything the sign never sends today — not `06`, `15` or `B1`.
+  `04` (EOT) reads naturally.
+- **Sender side:** `cc784.py` waits for DONE instead of sleeping; chunked
+  messages then pipeline at wire speed with no guessed gaps.
 
 ### Verified on hardware, 2026-09-18 (patched EPROM, ESPHome serial bridge)
 
