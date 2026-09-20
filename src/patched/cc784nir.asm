@@ -17,102 +17,156 @@ FRAMEBUF             equ 0x4000
 FRAMEBUF_SIZE        equ 0xc0   ; column ring: 86 visible + the glyph being written; also the TINY line
 FRAMEBUF_ROW1        equ FRAMEBUF+0x56
 FRAMEBUF_TINY        equ FRAMEBUF+0xab   ; TINY line buffer inside the ring
-; ---- variables follow the ring; their layout is baked into INIT_DATA, so only
-;      the base moves
+; ---- variables follow the ring, packed with no gaps (P8). INIT_DATA mirrors
+;      this order in four runs, so keep the two in step.
 RAM_VARS             equ FRAMEBUF+FRAMEBUF_SIZE
 FB_COLPTR            equ RAM_VARS+0x000   ; frame-buffer write pointer (next glyph column)
-FB_COL               equ RAM_VARS+0x003   ; scroll position: the column the output window is moving toward
-BGRND_PENDING        equ RAM_VARS+0x009   ; editor: BGRND key pressed, next key is the colour digit
-TXBUF                equ RAM_VARS+0x00a   ; reply frames, and the effect staging frame (86 columns)
-STAGE_PTR            equ RAM_VARS+0x060   ; next free column in TXBUF while an effect stages text
-STAGE_OFFSET         equ RAM_VARS+0x063   ; centring offset of the staged text (free columns / 2)
-ROW_PORT             equ RAM_VARS+0x065   ; port group for the row data: 40 first pass, 48 second
-BEEP_TICKS           equ RAM_VARS+0x066   ; beeper on while non-zero (port bit 5); beep_start = 0x96
-CLK_H10              equ RAM_VARS+0x068
-CLK_H1               equ RAM_VARS+0x069
-CLK_M10              equ RAM_VARS+0x06a
-CLK_M1               equ RAM_VARS+0x06b
-CLK_SEC              equ RAM_VARS+0x06c
-CLK_PM               equ RAM_VARS+0x06d
-CLK_RUN              equ RAM_VARS+0x06e
-GLYPH_WIDTH          equ RAM_VARS+0x06f
-GLYPH_PTR            equ RAM_VARS+0x070
-CUR_COLOUR           equ RAM_VARS+0x074
-SCROLLING            equ RAM_VARS+0x075   ; FF while the output window is catching up with FB_COLPTR
-CUR_CHAR             equ RAM_VARS+0x076
-FB_OUT_PTR           equ RAM_VARS+0x078   ; first column sent to the panel (start of the output window)
-DISP_ON              equ RAM_VARS+0x07a   ; 0 suppresses row output (effects rewrite FRAMEBUF meanwhile)
-MENU_ACTIVE          equ RAM_VARS+0x07f
-INS_PTR              equ RAM_VARS+0x080
-MAGIC_MODE           equ RAM_VARS+0x082   ; FF between MAGIC (1F) and MAGIC OFF (BD)
-COL_COUNT            equ RAM_VARS+0x084   ; columns still free in the staging frame; 0 = no staging (LEFT)
-ROW_COLOUR           equ RAM_VARS+0x08a   ; colour byte sent ahead of each row
-QUERIES_ENABLED      equ RAM_VARS+0x08b   ; FF after boot; gates query_dispatch
-EDIT_KEY             equ RAM_VARS+0x08d   ; key/character the editor is processing (0 = none)
-RX_BYTE              equ RAM_VARS+0x090
-SPARE_TIMER          equ RAM_VARS+0x092   ; decremented in tick6_exit, never set: dead
-CTRL_LATCH_SHADOW    equ RAM_VARS+0x095
-FB_OUT_LEN           equ RAM_VARS+0x098   ; bytes to send from FB_OUT_PTR before wrapping to FRAMEBUF
-FB_EXTRA_LEN         equ RAM_VARS+0x09a   ; bytes to send from FRAMEBUF after the wrap
-STORE_END            equ RAM_VARS+0x09c
-EFFECT_ID            equ RAM_VARS+0x0a2   ; 0 LEFT, 1 PAUSE, 2 UP, 3 DOWN, 4 RIGHT, 5 HOLD
-EFFECT_VECTOR        equ RAM_VARS+0x0a3
-MENU_TEXT_PTR        equ RAM_VARS+0x0a5
-ROW_INDEX            equ RAM_VARS+0x0ad
-RX_BITMASK           equ RAM_VARS+0x0ae
-RX_SHIFT             equ RAM_VARS+0x0b1
-RX_TICKS             equ RAM_VARS+0x0b3
-RX_FIFO              equ RAM_VARS+0x0b5
-RX_COUNT             equ RAM_VARS+0x0bd
-RX_TIMING_PTR        equ RAM_VARS+0x0be
-RX_STATE             equ RAM_VARS+0x0c4
-CHAN_LOCK            equ RAM_VARS+0x0d2
-SEQ_LIST             equ RAM_VARS+0x0d3
-SEQ_PTR              equ RAM_VARS+0x13b
-SEQ_ALL_EMPTY        equ RAM_VARS+0x13d   ; 10 = every listed channel is empty, play the demo
-FONT_MODE            equ RAM_VARS+0x1a1   ; bit 1 BOLD, bit 2 ITALIC, bit 3 BIG
-TINY_MODE            equ RAM_VARS+0x1a2   ; FF = glyphs go to the tiny buffer (menus, TINY)
-NMI_COUNT            equ RAM_VARS+0x1a4
-STORE_TMP            equ RAM_VARS+0x1a6
-MOVE_DST             equ RAM_VARS+0x1a8
-MOVE_SRC             equ RAM_VARS+0x1aa
-STORE_CURSOR         equ RAM_VARS+0x1ae
-TX_BITIDX            equ RAM_VARS+0x1b0
-TX_BITMASK           equ RAM_VARS+0x1b1
-TX_PENDING           equ RAM_VARS+0x1b2
-TX_TICKS             equ RAM_VARS+0x1b3
-TX_SHIFT             equ RAM_VARS+0x1b4
-TX_STATUS            equ RAM_VARS+0x1b5
-TX_TIMING_PTR        equ RAM_VARS+0x1b6
-ROW_OUT_PENDING      equ RAM_VARS+0x1c1   ; FF = the current row still has to be sent
-NEXT_CHAN            equ RAM_VARS+0x1c3   ; channel to show first after the editor (FF = none)
-NMI_PER_SEC          equ RAM_VARS+0x1c5
-TINY_FRAME_READY     equ RAM_VARS+0x1c6   ; tiny mode: a frame is in FRAMEBUF_TINY
-TINY_RENDER          equ RAM_VARS+0x1c7   ; FF while attr_tiny drives the display
-TICK6_COUNT          equ RAM_VARS+0x1e1
-TICK1_COUNT          equ RAM_VARS+0x1e2
-GEN_COUNTDOWN        equ RAM_VARS+0x1e8   ; IR repeat/hold timer, counts down in tick6 (word)
-IR_STATE_CNT         equ RAM_VARS+0x1ea
-IR_BITCNT            equ RAM_VARS+0x1eb
-IR_KEY               equ RAM_VARS+0x1ec   ; last accepted key number
-IR_SHIFT             equ RAM_VARS+0x1ed
-IR_CODE              equ RAM_VARS+0x1ee
-TICK_VECTOR          equ RAM_VARS+0x1f0
-MAGIC_LAST_CHAR      equ RAM_VARS+0x1fb   ; magic mode: last char of the current word (punctuation check)
-MAGIC_COLOUR_SET     equ RAM_VARS+0x1fc   ; magic mode: colour set by an attribute, skip the auto change
-RND_SEED             equ RAM_VARS+0x1fe
-MAGIC_FONT_SET       equ RAM_VARS+0x1ff   ; magic mode: font set by an attribute, skip the random pick
-RND_VAL              equ RAM_VARS+0x200   ; magic mode: words until the next colour change
-CHAN_D10             equ RAM_VARS+0x204
-CHAN_D1              equ RAM_VARS+0x205
-MENU_ENTRY_BUF       equ RAM_VARS+0x22d
-MY_ADDRESS           equ RAM_VARS+0x233
-MY_ADDRESS_INV       equ RAM_VARS+0x234
-BLANK_TIMER          equ RAM_VARS+0x236
-GLYPH_PTR_ORIG       equ RAM_VARS+0x238   ; glyph address before bold/italic/big copies
-STORE_LIMIT          equ RAM_VARS+0x240
-STORE_SIZE           equ RAM_VARS+0x242
-MSG_STORE            equ RAM_VARS+0x24a
+FB_COL               equ RAM_VARS+0x002   ; scroll position: the column the output window is moving toward
+BGRND_PENDING        equ RAM_VARS+0x004   ; editor: BGRND key pressed, next key is the colour digit
+TXBUF                equ RAM_VARS+0x005   ; reply frames, and the effect staging frame (86 columns)
+STAGE_PTR            equ RAM_VARS+0x05b   ; next free column in TXBUF while an effect stages text
+STAGE_OFFSET         equ RAM_VARS+0x05d   ; centring offset of the staged text (free columns / 2)
+ROW_PORT             equ RAM_VARS+0x05f   ; port group for the row data: 40 first pass, 48 second
+BEEP_TICKS           equ RAM_VARS+0x060   ; beeper on while non-zero (port bit 5); beep_start = 0x96
+CLK_H10              equ RAM_VARS+0x062
+CLK_H1               equ RAM_VARS+0x063
+CLK_M10              equ RAM_VARS+0x064
+CLK_M1               equ RAM_VARS+0x065
+CLK_SEC              equ RAM_VARS+0x066
+CLK_PM               equ RAM_VARS+0x067
+CLK_RUN              equ RAM_VARS+0x068
+GLYPH_WIDTH          equ RAM_VARS+0x069
+GLYPH_PTR            equ RAM_VARS+0x06a
+MENU_MSG_PTR         equ RAM_VARS+0x06c   ; message the editor is showing (set with MENU_MSG_FLAG)
+CUR_COLOUR           equ RAM_VARS+0x06e
+SCROLLING            equ RAM_VARS+0x06f   ; FF while the output window is catching up with FB_COLPTR
+CUR_CHAR             equ RAM_VARS+0x070
+TEST_MODE            equ RAM_VARS+0x071   ; FF = display the ROM-checksum test message (SEQ MSG? then MAGIC, C)
+FB_OUT_PTR           equ RAM_VARS+0x072   ; first column sent to the panel (start of the output window)
+DISP_ON              equ RAM_VARS+0x074   ; 0 suppresses row output (effects rewrite FRAMEBUF meanwhile)
+CLK_RENDER_STEP      equ RAM_VARS+0x075   ; clock (5F) render step 0..8; FF = finished
+CLK_RENDER_PTR       equ RAM_VARS+0x076   ; clock render: next CLK_ digit to emit
+MENU_ACTIVE          equ RAM_VARS+0x078
+INS_PTR              equ RAM_VARS+0x079
+MAGIC_MODE           equ RAM_VARS+0x07b   ; FF between MAGIC (1F) and MAGIC OFF (BD)
+WINDOW_COLOUR        equ RAM_VARS+0x07c   ; last colour byte at the output window start (bit 4 = flash)
+COL_COUNT            equ RAM_VARS+0x07d   ; columns still free in the staging frame; 0 = no staging (LEFT)
+FRAME_COUNT          equ RAM_VARS+0x07e   ; frames since LATCH_BIT7 last toggled (mod 13)
+FLASH_BIT            equ RAM_VARS+0x07f   ; 0x10 while the current word flashes; OR-ed into colour bytes
+LATCH_BIT7           equ RAM_VARS+0x080   ; 00/80 toggled every 13 frames, OR-ed into CTRL_LATCH bit 7
+COLOR_PENDING        equ RAM_VARS+0x081   ; editor: COLOR key pressed, next key is the colour digit
+GRAPH_PENDING        equ RAM_VARS+0x082   ; editor: GRAPH key pressed, next key selects A0-AF
+ROW_COLOUR           equ RAM_VARS+0x083   ; colour byte sent ahead of each row
+QUERIES_ENABLED      equ RAM_VARS+0x084   ; FF after boot; gates query_dispatch
+MENU_MSG_FLAG        equ RAM_VARS+0x085   ; FF = editor has a message to display
+EDIT_KEY             equ RAM_VARS+0x086   ; key/character the editor is processing (0 = none)
+RX_BYTE              equ RAM_VARS+0x087
+IR_KEY_CHAR          equ RAM_VARS+0x088   ; character decoded from the IR key via the CHARSET_ tables
+CTRL_LATCH_SHADOW    equ RAM_VARS+0x089
+FB_OUT_LEN           equ RAM_VARS+0x08a   ; bytes to send from FB_OUT_PTR before wrapping to FRAMEBUF
+FB_EXTRA_LEN         equ RAM_VARS+0x08c   ; bytes to send from FRAMEBUF after the wrap
+STORE_END            equ RAM_VARS+0x08e
+EFFECT_ID            equ RAM_VARS+0x090   ; 0 LEFT, 1 PAUSE, 2 UP, 3 DOWN, 4 RIGHT, 5 HOLD
+EFFECT_VECTOR        equ RAM_VARS+0x091
+MENU_TEXT_PTR        equ RAM_VARS+0x093
+SHIFT_LABEL          equ RAM_VARS+0x095   ; FF = redraw shows the SHIFT indicator
+FLUSH_PENDING        equ RAM_VARS+0x096   ; FF = staged text must be shown before the next effect runs
+FRAME_DELAY          equ RAM_VARS+0x097   ; frames to hold before the next column step (1, 3 or 0x50)
+ROW_INDEX            equ RAM_VARS+0x098
+RX_BITMASK           equ RAM_VARS+0x099
+RX_SHIFT             equ RAM_VARS+0x09a
+RX_TICKS             equ RAM_VARS+0x09b
+RX_FIFO              equ RAM_VARS+0x09c
+RX_COUNT             equ RAM_VARS+0x0a4
+RX_TIMING_PTR        equ RAM_VARS+0x0a5   ; set by rx_st_wait_start before use
+REDRAW_PTR           equ RAM_VARS+0x0a7   ; editor redraw: byte being rendered
+RX_STATE             equ RAM_VARS+0x0a9   ; set by store_init before use
+CHAN_LOCK            equ RAM_VARS+0x0ab
+SEQ_LIST             equ RAM_VARS+0x0ac
+SEQ_PTR              equ RAM_VARS+0x114
+SEQ_ALL_EMPTY        equ RAM_VARS+0x116   ; 10 = every listed channel is empty, play the demo
+GLYPH_BUF            equ RAM_VARS+0x117   ; working copy of the glyph (bold/plain), 32 bytes
+GLYPH_BUF_ITALIC     equ RAM_VARS+0x137   ; sheared copy for ITALIC, 32 bytes
+GLYPH_BUF_BIG        equ RAM_VARS+0x157   ; widened copy for BIG, 32 bytes
+SEQ_MENU_ACTIVE      equ RAM_VARS+0x177   ; FF while the SEQ MSG? dialogue runs
+SHIFT_STATE          equ RAM_VARS+0x178   ; SHIFT latch, toggled by key 29 (see section 9)
+PREV_SPACE           equ RAM_VARS+0x179   ; 1 = previous char was a space (two in a row reset the background)
+FONT_MODE            equ RAM_VARS+0x17a   ; bit 1 BOLD, bit 2 ITALIC, bit 3 BIG
+TINY_MODE            equ RAM_VARS+0x17b   ; FF = glyphs go to the tiny buffer (menus, TINY)
+FORCE_BOLD           equ RAM_VARS+0x17c   ; editor redraw: FF = effect text is drawn bold (unless THIN)
+NMI_COUNT            equ RAM_VARS+0x17d   ; two bytes: magic_short_word reads through it as a pointer, so the 04 high byte is a ROM page
+STORE_TMP            equ RAM_VARS+0x17f
+MOVE_DST             equ RAM_VARS+0x181
+MOVE_SRC             equ RAM_VARS+0x183
+REDRAW_FROM          equ RAM_VARS+0x185   ; editor redraw: first byte actually displayed (cursor-21, >= INS_PTR)
+STORE_CURSOR         equ RAM_VARS+0x187
+TX_BITIDX            equ RAM_VARS+0x189
+TX_BITMASK           equ RAM_VARS+0x18a
+TX_PENDING           equ RAM_VARS+0x18b
+TX_TICKS             equ RAM_VARS+0x18c
+TX_SHIFT             equ RAM_VARS+0x18d
+TX_STATUS            equ RAM_VARS+0x18e
+TX_TIMING_PTR        equ RAM_VARS+0x18f
+CAPS_LOCK            equ RAM_VARS+0x191
+ROW_OUT_PENDING      equ RAM_VARS+0x192   ; FF = the current row still has to be sent
+SEQ_SET              equ RAM_VARS+0x193   ; FF = sequence set by hand; do not auto-add the edited channel
+NEXT_CHAN            equ RAM_VARS+0x194   ; channel to show first after the editor (FF = none)
+NMI_PER_SEC          equ RAM_VARS+0x195
+TINY_FRAME_READY     equ RAM_VARS+0x196   ; tiny mode: a frame is in FRAMEBUF_TINY
+TINY_RENDER          equ RAM_VARS+0x197   ; FF while attr_tiny drives the display
+DRAW_PREV            equ RAM_VARS+0x198   ; FF = previous item was a DRAW graphic
+CLK_RENDERED         equ RAM_VARS+0x199   ; FF just after a clock display; forces LEFT in an effect
+MAGIC_COLOUR_IDX     equ RAM_VARS+0x19a   ; index into MAGIC_COLOUR_CYCLE
+EURO_STATE           equ RAM_VARS+0x19b
+DRAW_BUF             equ RAM_VARS+0x19c   ; 16 packed hex columns of a DRAW graphic
+IR_DEBOUNCE          equ RAM_VARS+0x1ac   ; key number seen once, awaiting its second frame
+TICK6_COUNT          equ RAM_VARS+0x1ad
+TICK1_COUNT          equ RAM_VARS+0x1ae
+GEN_COUNTDOWN        equ RAM_VARS+0x1af   ; IR repeat/hold timer, counts down in tick6 (word)
+IR_STATE_CNT         equ RAM_VARS+0x1b1
+IR_BITCNT            equ RAM_VARS+0x1b2
+IR_KEY               equ RAM_VARS+0x1b3   ; last accepted key number
+IR_SHIFT             equ RAM_VARS+0x1b4
+IR_CODE              equ RAM_VARS+0x1b5
+IR_KEYNUM            equ RAM_VARS+0x1b6   ; IR_CODE & 3F = key number 0..63
+TICK_VECTOR          equ RAM_VARS+0x1b7
+NEW_MSG_CHAN         equ RAM_VARS+0x1b9   ; channel chosen for a new MAGIC message
+MAGIC_FX_PREV        equ RAM_VARS+0x1ba   ; FF = last byte was a movement attribute (magic mode)
+MAGIC_FLASH_WORD     equ RAM_VARS+0x1bb   ; '$' = flash the word that starts with $ (magic mode)
+EDITOR_FIRST_KEY     equ RAM_VARS+0x1bc   ; FF until the first key in the editor is processed
+MAGIC_LAST_CHAR      equ RAM_VARS+0x1bd   ; magic mode: last char of the current word (punctuation check)
+MAGIC_COLOUR_SET     equ RAM_VARS+0x1be   ; magic mode: colour set by an attribute, skip the auto change
+MAGIC_WORD_COUNT     equ RAM_VARS+0x1bf   ; words since the last colour change (magic mode)
+RND_SEED             equ RAM_VARS+0x1c0
+MAGIC_FONT_SET       equ RAM_VARS+0x1c1   ; magic mode: font set by an attribute, skip the random pick
+RND_VAL              equ RAM_VARS+0x1c2   ; magic mode: words until the next colour change
+MAGIC_MSG_CHAN       equ RAM_VARS+0x1c3   ; channel to announce as MAGIC MSG nn on redraw (0 = none)
+REDRAW_MAGIC         equ RAM_VARS+0x1c4   ; editor redraw: MAGIC seen, font resets at each word
+DRAW_NO_GAP          equ RAM_VARS+0x1c5   ; FF = butt this DRAW graphic against the previous one
+CHAN_D10             equ RAM_VARS+0x1c6
+CHAN_D1              equ RAM_VARS+0x1c7
+FLASH_PENDING        equ RAM_VARS+0x1c8   ; 0x10 after FLASH until the next printable char
+TEXT_DRAWN           equ RAM_VARS+0x1c9   ; FF once a printable char has been drawn since init_render
+RAINBOW_IDX          equ RAM_VARS+0x1ca   ; RAINBOW per-char colour index, 0 = off
+TEST_MSG_BUF         equ RAM_VARS+0x1cb   ; RAM copy of TEST_MESSAGE plus the ROM checksum, 28 bytes
+MENU_ENTRY_BUF       equ RAM_VARS+0x1e7
+FUNC_PENDING         equ RAM_VARS+0x1ec   ; editor: FUNC (B7) pressed, next key picks the second function
+MY_ADDRESS           equ RAM_VARS+0x1ed
+MY_ADDRESS_INV       equ RAM_VARS+0x1ee
+SCROLL_SPEED         equ RAM_VARS+0x1ef   ; 0..7 from F0-F7; blank ticks inserted after every frame
+BLANK_TIMER          equ RAM_VARS+0x1f0
+SPEED_PENDING        equ RAM_VARS+0x1f1   ; editor: SPEED key pressed, next key is the digit
+GLYPH_PTR_ORIG       equ RAM_VARS+0x1f2   ; glyph address before bold/italic/big copies
+ASK_CHAN_RESULT      equ RAM_VARS+0x1f4   ; menu_ask_chan return value
+ASK_CHAN_PROMPT      equ RAM_VARS+0x1f5   ; menu_ask_chan prompt string
+THIN_MODE            equ RAM_VARS+0x1f7   ; non-zero after THIN (B9): no bold in effects
+KEY_ECHO_TX          equ RAM_VARS+0x1f8   ; non-zero = echo accepted keys on serial TX
+STORE_LIMIT          equ RAM_VARS+0x1f9
+STORE_SIZE           equ RAM_VARS+0x1fb
+STORE_TEXT_LIMIT     equ RAM_VARS+0x1fd   ; free text bytes; scan bound for store_repair
+STORE_WARN_LIMIT     equ RAM_VARS+0x1ff   ; STORE_END here trips the 100 KEYS LEFT warning
+STORE_GUARD          equ RAM_VARS+0x201   ; store_repair writes a space at MSG_STORE-1 every boot
+MSG_STORE            equ RAM_VARS+0x202
 PKT_READY            equ 0x5ef0
 PKT_BUF              equ 0x5ef1
 PKT_STATE            equ 0x5ff1
@@ -129,72 +183,6 @@ PORT_40_OUT          equ 0x40
 PORT_ROW0            equ 0x48
 PORT_STROBE          equ 0x80
 PORT_IN              equ 0xc0
-
-; ---- RAM locations named from their use. The ones marked "never read"
-;      are written by the firmware but influence nothing.
-MENU_MSG_PTR         equ RAM_VARS+0x072   ; message the editor is showing (set with MENU_MSG_FLAG)
-TEST_MODE            equ RAM_VARS+0x077   ; FF = display the ROM-checksum test message (SEQ MSG? then MAGIC, C)
-CLK_RENDER_STEP      equ RAM_VARS+0x07b   ; clock (5F) render step 0..8; FF = finished
-CLK_RENDER_PTR       equ RAM_VARS+0x07c   ; clock render: next CLK_ digit to emit
-WINDOW_COLOUR        equ RAM_VARS+0x083   ; last colour byte at the output window start (bit 4 = flash)
-FRAME_COUNT          equ RAM_VARS+0x085   ; frames since LATCH_BIT7 last toggled (mod 13)
-FLASH_BIT            equ RAM_VARS+0x086   ; 0x10 while the current word flashes; OR-ed into colour bytes
-LATCH_BIT7           equ RAM_VARS+0x087   ; 00/80 toggled every 13 frames, OR-ed into CTRL_LATCH bit 7
-COLOR_PENDING        equ RAM_VARS+0x088   ; editor: COLOR key pressed, next key is the colour digit
-GRAPH_PENDING        equ RAM_VARS+0x089   ; editor: GRAPH key pressed, next key selects A0-AF
-MENU_MSG_FLAG        equ RAM_VARS+0x08c   ; FF = editor has a message to display
-PREV_KEY             equ RAM_VARS+0x08e   ; editor key history (written, never read)
-PREV_KEY2            equ RAM_VARS+0x08f   ; editor key history (written, never read)
-IR_KEY_CHAR          equ RAM_VARS+0x091   ; character decoded from the IR key via the CHARSET_ tables
-STORE_WRAPPED        equ RAM_VARS+0x09e   ; FF when the editor cursor hit STORE_LIMIT (written, never read)
-SHIFT_LABEL          equ RAM_VARS+0x0a9   ; FF = redraw shows the SHIFT indicator
-FLUSH_PENDING        equ RAM_VARS+0x0aa   ; FF = staged text must be shown before the next effect runs
-PROG_MSG_FORCE       equ RAM_VARS+0x0ab   ; would force the PROG MSG? prompt; only ever written 0
-FRAME_DELAY          equ RAM_VARS+0x0ac   ; frames to hold before the next column step (1, 3 or 0x50)
-RX_SPARE             equ RAM_VARS+0x0b4   ; zeroed by store_init, never read
-REDRAW_PTR           equ RAM_VARS+0x0c2   ; editor redraw: byte being rendered
-RX_STATE_COPY        equ RAM_VARS+0x0c6   ; second copy of RX_STATE written by store_init, never read
-CHAN_STATE           equ RAM_VARS+0x0c8   ; 11 bytes cleared by clear_chan_lock; only CHAN_LOCK (last) is read
-GLYPH_BUF            equ RAM_VARS+0x13e   ; working copy of the glyph (bold/plain), 32 bytes
-GLYPH_BUF_ITALIC     equ RAM_VARS+0x15e   ; sheared copy for ITALIC, 32 bytes
-GLYPH_BUF_BIG        equ RAM_VARS+0x17e   ; widened copy for BIG, 32 bytes
-SEQ_MENU_ACTIVE      equ RAM_VARS+0x19e   ; FF while the SEQ MSG? dialogue runs
-SHIFT_STATE          equ RAM_VARS+0x19f   ; SHIFT latch, toggled by key 29 (see section 9)
-PREV_SPACE           equ RAM_VARS+0x1a0   ; 1 = previous char was a space (two in a row reset the background)
-FORCE_BOLD           equ RAM_VARS+0x1a3   ; editor redraw: FF = effect text is drawn bold (unless THIN)
-REDRAW_FROM          equ RAM_VARS+0x1ac   ; editor redraw: first byte actually displayed (cursor-21, >= INS_PTR)
-CAPS_LOCK            equ RAM_VARS+0x1c0
-SEQ_SET              equ RAM_VARS+0x1c2   ; FF = sequence set by hand; do not auto-add the edited channel
-DRAW_PREV            equ RAM_VARS+0x1c8   ; FF = previous item was a DRAW graphic
-CLK_RENDERED         equ RAM_VARS+0x1c9   ; FF just after a clock display; forces LEFT in an effect
-MAGIC_COLOUR_IDX     equ RAM_VARS+0x1ca   ; index into MAGIC_COLOUR_CYCLE
-STORE_BAD_COUNT      equ RAM_VARS+0x1cb   ; bytes replaced by ? in store_fix_bad_bytes (never read)
-EURO_STATE           equ RAM_VARS+0x1cc
-DRAW_BUF             equ RAM_VARS+0x1cd   ; 16 packed hex columns of a DRAW graphic
-IR_DEBOUNCE          equ RAM_VARS+0x1df   ; key number seen once, awaiting its second frame
-IR_KEYNUM            equ RAM_VARS+0x1ef   ; IR_CODE & 3F = key number 0..63
-EFFECT_ID_COPY       equ RAM_VARS+0x1f4   ; copy of EFFECT_ID (written, never read)
-NEW_MSG_CHAN         equ RAM_VARS+0x1f7   ; channel chosen for a new MAGIC message
-MAGIC_FX_PREV        equ RAM_VARS+0x1f8   ; FF = last byte was a movement attribute (magic mode)
-MAGIC_FLASH_WORD     equ RAM_VARS+0x1f9   ; '$' = flash the word that starts with $ (magic mode)
-EDITOR_FIRST_KEY     equ RAM_VARS+0x1fa   ; FF until the first key in the editor is processed
-MAGIC_WORD_COUNT     equ RAM_VARS+0x1fd   ; words since the last colour change (magic mode)
-MAGIC_MSG_CHAN       equ RAM_VARS+0x201   ; channel to announce as MAGIC MSG nn on redraw (0 = none)
-REDRAW_MAGIC         equ RAM_VARS+0x202   ; editor redraw: MAGIC seen, font resets at each word
-DRAW_NO_GAP          equ RAM_VARS+0x203   ; FF = butt this DRAW graphic against the previous one
-FLASH_PENDING        equ RAM_VARS+0x20a   ; 0x10 after FLASH until the next printable char
-TEXT_DRAWN           equ RAM_VARS+0x20b   ; FF once a printable char has been drawn since init_render
-RAINBOW_IDX          equ RAM_VARS+0x20c   ; RAINBOW per-char colour index, 0 = off
-TEST_MSG_BUF         equ RAM_VARS+0x20d   ; RAM copy of TEST_MESSAGE plus the ROM checksum, 28 bytes
-FUNC_PENDING         equ RAM_VARS+0x232   ; editor: FUNC (B7) pressed, next key picks the second function
-SCROLL_SPEED         equ RAM_VARS+0x235   ; 0..7 from F0-F7; blank ticks inserted after every frame
-SPEED_PENDING        equ RAM_VARS+0x237   ; editor: SPEED key pressed, next key is the digit
-ASK_CHAN_RESULT      equ RAM_VARS+0x23a   ; menu_ask_chan return value
-ASK_CHAN_PROMPT      equ RAM_VARS+0x23c   ; menu_ask_chan prompt string
-THIN_MODE            equ RAM_VARS+0x23e   ; non-zero after THIN (B9): no bold in effects
-KEY_ECHO_TX          equ RAM_VARS+0x23f   ; non-zero = echo accepted keys on serial TX
-STORE_TEXT_LIMIT     equ RAM_VARS+0x244   ; free text bytes; scan bound for store_repair
-STORE_WARN_LIMIT     equ RAM_VARS+0x246   ; STORE_END here trips the 100 KEYS LEFT warning
 
 ; ---- Stack / message-store geometry -----------------------------------------
 ; Stock: SP=0x403F leaves only 64 bytes before 0x4000, which is ROM - pushes
@@ -271,7 +259,7 @@ int_timer:
         INC A
         CP 6
         JR nz,int_tick6_store
-        LD HL,0xc4
+        LD HL,tick6_service     ; the address is pushed so the service runs as the ISR returns
         PUSH HL
         XOR A
 
@@ -637,12 +625,6 @@ rx_not_start:
 
 ; ---- tick6_exit
 tick6_exit:
-        LD A,(SPARE_TIMER)
-        AND A
-        JR z,tick6_arm_row
-        DEC A
-        LD (SPARE_TIMER),A
-
 tick6_arm_row:
         LD A,0xff
         LD (ROW_OUT_PENDING),A
@@ -833,16 +815,10 @@ seq_test_message:
         CALL clear_chan_lock
         RET
 
-; ---- clear_chan_lock: zero CHAN_STATE, 11 bytes ending in CHAN_LOCK
+; ---- clear_chan_lock
 clear_chan_lock:
-        LD HL,CHAN_STATE
-        LD B,11
-        LD A,0
-
-clr_lock_loop:
-        LD (HL),A
-        INC HL
-        DJNZ clr_lock_loop
+        XOR A
+        LD (CHAN_LOCK),A
         RET
 
 ; ---- chan_select: Select channel E: find/create its slot in MSG_STORE, set INS_PTR/STORE_CURSOR
@@ -999,8 +975,6 @@ repair_terminate:
 store_fix_bad_bytes:
         LD HL,MSG_STORE
         LD BC,(STORE_SIZE)
-        LD IY,STORE_BAD_COUNT
-        LD (IY+0),0
         LD D,0
 
 fixbad_loop:
@@ -1010,7 +984,6 @@ fixbad_loop:
         BIT 0,(IX+0)
         JR z,fixbad_next
         LD (HL),0x3f
-        INC (IY+0)
 
 fixbad_next:
         INC HL
@@ -1127,7 +1100,7 @@ init_clear_addrbuf:
         NOP
         NOP
         ; P6: RAM is fresh, so the clock bytes are noise too - the image copy
-        ; below starts at CLK_RUN and never touches 4200-4205. Start 12:00 AM.
+        ; below starts at CLK_RUN and never touches CLK_H10..CLK_PM. Start 12:00 AM.
         LD HL,0x0201
         LD (CLK_H10),HL         ; CLK_H10 = 1, CLK_H1 = 2
         LD HL,0
@@ -1139,151 +1112,110 @@ init_clear_addrbuf:
         CALL store_clear_all
 
 init_copy_tables:
-        LD HL,INIT_DATA
-        LD BC,10
+        LD HL,INIT_DATA+0x00
         LD DE,FB_COLPTR
+        LD BC,5
         LDIR
-        LD HL,INIT_DATA+10               ; -> STAGE_PTR
+        LD HL,INIT_DATA+0x05
         LD DE,STAGE_PTR
-        LD BC,8
+        LD BC,7
         LDIR
-        LD HL,INIT_DATA+0x18             ; -> CLK_RUN..
+        LD HL,INIT_DATA+0x0c
         LD DE,CLK_RUN
-        LD BC,0x5a
+        LD BC,67
         LDIR
-        LD HL,INIT_DATA+0x73             ; -> SEQ_MENU_ACTIVE..
+        LD HL,INIT_DATA+0x4f
         LD DE,SEQ_MENU_ACTIVE
-        LD BC,0x24
+        LD BC,28
         LDIR
         IM 1
         LD HL,SEQ_LIST
         LD (SEQ_PTR),HL
         RET
 
-; ---- INIT_DATA: four RAM images that init_vars LDIRs into place, annotated
-;      with the address each entry lands on. Addresses are the stock layout;
-;      the patched build moves the whole block (RAM_VARS). The dw entries naming a ROM
-;      label hold an address as DATA - they must stay symbolic, or moving
-;      code before them silently breaks the serial engine with no build
-;      error. +12..+17 and +72 are copied nowhere: dead bytes.
+; ---- INIT_DATA: RAM images that init_vars LDIRs into place, one run per block
+;      of initialised variables. The dw entries naming a ROM label hold an
+;      address as DATA and must stay symbolic.
 INIT_DATA:
-; -- +00 -> 4198 (FB_COLPTR), 10 bytes
-        dw FRAMEBUF_ROW1      ; 4198 FB_COLPTR
-        db 0x56               ; 419a 
-        dw FRAMEBUF           ; 419b FB_COL
-        db 0x95               ; 419d 
-        db 0x40               ; 419e 
-        db 0x01               ; 419f 
-        db 0x01               ; 41a0 
-        db 0x00               ; 41a1 BGRND_PENDING
-; -- +0a -> 41f8 (STAGE_PTR), 8 bytes
-        dw TXBUF              ; 41f8 STAGE_PTR
-        db 0x56               ; 41fa 
-        dw 0x0000             ; 41fb STAGE_OFFSET
-        db 0x00               ; 41fd ROW_PORT
-        dw 0x0000             ; 41fe BEEP_TICKS
-        db 0x01,0x02,0x00,0x00,0x00,0x00   ; +12 dead
-; -- +18 -> 4206 (CLK_RUN), 90 bytes
-        db 0x01               ; 4206 CLK_RUN
-        db 0x00               ; 4207 GLYPH_WIDTH
-        dw 0x0000             ; 4208 GLYPH_PTR
-        dw 0x0000             ; 420a MENU_MSG_PTR
-        db 0x0f               ; 420c CUR_COLOUR
-        db 0x00               ; 420d SCROLLING
-        db 0x00               ; 420e CUR_CHAR
-        db 0x00               ; 420f TEST_MODE
-        dw FRAMEBUF           ; 4210 FB_OUT_PTR
-        db 0x01               ; 4212 DISP_ON
-        db 0x05               ; 4213 CLK_RENDER_STEP
-        dw 0x0000             ; 4214 CLK_RENDER_PTR
-        db 0x00               ; 4216 
-        db 0x00               ; 4217 MENU_ACTIVE
-        dw 0x0000             ; 4218 INS_PTR
-        db 0x00               ; 421a MAGIC_MODE
-        db 0x00               ; 421b WINDOW_COLOUR
-        db 0x0f               ; 421c COL_COUNT
-        db 0x00               ; 421d FRAME_COUNT
-        db 0x00               ; 421e FLASH_BIT
-        db 0x0a               ; 421f LATCH_BIT7
-        db 0x00               ; 4220 COLOR_PENDING
-        db 0x00               ; 4221 GRAPH_PENDING
-        db 0x00               ; 4222 ROW_COLOUR
-        db 0x0f               ; 4223 QUERIES_ENABLED
-        db 0x00               ; 4224 MENU_MSG_FLAG
-        db 0x00               ; 4225 EDIT_KEY
-        db 0x00               ; 4226 PREV_KEY
-        db 0x00               ; 4227 PREV_KEY2
-        db 0x00               ; 4228 RX_BYTE
-        db 0x00               ; 4229 IR_KEY_CHAR
-        dw 0x0000             ; 422a SPARE_TIMER
-        db 0x00               ; 422c 
-        dw 0x0000             ; 422d CTRL_LATCH_SHADOW
-        db 0x00               ; 422f 
-        dw 0x5600             ; 4230 FB_OUT_LEN
-        dw 0x0000             ; 4232 FB_EXTRA_LEN
-        dw 0xff00             ; 4234 STORE_END
-        dw 0x005f             ; 4236 STORE_WRAPPED
-        db 0x00               ; 4238 
-        db 0x00               ; 4239 
-        db 0x00               ; 423a EFFECT_ID
-        dw 0x0000             ; 423b EFFECT_VECTOR
-        dw 0x0000             ; 423d MENU_TEXT_PTR
-        db 0x00               ; 423f 
-        db 0x00               ; 4240 
-        db 0x00               ; 4241 SHIFT_LABEL
-        db 0x01               ; 4242 FLUSH_PENDING
-        db 0x00               ; 4243 PROG_MSG_FORCE
-        db 0x00               ; 4244 FRAME_DELAY
-        db 0x00               ; 4245 ROW_INDEX
-        dw 0x0000             ; 4246 RX_BITMASK
-        db 0x00               ; 4248 
-        dw 0x0000             ; 4249 RX_SHIFT
-        db 0x00               ; 424b RX_TICKS
-        db 0x00               ; 424c RX_SPARE
-        dw 0x0000             ; 424d RX_FIFO
-        db 0x00               ; 424f 
-        db 0x00               ; 4250 
-        db 0x00               ; 4251 
-        db 0x00               ; 4252 
-        db 0x00               ; 4253 
-        db 0x00               ; 4254 
-        db 0x00               ; 4255 RX_COUNT
-        db 0x00               ; 4256 RX_TIMING_PTR
-        dw RX_TIMING          ; +69 -> 4257
-        dw RX_TIMING          ; +6b -> 4259
-        db 0x00               ; 425b 
-        db 0x00               ; 425c RX_STATE
-        dw rx_st_wait_start   ; +6f -> 425d
-        dw rx_st_wait_start   ; +71 -> 425f
-; -- +73 -> 4336 (SEQ_MENU_ACTIVE), 36 bytes
-        db 0x00               ; 4336 SEQ_MENU_ACTIVE
-        db 0x00               ; 4337 SHIFT_STATE
-        db 0x00               ; 4338 PREV_SPACE
-        db 0x00               ; 4339 FONT_MODE
-        db 0x00               ; 433a TINY_MODE
-        db 0x00               ; 433b FORCE_BOLD
-        dw 0x04b0             ; 433c NMI_COUNT
-        dw 0x0000             ; 433e STORE_TMP
-        dw 0x0000             ; 4340 MOVE_DST
-        dw 0x0000             ; 4342 MOVE_SRC
-        dw 0x0000             ; 4344 REDRAW_FROM
-        dw MSG_STORE          ; 4346 STORE_CURSOR
-        db 0x00               ; 4348 TX_BITIDX
-        db 0x01               ; 4349 TX_BITMASK
-        db 0x00               ; 434a TX_PENDING
-        db 0x00               ; 434b TX_TICKS
-        db 0x00               ; 434c TX_SHIFT
-        db 0x00               ; 434d TX_STATUS
-        dw TX_TIMING          ; +8b -> 434e
-        db 0x00               ; 4350 
-        db 0x01               ; 4351 
-        db 0x00               ; 4352 
-        db 0x00               ; 4353 
-        db 0x00               ; 4354 
-        db 0x00               ; 4355 
-        dw TX_TIMING          ; +93 -> 4356
-        db 0xff               ; 4358 CAPS_LOCK
-        db 0xff               ; 4359 ROW_OUT_PENDING
+; -- +00 -> FB_COLPTR, 5 bytes
+        dw FRAMEBUF_ROW1       ; FB_COLPTR
+        dw FRAMEBUF            ; FB_COL
+        db 0x00                ; BGRND_PENDING
+; -- +05 -> STAGE_PTR, 7 bytes
+        dw TXBUF               ; STAGE_PTR
+        dw 0x0000              ; STAGE_OFFSET
+        db 0x00                ; ROW_PORT
+        dw 0x0000              ; BEEP_TICKS
+; -- +0c -> CLK_RUN, 67 bytes
+        db 0x01                ; CLK_RUN
+        db 0x00                ; GLYPH_WIDTH
+        dw 0x0000              ; GLYPH_PTR
+        dw 0x0000              ; MENU_MSG_PTR
+        db 0x0f                ; CUR_COLOUR
+        db 0x00                ; SCROLLING
+        db 0x00                ; CUR_CHAR
+        db 0x00                ; TEST_MODE
+        dw FRAMEBUF            ; FB_OUT_PTR
+        db 0x01                ; DISP_ON
+        db 0x05                ; CLK_RENDER_STEP
+        dw 0x0000              ; CLK_RENDER_PTR
+        db 0x00                ; MENU_ACTIVE
+        dw 0x0000              ; INS_PTR
+        db 0x00                ; MAGIC_MODE
+        db 0x00                ; WINDOW_COLOUR
+        db 0x0f                ; COL_COUNT
+        db 0x00                ; FRAME_COUNT
+        db 0x00                ; FLASH_BIT
+        db 0x0a                ; LATCH_BIT7
+        db 0x00                ; COLOR_PENDING
+        db 0x00                ; GRAPH_PENDING
+        db 0x00                ; ROW_COLOUR
+        db 0x0f                ; QUERIES_ENABLED
+        db 0x00                ; MENU_MSG_FLAG
+        db 0x00                ; EDIT_KEY
+        db 0x00                ; RX_BYTE
+        db 0x00                ; IR_KEY_CHAR
+        db 0x00                ; CTRL_LATCH_SHADOW
+        dw 0x5600              ; FB_OUT_LEN
+        dw 0x0000              ; FB_EXTRA_LEN
+        dw 0xff00              ; STORE_END
+        db 0x00                ; EFFECT_ID
+        dw 0x0000              ; EFFECT_VECTOR
+        dw 0x0000              ; MENU_TEXT_PTR
+        db 0x00                ; SHIFT_LABEL
+        db 0x01                ; FLUSH_PENDING
+        db 0x00                ; FRAME_DELAY
+        db 0x00                ; ROW_INDEX
+        db 0x00                ; RX_BITMASK
+        db 0x00                ; RX_SHIFT
+        db 0x00                ; RX_TICKS
+        db 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00 ; RX_FIFO
+        db 0x00                ; RX_COUNT
+        dw 0                   ; RX_TIMING_PTR
+        dw 0                   ; REDRAW_PTR (stock had junk here from a misaligned copy; set by editor_redraw)
+        dw 0                   ; RX_STATE
+; -- +4f -> SEQ_MENU_ACTIVE, 28 bytes
+        db 0x00                ; SEQ_MENU_ACTIVE
+        db 0x00                ; SHIFT_STATE
+        db 0x00                ; PREV_SPACE
+        db 0x00                ; FONT_MODE
+        db 0x00                ; TINY_MODE
+        db 0x00                ; FORCE_BOLD
+        dw 0x04b0              ; NMI_COUNT
+        dw 0x0000              ; STORE_TMP
+        dw 0x0000              ; MOVE_DST
+        dw 0x0000              ; MOVE_SRC
+        dw 0x0000              ; REDRAW_FROM
+        dw MSG_STORE           ; STORE_CURSOR
+        db 0x00                ; TX_BITIDX
+        db 0x01                ; TX_BITMASK
+        db 0x00                ; TX_PENDING
+        db 0x00                ; TX_TICKS
+        db 0x00                ; TX_SHIFT
+        db 0x00                ; TX_STATUS
+        dw TX_TIMING           ; TX_TIMING_PTR
+        db 0xff                ; CAPS_LOCK
+        db 0xff                ; ROW_OUT_PENDING
 
 ; ---- init_render: Reset render state for the current message
 init_render:
@@ -1302,8 +1234,6 @@ init_render:
         LD (FB_EXTRA_LEN),HL
         LD HL,0x56
         LD (FB_OUT_LEN),HL
-        LD A,1
-        LD (EFFECT_ID_COPY),A
         XOR A
         LD (MAGIC_MODE),A
         LD (SCROLLING),A
@@ -1509,8 +1439,6 @@ glyph_place:
         JP nz,glyph_stage
 
 glyph_direct:
-        LD A,0
-        LD (EFFECT_ID_COPY),A
 
 ; ---- glyph_blit: write colour byte + glyph columns at FB_COLPTR
 glyph_blit:
@@ -2675,7 +2603,6 @@ fx_down:
 ; ---- set_effect_vector: HL -> EFFECT_VECTOR, A -> effect id
 set_effect_vector:
         LD (EFFECT_ID),A
-        LD (EFFECT_ID_COPY),A
         LD (EFFECT_VECTOR),HL
         JP render_next_char
 
@@ -2900,23 +2827,9 @@ tiny_end:
 
 ; ---- tiny_scroll_off: push existing text off before TINY text
 tiny_scroll_off:
-        LD E,0
-        LD HL,FB_COL
-        LD B,0x56
-
-tinyoff_scan:
-        BIT 7,(HL)
-        JR z,tinyoff_next
-        LD A,(HL)
-        OR E
-        LD E,A
-
-tinyoff_next:
-        INC HL
-        DJNZ tinyoff_scan
-        LD A,E
-        AND A
-        RET z
+        ; Stock scanned 86 bytes from the ADDRESS of FB_COL (LD HL,FB_COL, a typo
+        ; for the pointer) looking for a colour byte; a 0x95 constant sat three
+        ; bytes in, so the test never failed. P8 drops the scan and the bytes.
         LD B,14
 
 tinyoff_loop:
@@ -3401,11 +3314,8 @@ store_init_zero_page:
         JR nz,store_init_zero_page
         LD HL,rx_st_wait_start
         LD (RX_STATE),HL
-        LD HL,rx_st_wait_start
-        LD (RX_STATE_COPY),HL
         XOR A
         LD (RX_TICKS),A
-        LD (RX_SPARE),A
         RET
         db 0xaa,"U"
 
@@ -4323,9 +4233,6 @@ menu_enter:
         XOR A
         LD (RX_BYTE),A
         LD (IR_KEY_CHAR),A
-        LD (PREV_KEY),A
-        LD (PREV_KEY2),A
-        LD (SPARE_TIMER),A
         LD (EDIT_KEY),A
         LD (KEY_ECHO_TX),A
         CALL menu_getchar
@@ -4380,9 +4287,6 @@ editor_init:
         XOR A
         LD (RX_BYTE),A
         LD (IR_KEY_CHAR),A
-        LD (PREV_KEY),A
-        LD (PREV_KEY2),A
-        LD (SPARE_TIMER),A
         LD (SEQ_SET),A
         LD A,(TEST_MODE)
         INC A
@@ -4476,9 +4380,6 @@ editor_next_key:
 
 editor_dispatch:
         LD (SHIFT_LABEL),A
-        LD A,(PROG_MSG_FORCE)
-        OR A
-        JP nz,menu_prog_msg
         LD A,(SEQ_MENU_ACTIVE)
         BIT 7,A
         JP nz,menu_seq_msg
@@ -4672,7 +4573,6 @@ editor_show_invalid:
 editor_exit:
         XOR A
         LD (SEQ_MENU_ACTIVE),A
-        LD (PROG_MSG_FORCE),A
         LD A,(KEY_ECHO_TX)
         AND A
         JR z,exit_wait_release
@@ -5718,10 +5618,6 @@ getkey_serial:
         JR z,getkey_ir
         XOR A
         LD (EURO_STATE),A
-        LD A,(PREV_KEY)
-        LD (PREV_KEY2),A
-        LD A,(EDIT_KEY)
-        LD (PREV_KEY),A
         LD A,(RX_BYTE)
         LD (EDIT_KEY),A
         LD (KEY_ECHO_TX),A
@@ -5840,10 +5736,6 @@ getkey_lookup:
 getkey_history:
         XOR A
         LD (EURO_STATE),A
-        LD A,(PREV_KEY)
-        LD (PREV_KEY2),A
-        LD A,(EDIT_KEY)
-        LD (PREV_KEY),A
 
 getkey_return:
         LD A,(IR_KEY_CHAR)
@@ -6096,14 +5988,9 @@ store_make_room:
         JR nz,makeroom_ret
         LD A,(MENU_ACTIVE)
         AND A
-        JR nz,makeroom_wrap_flag
+        JR nz,makeroom_ret
         LD HL,MSG_STORE
         LD (STORE_CURSOR),HL
-        JR makeroom_ret
-
-makeroom_wrap_flag:
-        LD A,0xff
-        LD (STORE_WRAPPED),A
 
 makeroom_ret:
         RET
@@ -6266,9 +6153,6 @@ editor_redraw:
         OR 15
         LD (CTRL_LATCH_SHADOW),A
         LD (CTRL_LATCH),A
-        LD A,(PROG_MSG_FORCE)
-        AND A
-        JP nz,redraw_status
         LD A,(SEQ_MENU_ACTIVE)
         BIT 7,A
         JP nz,redraw_status

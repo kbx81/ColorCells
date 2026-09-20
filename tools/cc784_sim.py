@@ -350,7 +350,14 @@ def cmd_compare(dir_a, dir_b):
     a = session(*assemble(dir_a))
     b = session(*assemble(dir_b))
     clean = True
+    prev_a = prev_b = None
     for (name, fa, ta, da), (_, fb, tb, db) in zip(a, b):
+        # a segment may open with the previous segment's last frame if the row-0
+        # pass straddled the mark: not a difference
+        if prev_a and fa and fa[0] == prev_a: fa = fa[1:]
+        if prev_b and fb and fb[0] == prev_b: fb = fb[1:]
+        prev_a = fa[-1] if fa else prev_a
+        prev_b = fb[-1] if fb else prev_b
         sm = difflib.SequenceMatcher(a=fa, b=fb, autojunk=False)
         phase = real = 0
         for tag, i1, i2, j1, j2 in sm.get_opcodes():

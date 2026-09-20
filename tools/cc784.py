@@ -138,6 +138,7 @@ class Sign:
     def __init__(self, link, addr, gap=0.0, timeout=3.0, verbose=False):
         self.link = link
         self.addr, self.gap, self.timeout, self.verbose = addr, gap, timeout, verbose
+        self.post_ack = 1.0          # pause after each frame: the sign is deaf while it processes
 
     def send_frame(self, payload: bytes, expect_ack=None, retries=3, flag=0x80):
         f = frame(self.addr, payload, flag)
@@ -152,14 +153,22 @@ class Sign:
             else:
                 self.link.write(f)
             if not expect_ack:
-                time.sleep(0.3)          # let the sign process (it does so with interrupts off)
+                time.sleep(len(f) * 10 / 300.0 + self.post_ack)   # no ACK to wait for: wire time, then the deaf window
                 return True
             # the ACK follows the last byte, and 300 baud moves ~27 bytes/s: a long
             # frame is still on the wire when a fixed timeout would expire, and a
             # retry mid-frame is what desyncs the parser
             r = self.read_bytes(1, self.timeout + len(f) * 10 / 300.0)
             if r == bytes([ACK]):
-                print("  ACK"); return True
+                print("  ACK")
+                # the ACK goes out BEFORE the packet is processed, and processing
+                # runs with interrupts off: ~0.25 s on an empty store, ~0.75 s
+                # when it is nearly full (init_sequence rescans the store for
+                # every channel in the sequence). Anything sent meanwhile is lost
+                # without a NAK. Measured in emulation; seen on the sign as every
+                # first attempt of a chunked message vanishing.
+                time.sleep(self.post_ack)
+                return True
             if r == bytes([NAK]):
                 print("  NAK (checksum rejected) - retrying"); continue
             print("  no reply (attempt %d/%d)%s" % (attempt, retries,

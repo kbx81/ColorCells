@@ -248,7 +248,7 @@ int_timer:
         INC A
         CP 6
         JR nz,int_tick6_store
-        LD HL,0xc4
+        LD HL,tick6_service     ; the address is pushed so the service runs as the ISR returns
         PUSH HL
         XOR A
 

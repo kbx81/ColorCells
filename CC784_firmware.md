@@ -45,8 +45,8 @@ uses a different geometry** (patch 7):
 | Range | Use |
 |---|---|
 | `4000–40BF` | `FRAMEBUF` — 192-byte column ring (was 344 from `4040`) |
-| `40C0–4309` | pointers, `TXBUF`, variables — same layout, 216 bytes lower |
-| `430A–5E6F` | `MSG_STORE`, **7014 bytes** (stock 6926, previous patched 6670) |
+| `40C0–42C1` | pointers, `TXBUF`, variables — same order, 72 dead bytes removed (patch 8) |
+| `42C2–5E6F` | `MSG_STORE`, **7086 bytes** (stock 6926; patch 7 alone gave 7014) |
 | `5E70–5EEF` | **stack**, 128 bytes (`STACK_SIZE`) |
 | `5EF0–5FFF` | packet flag, buffer and parser state, unchanged |
 
@@ -486,9 +486,16 @@ half-consumed, relying on `pkt_process` never returning. Any future handler
 that returns or waits (like `B4`) breaks. No effect in normal use.
 
 ### B4 — RX bytes lost while a packet is being processed **[H by design]**
-`pkt_process` runs with `DI` for the whole insert. The ACK is sent *before*
-processing, so a sender must pad after each ACK (or after each broadcast
-frame, which gets no ACK). ~0.3 s is safe.
+`pkt_process` runs with `DI` for the whole insert, and interrupts stay off
+through `restart_display` (`store_repair`, then `init_sequence`, which calls
+`chan_select` for every channel in the sequence and each call scans the store
+from the start). The ACK is sent *before* all that, so a sender must pad after
+each ACK (or after each broadcast frame, which gets no ACK). Measured in
+emulation on the patched build: **0.24 s** deaf after a short message into an
+empty store, rising to **~0.75 s** with the store nearly full. A frame started
+inside the window loses its header and is never seen — no NAK. On the sign
+this showed as every first attempt of a chunked message vanishing while its
+retry 12 s later succeeded. `cc784.py` now pauses 1 s after every frame.
 
 ### B5 — default address after RAM loss is 0 **[H]**
 NETCC's default is address 1; a sign with dead/absent battery answers only to
@@ -520,7 +527,7 @@ only `STORE_END − STORE_CURSOR + 1` bytes — 174 for channel 42 in an empty
 store, i.e. ~39× fewer; for channel 0 it is ~6900× fewer. Verified by
 simulating both loops: the resulting store is byte-identical.
 
-### B9 — a pending deferred packet turns the next frame into an editor session **[H in emulation]**
+### B9 — a pending deferred packet turns the next frame into an editor session **[H, reproduced on the sign 2026-09-19]**
 While a packet accepted with `PKT_FLAG != 80` waits for `main_loop` to get
 round to it, `rx_idle_byte` ignores the next `B1` but not the bytes after it:
 the address byte goes through `rx_not_start`, and `CP 1 → key_handler` opens
@@ -613,6 +620,30 @@ other difference is drift and should be reconciled.
    deferred mode, and a fixed 3 s ACK timeout retried a 97-byte frame that was
    still on the wire, which desynced the parser and, via B9, opened the editor.
    Queries are now immediate and the timeout scales with frame length.
+8. **Compact the variable block: 7086-byte store** (+72). Every byte of the
+   block that nothing reads is gone: the ten write-only variables
+   (`PREV_KEY`/`PREV_KEY2`, `STORE_WRAPPED`, `RX_SPARE`, `RX_STATE_COPY`,
+   `CHAN_STATE`, `STORE_BAD_COUNT`, `EFFECT_ID_COPY`, `PROG_MSG_FORCE`,
+   `SPARE_TIMER`) together with the code that fed them, and the unnamed bytes
+   between variables, including `INIT_DATA`'s misaligned second copies of
+   `RX_TIMING` and `rx_st_wait_start`. The order is unchanged and `INIT_DATA`
+   is regenerated as four runs matching the new positions. Three bytes that
+   looked dead were not, and the emulator census caught each: `NMI_COUNT+1`
+   is the high byte of a pointer `magic_short_word` reads through (kept and
+   named in the comment), `MSG_STORE-1` takes a space from `store_repair` on
+   every boot (`STORE_GUARD`), and the four bytes after `FB_COL` were read by
+   `tiny_scroll_off`, whose `LD HL,FB_COL` is a typo for the pointer: it
+   scanned the *variable block* for a colour byte and always found the `0x95`
+   constant, so TINY always pushed the display off first. The scan is gone and
+   that behaviour kept. Verified by an emulator census (every RAM byte read or
+   written across the suite, attributed to its symbol), a lockstep diff of
+   every variable against patch 7, and `compare`/`stack`. **On the sign,
+   2026-09-19:** `B4 '1'` reports `total 07086`; the store was then filled to
+   the last byte with 250-byte chunks (eight channels of 830 bytes, then more
+   until `free` hit 0), `B4 '3'` returned all 7086 bytes with a good checksum
+   and every channel's text intact, and the bytes that no longer fit were
+   dropped silently as designed. The last text byte sits directly under the
+   stack. B9 was reproduced on the sign in the same session.
 
 ### Rejected
 

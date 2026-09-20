@@ -18,6 +18,8 @@ Transport options (everything else is identical to cc784.py):
 
 The proxy UART is reconfigured to 300 baud, 8 data bits, no parity, 2 stop bits
 on connect (serial_proxy_configure), so the YAML baud_rate does not matter.
+Writes are fed to the proxy in 32-byte pieces at the line rate: handing it a
+whole 259-byte frame at once lost bytes and dropped the API connection.
 """
 import os, sys, asyncio, threading, queue, argparse, time
 
@@ -106,7 +108,15 @@ class ESPHomeLink:
 
     # -- sync link interface used by cc784.Sign --------------------------------
     def write(self, data: bytes):
-        self._run(self._write(bytes(data)))
+        # The proxy's UART buffer is shallow: a 259-byte frame handed over at once
+        # lost bytes and then dropped the API connection. Feed it in pieces paced
+        # at the line rate (300 baud = 27 bytes/s) so it never holds more than one.
+        data = bytes(data)
+        for i in range(0, len(data), 32):
+            piece = data[i:i + 32]
+            self._run(self._write(piece))
+            if i + 32 < len(data):
+                time.sleep(len(piece) * 10 / 300.0)
 
     def read(self, n: int, timeout: float) -> bytes:
         out = bytearray(); end = time.time() + timeout
