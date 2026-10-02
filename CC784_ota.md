@@ -170,7 +170,7 @@ The `OTA: emulator regression` task runs the five fast ones.
   the T48. The trailer's state byte and ~60 spare stub bytes are reserved
   for it.
 - **Layout pinning** (`ALIGN 64` slack between modules, fixed `ORG`s for the
-  tables) so that small code edits stay small pushes. There are ~260 bytes
+  tables) so that small code edits stay small pushes. There are ~450 bytes
   of bank free, not enough yet.
 - A table-driven CRC would halve the 1 s boot pass.
 

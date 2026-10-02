@@ -28,7 +28,7 @@ RAM, with the chip-size detection of patch 13:
 | `C000` | `BANK_REG`, the added '273 (write-only; bit 0 = EEPROM A14) |
 
 ROM: `0000–01FF` boot stub, `0200` jump table, `0209` `ROM_ID` (stock `0048`),
-application to `3FBF`, trailer page at `3FC0` (`CC784_ota.md` §2). About 260
+application to `3FBF`, trailer page at `3FC0` (`CC784_ota.md` §2). About 450
 bytes of the bank are free.
 
 ## 2. Patches
@@ -136,6 +136,15 @@ bytes of the bank are free.
     message from `B5 'B'` to the reboot through the factory test mode.
 15. **APPEND seats like DELETE_TEXT** (fixes B11): the extra step back onto an empty
     channel's marker is gone.
+17. **Label strings parked in the index-space gaps** (+237 bytes). The
+    editor's label lookup is `ATTR_LABEL_TABLE + 2·attr`, so the colour-name
+    table must sit 256 bytes after it and the speed labels 128 bytes after
+    the `B0` table; the slots in between (`20–7F`, `D0–EF`) are never indexed.
+    Stock filled the first gap with eleven "TOP OF MSG n" strings that nothing
+    can display (the redraw treats `D0`-class bytes as characters; the real
+    banner is built by `show_top_of_msg`) and the second with zeros. Both now
+    hold live label strings moved from after the tables, and `ds` guards make
+    the assembler enforce the offsets.
 16. **DONE handshake.** Immediate mode is "flag bit 7 set"; with bit 0 set as
     well (`81`) `pkt_process_done` queues a `04` byte, which leaves on the
     `EI` that makes the sign receptive again, so the sender waits for it

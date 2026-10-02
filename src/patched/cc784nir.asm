@@ -7712,33 +7712,67 @@ ATTR_LABEL_TABLE:
         dw STR_SHIFT               ; 1d  .SHIFT.
         dw STR_GRAPH               ; 1e  .GRAPH
         dw STR_MAGIC               ; 1f  .MAGIC.
-STR_TOP_MSG_1:
-        db "TOP OF MSG  1",0x00,0x00,0x00
-STR_TOP_MSG_2:
-        db "TOP OF MSG  2",0x00,0x00,0x00
-STR_TOP_MSG_3:
-        db "TOP OF MSG  3",0x00,0x00,0x00
-STR_TOP_MSG_4:
-        db "TOP OF MSG  4",0x00,0x00,0x00
-STR_TOP_MSG_5:
-        db "TOP OF MSG  5",0x00,0x00,0x00
-STR_TOP_MSG_6:
-        db "TOP OF MSG  6",0x00,0x00,0x00
-STR_TOP_MSG_7:
-        db "TOP OF MSG  7",0x00,0x00,0x00
-STR_TOP_MSG_8:
-        db "TOP OF MSG  8",0x00,0x00,0x00
-STR_TOP_MSG_9:
-        db "TOP OF MSG  9",0x00,0x00,0x00
-STR_TOP_MSG_10:
-        db "TOP OF MSG 10",0x00,0x00,0x00
-STR_TOP_DEMO:
-        db "TOP DEMO MSG ",0x00,0x00,0x00
+
+; ---- The lookup is ATTR_LABEL_TABLE + 2*attr for attributes 00-1F and colours
+;      80-9F, so COLOUR_NAME_TABLE must sit at +0100; the 20-7F slots in between
+;      are never indexed and hold label strings (P17: stock parked eleven dead
+;      "TOP OF MSG n" strings here). The ds enforces the offset.
 STR_BEEP:
         db 0x15,"BEEP",0x16,0x00
 STR_RIGHT:
         db 0x15,"RIGHT",0x16,0x00
         db 0x00
+
+STR_COLOR:
+        db 0x15,"COLOR",0x00
+STR_BGRND:
+        db 0x15,"BGRND",0x00
+STR_NORM:
+        db 0x15,"NORM",0x16,0x00
+STR_BOLD:
+        db 0x15,"BOLD",0x16,0x00
+STR_DRAW:
+        db 0x15,"DRAW",0x16,0x00
+STR_THIN:
+        db 0x15,"THIN",0x16,0x00
+STR_WAIT:
+        db 0x15,"WAIT",0x16,0x00
+STR_FUNC:
+        db 0x15,"FUNC",0x00
+STR_EURO:
+        db 0x15,"EURO",0x00
+STR_REM:
+        db 0x15,"REM",0x16,0x00
+STR_BIG:
+        db 0x15,"BIG",0x16,0x00
+STR_SHIFT:
+        db 0x15,"SHIFT",0x16,0x00
+STR_RAINBOW:
+        db 0x15,"RAINBOW",0x16,0x00
+STR_MAGIC_OFF:
+        db 0x15,"MAGIC OFF",0x16,0x00
+STR_PAUSE:
+        db 0x15,"PAUSE",0x16,0x00
+STR_HOLD:
+        db 0x15,"HOLD",0x16,0x00
+STR_HALT:
+        db 0x15,"HALT",0x16,0x00
+STR_UP:
+        db 0x15,"UP",0x16,0x00
+STR_DOWN:
+        db 0x15,"DOWN",0x16,0x00
+STR_SPEED:
+        db 0x15,"SPEED ",0x00
+STR_GRAPH:
+        db 0x15,"GRAPH ",0x00
+STR_MAGIC:
+        db 0x15,"MAGIC",0x16,0x00
+
+STR_C_BLACK:
+        db 0x15,"BLACK",0x16,0x00
+STR_SPEED_0:
+        db 0x15,"S0",0x16,0x00
+        ds ATTR_LABEL_TABLE+0x100-$,0
 
 ; ---- COLOUR_NAME_TABLE: indexed by colour code 80-8F fg, 90-9F bg; 0000 = no label
 COLOUR_NAME_TABLE:
@@ -7812,40 +7846,27 @@ STR_LEFT:
         db 0x15,"LEFT",0x16,0x00
         db 0x00
 
-; ---- MSG_TOP_TABLE: indexed by "TOP OF MSG n"; 0000 = no label
-MSG_TOP_TABLE:
-        dw STR_TOP_MSG_1           ; 00  TOP OF MSG  1
-        dw STR_TOP_MSG_2           ; 01  TOP OF MSG  2
-        dw STR_TOP_MSG_3           ; 02  TOP OF MSG  3
-        dw STR_TOP_MSG_4           ; 03  TOP OF MSG  4
-        dw STR_TOP_MSG_5           ; 04  TOP OF MSG  5
-        dw STR_TOP_MSG_6           ; 05  TOP OF MSG  6
-        dw STR_TOP_MSG_7           ; 06  TOP OF MSG  7
-        dw STR_TOP_MSG_8           ; 07  TOP OF MSG  8
-        dw STR_TOP_MSG_9           ; 08  TOP OF MSG  9
-        dw STR_TOP_MSG_10          ; 09  TOP OF MSG 10
-        dw STR_TOP_DEMO            ; 0a  TOP DEMO MSG
-        dw 0
-        dw 0
-        dw 0
-        dw 0
-        dw 0
-        dw 0
-        dw 0
-        dw 0
-        dw 0
-        dw 0
-        dw 0
-        dw 0
-        dw 0
-        dw 0
-        dw 0
-        dw 0
-        dw 0
-        dw 0
-        dw 0
-        dw 0
-        dw 0
+
+; ---- ATTR_LABEL_TABLE_B0 + 2*(attr-B0): the D0-EF slots are never indexed (the
+;      editor's redraw treats D0/E0-class bytes as characters) and hold strings;
+;      SPEED_STR_TABLE (F0-F7) must sit at +0080.
+STR_C_D_GRE:
+        db 0x15,"D-GRE",0x16,0x00
+STR_C_M_GRE:
+        db 0x15,"M-GRE",0x16,0x00
+STR_C_GREEN:
+        db 0x15,"GREEN",0x16,0x00
+STR_C_D_RED:
+        db 0x15,"D-RED",0x16,0x00
+STR_C_D_YEL:
+        db 0x15,"D-YEL",0x16,0x00
+STR_C_D_LIM:
+        db 0x15,"D-LIM",0x16,0x00
+STR_C_LIME:
+        db 0x15,"LIME",0x16,0x00
+STR_C_M_RED:
+        db 0x15,"M-RED",0x16,0x00
+        ds ATTR_LABEL_TABLE_B0+0x80-$,0
 
 ; ---- SPEED_STR_TABLE: indexed by speed 0-7 -> "S0".."S7"; 0000 = no label
 SPEED_STR_TABLE:
@@ -7857,51 +7878,6 @@ SPEED_STR_TABLE:
         dw STR_SPEED_5                            ; 05  .S5.
         dw STR_SPEED_6                            ; 06  .S6.
         dw STR_SPEED_7                            ; 07  .S7.
-STR_COLOR:
-        db 0x15,"COLOR",0x00
-STR_BGRND:
-        db 0x15,"BGRND",0x00
-STR_NORM:
-        db 0x15,"NORM",0x16,0x00
-STR_BOLD:
-        db 0x15,"BOLD",0x16,0x00
-STR_DRAW:
-        db 0x15,"DRAW",0x16,0x00
-STR_THIN:
-        db 0x15,"THIN",0x16,0x00
-STR_WAIT:
-        db 0x15,"WAIT",0x16,0x00
-STR_FUNC:
-        db 0x15,"FUNC",0x00
-STR_EURO:
-        db 0x15,"EURO",0x00
-STR_REM:
-        db 0x15,"REM",0x16,0x00
-STR_BIG:
-        db 0x15,"BIG",0x16,0x00
-STR_SHIFT:
-        db 0x15,"SHIFT",0x16,0x00
-STR_RAINBOW:
-        db 0x15,"RAINBOW",0x16,0x00
-STR_MAGIC_OFF:
-        db 0x15,"MAGIC OFF",0x16,0x00
-STR_PAUSE:
-        db 0x15,"PAUSE",0x16,0x00
-STR_HOLD:
-        db 0x15,"HOLD",0x16,0x00
-STR_HALT:
-        db 0x15,"HALT",0x16,0x00
-STR_UP:
-        db 0x15,"UP",0x16,0x00
-STR_DOWN:
-        db 0x15,"DOWN",0x16,0x00
-STR_SPEED:
-        db 0x15,"SPEED ",0x00
-STR_GRAPH:
-        db 0x15,"GRAPH ",0x00
-STR_MAGIC:
-        db 0x15,"MAGIC",0x16,0x00
-
 MENU_STRINGS:
         db " ADDRESS? ",0x00
 MENU_STR_MSG_FULL:
@@ -7924,24 +7900,6 @@ MENU_STR_100_KEYS:
         db 0x05," 100 KEYS LEFT ",0x00
 MENU_STR_SEQ_FULL:
         db 0x03," SEQUENCE FULL",0x00
-STR_C_BLACK:
-        db 0x15,"BLACK",0x16,0x00
-STR_C_D_GRE:
-        db 0x15,"D-GRE",0x16,0x00
-STR_C_M_GRE:
-        db 0x15,"M-GRE",0x16,0x00
-STR_C_GREEN:
-        db 0x15,"GREEN",0x16,0x00
-STR_C_D_RED:
-        db 0x15,"D-RED",0x16,0x00
-STR_C_D_YEL:
-        db 0x15,"D-YEL",0x16,0x00
-STR_C_D_LIM:
-        db 0x15,"D-LIM",0x16,0x00
-STR_C_LIME:
-        db 0x15,"LIME",0x16,0x00
-STR_C_M_RED:
-        db 0x15,"M-RED",0x16,0x00
 STR_C_D_ORA:
         db 0x15,"D-ORA",0x16,0x00
 STR_C_M_YEL:
@@ -7956,8 +7914,6 @@ STR_C_GOLD:
         db 0x15,"GOLD",0x16,0x00
 STR_C_YELLOW:
         db 0x15,"YELLOW",0x16,0x00
-STR_SPEED_0:
-        db 0x15,"S0",0x16,0x00
 STR_SPEED_1:
         db 0x15,"S1",0x16,0x00
 STR_SPEED_2:
