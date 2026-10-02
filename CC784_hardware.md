@@ -18,22 +18,22 @@ Confidence key as in the firmware notes: **[H]** verified, **[M]** inferred,
 | U1 | Zilog **Z0840008PSC** (Z80, 8 MHz grade) | CPU |
 | U2 | ST **M27C256B-15F1** (32 K × 8, 150 ns) | firmware ROM; only lower 16 K used |
 | U3 | Hyundai **HY6264ALP-10** (8 K × 8 SRAM) | RAM `4000–5FFF` |
-| U4 | 74LS139 | memory + I/O decoding [M: which half does what] |
-| U5, U9 | 74LS273 ×2 | `CTRL_LATCH` (`8000`) and column-data latch [M: which is which] |
+| U4 | 74LS139 | U4B memory decode, U4A I/O decode (§2) |
+| U5, U9 | 74LS273 ×2 | U5 = `CTRL_LATCH` (`8000`), U9 = colour latch (§5) |
 | U6 | **74LS145** (BCD→decimal, OC) | row select → TR1–TR7 |
-| U7, U8 | 74LS151 ×2 | 8:1 input muxes feeding `IN C0` [M] |
+| U7, U8 | 74LS151 ×2 | row-bit selector and colour selector for the panel data (§5) |
 | U10, U16, U17 | 74LS00 ×3 | glue |
 | U11 | 74HC04 + 8.000 MHz crystal | oscillator |
-| U12 | 74LS244 | serial port buffer (traced, §4) |
-| U13 | 74HC132 | Schmitt NAND — reset / mains zero-cross [M] |
+| U12 | 74LS244 | serial outputs, and the input port read by `IN C0` (§4) |
+| U13 | 74HC132 | RAM `/CE` gating and the power-fail CS2, on the battery rail |
 | U14 | **74HC4020** (14-stage ripple counter) | timebase divider (§3) |
 | U15 | LM340T-5 (7805) | 5 V regulator |
 | U18 | CD74HC14 | IR receiver conditioning |
-| U19 | 74LS164 | column shift register (§5) [M] |
+| U19 | 74HC164 | first stage of the column shift chain (§5) |
 | TR1–TR7 | TIP125 (PNP Darlington) | LED row drivers |
-| TR8, TR9 | small TO-92 | near IR header / reset [L] |
+| Q8, Q9 | BC548 | beeper driver; power-fail detector for CS2 (§7) |
 | C1, C2 | 4700 µF 16 V | bulk filter |
-| D1, R32 | — | battery trickle-charge path [M] |
+| R4, D3 | 220 Ω, diode | battery charge/discharge path and the `+5VP` rail (§7) |
 | SK2 | 24-pin connector | display panel (§6) |
 | J | DB9 male | serial (§4) |
 | — | "NICAD BATTERY" footprint | RAM backup; **was fitted, removed (leaking)** |
@@ -41,14 +41,22 @@ Confidence key as in the firmware notes: **[H]** verified, **[M]** inferred,
 | — | barrel jack | 9 V **AC** in (supplied PSU: 9 V AC, 4.2 A transformer) |
 | — | piezo/speaker near SK2 | beeper (`07` command) |
 
-## 2. Memory and I/O decoding [M, except the ROM socket which is H]
+## 2. Memory and I/O decoding [H — from the schematic]
 
-Consistent with the firmware and an LS139:
-- Memory: A15/A14 → `00` ROM (`0000–3FFF`), `01` RAM (`4000–5FFF`), `10`
-  control latch write at `8000`.
-- I/O: A7/A6 → `40` (column clock), `80` (strobe), `C0` (input mux read);
-  `48–4F` = `40` group with A3 set, row in A0–A2, used by `OTIR` for the 86
-  column bytes of one row.
+U4 (74LS139) does both halves:
+
+- **Memory (U4B, enabled by `/MREQ`, inputs A15/A14):** `2Y0` ROM `/CE` and
+  `/OE` (`0000–3FFF`); `2Y1` → U13 → RAM `/CE` (`4000–7FFF`, gated by CS2,
+  §7); `2Y2` clocks U5, the control latch (`8000`); `2Y3` (`C000–FFFF`) is
+  unused on the stock board and now clocks the OTA bank register.
+- **I/O (U4A, enabled by `IORQ·/M1` so interrupt acknowledges are excluded,
+  inputs A7/A6):** `1Y0` (`00–3F`) unused; `1Y1` = the `40` group: clocks the
+  on-board HC164 (U19) and the panel's column clock (J2 pin 11, through U18),
+  and, gated with D7 in U10, clocks U9, the colour latch; `1Y2` = `80`, the
+  strobe (J2 pin 12); `1Y3` = `C0`, enables the '244's input half onto the
+  bus. Within the `40` group the Z80's low address bits are used as data: A0–A2
+  select the row bit (§5), A3 the intensity pass, A5 the beeper, and A8 — the
+  `B` register during `OTIR` — red or green.
 
 ### ROM socket wiring [H — traced on the board]
 
@@ -75,16 +83,18 @@ Substitutes, given the above:
   addressed. Skipping the pin 1 bodge leaves A14 stuck high on the VPP net;
   that needs the low 16 K duplicated into both halves instead.
 
-## 3. Timebase [H for the arithmetic, M for the wiring]
+## 3. Timebase [H]
 
-8.000 MHz crystal → HC04 oscillator → HC4020. The firmware's bit tables give
-300 baud only if the interrupt is **7812.5 Hz = 8 MHz / 1024 = HC4020 Q10**.
-The Z80 clock is **8 MHz** (the HC04 output directly, not HC4020 Q1): the
-firmware's per-tick interrupt work plus one row refresh is ~3900 T, more than
-the 3072 T a 4 MHz CPU would have between `tick6_service` calls, so at 4 MHz
-the service could never finish before being scheduled again (firmware notes
-§2; the emulator shows the runaway). A 150 ns EPROM at 8 MHz with no wait
-state is marginal on paper, which the part evidently tolerates.
+8.000 MHz crystal → HC04 oscillator → the Z80 clock and the HC4020 (U14).
+The counter is **reset by every interrupt acknowledge** (`M1·IORQ`, U17 →
+U11 → pin 11), and `/INT` is its Q11 output inverted: it asserts 1024 clocks
+= 128 µs after the last acknowledge, which is the 7812.5 Hz tick. Q13 goes
+high 4096 clocks = 512 µs after the last acknowledge and, inverted by U17,
+**clears U5**, the control latch, for the next 512 µs: a watchdog that blanks
+the rows and parks TX whenever the firmware stops servicing interrupts, for
+instance for the whole of `pkt_process`. It is why the OTA bank register is a
+separate chip (`CC784_ota.md` §1). The Z80 runs at the full 8 MHz: the
+firmware's per-tick work does not fit 4 MHz (firmware notes §2).
 
 NMI: 60 Hz from the AC input via a zero-cross detector (`NMI_PER_SEC = 60`).
 With a DC supply the clock would not run; the supplied PSU is AC, so it does.
@@ -118,21 +128,32 @@ ESPHome `serial_proxy` via `cc784_esphome.py` (aioesphomeapi 46.4.x).
 A MAX3232 is the faithful interface; direct 3.3 V TTL with software inversion
 would probably work through the 220 Ω but is unverified.
 
-## 5. Display drive [M]
+## 5. Display drive [H — from the schematic and the firmware]
 
-- Frame buffer 4 × 86 bytes; 7 physical rows (TR1–TR7 via LS145; latch low
-  nibble = row, `0F` = no row = blank).
-- Row refresh: `OTIR` 86 bytes to `48+row`, strobe on `80`. Port `40` clocks
-  the LS164 column shift chain; 85 zero-writes clear it (`shift_chain_clear`).
-- Colour [H — from the owner]: the panel is **alternating columns of red and
-  green LEDs**, not two dies per pixel. Stationary text is visibly striped
-  red/green; moving text blends in the eye, which is why everything scrolls.
-  The 16 foreground codes are 2-bit red and green intensities (orange = full
-  red, dim green), so some intensity control exists on the panel side; not
-  traced. The frame buffer is a 344-byte ring of single columns, not planes.
-  Each row's 86 bytes are written twice, to `40+row` then `48+row` (firmware
-  notes §2); with a red/green column layout, A3 plausibly selects which
-  colour's columns take the data [L].
+- **Row select:** U5 Q0–Q3 → U6 (LS145) → TR1–TR7 → J2 pins 1–7. The
+  firmware writes the row index complemented (`7−k`), so live rows are codes
+  1–7; code 0's output is unconnected and `0F` decodes to nothing, so both
+  blank. U5 Q4 is serial TX, Q5/Q6 go to DB9 pins 4/7 (unused), Q7 is the
+  2.4 Hz FLASH clock.
+- **Column data:** one `OTIR` of 86 bytes per row, the same 86 column bytes
+  for every row. U7 (LS151, data = D0–D7, select = A0–A2 = the row) picks
+  the current row's bit out of each byte and feeds it to the on-board HC164
+  and to U16, whose output is J2 pin 10, the panel's serial data. Each row is
+  written twice, to `40+row` then `48+row`, displayed for one and two ticks
+  respectively (§7 of the firmware notes): A3 selects intensity bit 0 or bit
+  1 of the colour, giving four levels with 1:2 weights.
+- **Colour:** a byte with bit 7 set is latched by U9 instead of being shifted
+  (U10 gates the `40`-group clock with D7). Bits 0–1 green and 2–3 red
+  intensity, bit 4 FLASH, bits 5–6 background red/green (one bit each, so the
+  four background names). U8 (LS151) takes U9's outputs: for a lit pixel it
+  selects the foreground bit chosen by A3 (which intensity bit) and A8 (green
+  or red, alternating per column because `B` counts down on A8–A15 during
+  `OTIR`); for an unlit pixel it selects the background bit. The FLASH bit is
+  ANDed with U5 Q7 in U10 to blank flashing columns on the off phase. U9 Q7
+  is latched from **A5**, not the data bus, and drives the beeper through
+  Q8: `OUT (68+row)` beeps.
+- The panel is 7 rows × 84 columns (CC**784**); the firmware carries 86
+  columns per row and clocks 85 zeros to clear the chain.
 
 ## 6. Connectors
 
@@ -155,64 +176,53 @@ calls; the patched build drops it.
 ## 7. Power / battery
 
 9 V AC in → bridge (D?) → C1/C2 → 7805 → 5 V logic; unregulated rail to the
-LED rows via SK2. Battery: 3-cell NiCd footprint, trickle-charged through
-D1/R32 [M], backing only the HY6264 (message store, address, sequence, clock
-digits — the clock does not *run* on battery, it only keeps its value).
+LED rows via SK2. Battery: 3-cell NiCd footprint. It charges **and**
+discharges through R4 (220 Ω) to `+5VP`, the rail behind D3 that feeds only
+the RAM and U13; Q9 with zener D11 watches the main 5 V and drops CS2 (via
+U13) as it fails, which deselects the RAM. The backed-up contents are the
+message store, address, sequence and clock digits — the clock does not *run*
+on battery, it only keeps its value.
 Battery removed by the owner (leaking). Replacement options: same-chemistry
 pack off-board; CR2032 **with a series diode** (do not charge a lithium
 primary); or a 0.47–1 F 5.5 V supercap in the existing charge path.
 Without a battery the sign boots with address 0 and an empty store.
 
-## 8. Factory bodge wires [L, except as noted]
+## 8. Factory bodge wires [H — from the schematic]
 
-Several (yellow/green/white on top, red/white/black underneath), original.
-One white wire lands near the DB9 area. Likely a decoding or timing fix
-absorbed in a later PCB revision.
+- Z80 pin 4 (A14) → ROM socket pin 27 (A14): the layout was cut for a
+  27128; a 27C256 needed a real A14.
+- Z80 pin 22 (`/WR`) → RAM pin 27 (`/WE`).
+- U13 pin 8 (CS2) → RAM pin 26.
+- U18 pin 11 → J2 pin 11 (the panel column clock), cut from its original
+  route.
+- U10 pin 12 cut from HC4020 pin 1 and bridged to pin 13: the `/INT` gate
+  became an inverter on Q11.
+- U18 pin 6 (IR, after the inverter) → the DB9 pin 1 net, which is how IR
+  reaches `PORT_IN` bit 1.
 
-Identified so far:
-- **Z80 pin 4 (A14) → ROM socket pin 27 (A14)** [H] — see §2. Consistent with
-  a layout cut for a 2764/27128 and later populated with a 27C256.
+## 9. Open questions
 
-## 9. Open questions (ordered by value), with how to answer each
+Answered from the schematic (2026-09): CPU clock (8 MHz), the INT source and
+the watchdog (§3), the control-latch and colour-latch bit maps (§5), the
+input port (§4, the '244, not a mux), SK2 pins 10–12 (data, clock, strobe),
+the bodge wires (§8), the battery path (§7), the `OUT (40)` role and the
+double row write (§5).
 
-- ~~H1. CPU clock~~ — **8 MHz**, settled from the firmware's tick budget (§3).
-  A scope on Z80 pin 6 would only confirm it.
-- **H2. INT source.** Confirm Z80 pin 16 is ~7.8 kHz and comes from HC4020
-  pin 14 (Q10).
-- **H3. Control-latch bit map.** Follow the `8000` LS273's Q0–Q7: expect
-  Q0–Q3 → LS145 (rows), Q4 → LS244 pin 2 (TX), Q4–Q6 → LS151 select lines.
-  **Q7 is driven by the firmware**: `LATCH_BIT7` is toggled every 13 frames
-  (≈210 ms, a 2.4 Hz square wave) and OR-ed into every latch write. **It is
-  the FLASH blink clock** [H — verified 2026-09-19: with the compare changed
-  from 13 to 7 (`FLASH_HALF_PERIOD` in the patched source) the sign blinked
-  at about 5 Hz]; colour-byte bit 4 marks the columns that follow it. The beeper is
-  *not* a latch bit: it is port-address bit 5 (`OUT (68+row)` while
-  `BEEP_TICKS` runs).
-- **H4. Input mux map.** LS151 inputs (U7/U8): which carry IR (bit 1), RX
-  (bit 3), keypad columns, and whether DB9 pins 1/4/7 reach the mux at all.
-- **H5. SK2 pins 10–12** and any remaining pins; what's on the panel side
-  (more LS164s? driver ICs? how many columns physically — 86?).
-- ~~H6. IR format~~ — **solved** from a logic-analyzer capture of the sign's own
-  receiver output: 600 µs leader, start cell at 3.14 ms, 6 biphase data cells
-  of 1024 µs, code = 0x80|key, 0xBE on release, ~90 ms repeat. Decoder model
-  and encoder in `cc784_ir.py`; details in the firmware notes §8. Remaining:
-  the **carrier frequency** — read the receiver module's part number (38 vs
-  40 kHz); the earlier TSOP38238 capture chopped the bursts, which suggests
-  the remote is not 38 kHz.
-- ~~H7. ESPHome serial_proxy path~~ — verified end-to-end (ACK round-trip works).
-- **H8. Bodge wire endpoints** (chip + pin for each end).
-- **H9. Battery circuit**: confirm D1/R32 are the charge path and what voltage
-  the RAM sees, before choosing a replacement chemistry.
-- **H10. Background colour codes `94–9F`** and effects `BB/BD/BE`: send with
-  `cc784.py msg 0 "@{9a}TEST"` etc. and record what appears.
-- **H11. `OUT (40)`** electrical role confirmation (LS164 clock) — one probe
-  during a `clearall`. Note the refresh writes every row's 86 bytes **twice**,
-  first to `40+row` and then to `48+row` (firmware notes §2), so A3 selects
-  something on the panel side — given the alternating red/green columns (§5),
-  most likely which colour's shift chain takes the data.
+Still open:
+
+- **The IR carrier frequency** — read the receiver module's part number
+  (38 vs 40 kHz); a TSOP38238 chopped the bursts, so the remote may not be
+  38 kHz.
+- **The panel side of SK2:** what takes the serial column data (more
+  HC164s? driver ICs?) and how the 86th column is handled.
+- **Background colour codes `94–9F`:** only two background bits exist in
+  hardware, so they should alias `90–93`; not watched for on the sign.
+- **Effects `BB`/`BD`/`BE`** and HALT/WAIT turning the held text yellow:
+  traced in the firmware, not yet watched for.
 
 ## 10. Verified-on-hardware summary
 
+The whole board is captured in KiCad (`~/Development/Hardware/ColorCells/CC784`); the netlist is the source for every [H] above that cites the schematic.
 Serial framing and checksum; ACK `06` on own address (0 after RAM loss);
 NAK on bad checksum implied by code; message load/display, sequence, clear,
 clock-set commands; `B4` queries crash/corrupt the stock firmware (see
