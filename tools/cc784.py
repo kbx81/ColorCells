@@ -46,7 +46,7 @@ try:
 except ImportError:          # only needed for the local-port front-end
     serial = None
 
-ACK, NAK, START = 0x06, 0x15, 0xB1
+ACK, NAK, START, DONE = 0x06, 0x15, 0xB1, 0x04   # DONE: patched firmware, after a flag-81 frame
 
 # ---- message escapes -------------------------------------------------------
 # Single-letter form:  @B bold, @R red ...   (see ESC)
@@ -140,8 +140,14 @@ class Sign:
         self.addr, self.gap, self.timeout, self.verbose = addr, gap, timeout, verbose
         self.post_ack = 1.0          # pause after each frame: the sign is deaf while it processes
         self.quiet = False           # suppress the per-frame ACK line (bulk senders)
+        self.done = False            # patched firmware: flag 81, wait for the DONE byte instead of sleeping
 
-    def send_frame(self, payload: bytes, expect_ack=None, retries=3, flag=0x80):
+    def send_frame(self, payload: bytes, expect_ack=None, retries=3, flag=None, reply_follows=False):
+        """flag defaults to 81 in done mode (ACK, processing, then a 04 DONE byte)
+        and 80 otherwise. With reply_follows the caller reads the reply itself and
+        then calls wait_done()."""
+        if flag is None:
+            flag = 0x81 if self.done else 0x80
         f = frame(self.addr, payload, flag)
         if expect_ack is None:
             expect_ack = self.addr != 0x2A
@@ -154,7 +160,8 @@ class Sign:
             else:
                 self.link.write(f)
             if not expect_ack:
-                time.sleep(len(f) * 10 / 300.0 + self.post_ack)   # no ACK to wait for: wire time, then the deaf window
+                if not reply_follows:
+                    time.sleep(len(f) * 10 / 300.0 + self.post_ack)   # no ACK to wait for: wire time, then the deaf window
                 return True
             # the ACK follows the last byte, and 300 baud moves ~27 bytes/s: a long
             # frame is still on the wire when a fixed timeout would expire, and a
@@ -166,14 +173,31 @@ class Sign:
                 # runs with interrupts off: ~0.25 s on an empty store, ~0.75 s
                 # when it is nearly full (init_sequence rescans the store for
                 # every channel in the sequence). Anything sent meanwhile is lost
-                # without a NAK. Measured in emulation; seen on the sign as every
-                # first attempt of a chunked message vanishing.
-                time.sleep(self.post_ack)
+                # without a NAK. The patched firmware sends DONE (04) the moment
+                # it can hear again if the flag was 81; stock needs the pause.
+                if reply_follows:
+                    return True
+                if flag & 1:
+                    self.wait_done()
+                else:
+                    time.sleep(self.post_ack)
                 return True
             if r == bytes([NAK]):
                 print("  NAK (checksum rejected) - retrying"); continue
             print("  no reply (attempt %d/%d)%s" % (attempt, retries,
                   "" if r == b"" else " got " + hexs(r)))
+        return False
+
+    def wait_done(self, timeout=5.0):
+        """wait for the DONE byte that follows processing of a flag-81 frame; fall
+        back to the fixed pause if it does not come"""
+        end = time.time() + timeout
+        while time.time() < end:
+            b = self.link.read(1, 0.2)
+            if b == bytes([DONE]):
+                return True
+        print("  no DONE within %.0f s; pausing instead" % timeout)
+        time.sleep(self.post_ack)
         return False
 
     def read_bytes(self, n, timeout):
@@ -218,8 +242,11 @@ class Sign:
         # the stock workaround, but its reply only comes at the end of the
         # current display cycle, and while it is pending the next frame's
         # address byte 01 drops the sign into the editor (firmware notes B9).
-        self.send_frame(b'\xB4' + n.encode(), expect_ack=False, flag=0x80)
-        return self.read_reply(dump=(n == '3'))
+        self.send_frame(b'\xB4' + n.encode(), expect_ack=False, reply_follows=True)
+        raw = self.read_reply(dump=(n == '3'))
+        if self.done:
+            self.wait_done()
+        return raw
 
 # ---- commands ---------------------------------------------------------------
 def parse_reply(raw: bytes, kind: str):
@@ -264,6 +291,8 @@ def add_common_args(ap):
     ap.add_argument('-g', '--gap', type=float, default=0.0, help='gap between bytes (s)')
     ap.add_argument('-t', '--timeout', type=float, default=3.0, help='reply timeout (s)')
     ap.add_argument('-v', '--verbose', action='store_true')
+    ap.add_argument('--done', action='store_true',
+                    help='patched firmware (patch 16+): wait for its DONE byte after each frame instead of pausing')
     ap.add_argument('--unsafe', action='store_true',
                     help='allow the B4 queries (id/mem/dump). On CC784NIR firmware these overflow '
                          'the 64-byte stack and corrupt RAM (sequence table, TX engine); use only '
@@ -275,6 +304,7 @@ def run(link, a, ap):
     """Execute command a.cmd with a.args over the given link. Shared by both front-ends."""
     addr = 0x2A if a.addr == '*' else int(a.addr, 0)
     s = Sign(link, addr, a.gap, a.timeout, a.verbose)
+    s.done = a.done
     c, args = a.cmd, a.args
 
     if c == 'sniff':

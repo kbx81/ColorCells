@@ -66,9 +66,17 @@ def parse_trailer(bank):
     return t
 
 
+FEATURE_DONE = 0x01
+
+
 def parse_info(reply):
-    """B5 'I' reply -> (running bank, trailer dict or None for bank 0, same for bank 1)"""
+    """B5 'I' reply -> (running bank, trailer dict or None for bank 0, same for bank 1).
+    Byte 21, when present, is the firmware's features byte (bit 0: DONE handshake)."""
     return reply[0], parse_trailer_bytes(reply[1:11]), parse_trailer_bytes(reply[11:21])
+
+
+def features(reply):
+    return reply[21] if len(reply) > 21 else 0
 
 
 def changed_pages(old, new):
@@ -83,10 +91,12 @@ class Ota:
         self.sign = sign
 
     def cmd(self, payload, reply=True):
-        if not self.sign.send_frame(payload):
-            raise RuntimeError('no ACK for %s' % payload[:2])
-        if not reply:
+        if not reply:                                   # R: the sign resets, nothing follows
+            if not self.sign.send_frame(payload, flag=0x80, reply_follows=True):
+                raise RuntimeError('no ACK for %s' % payload[:2])
             return None
+        if not self.sign.send_frame(payload, reply_follows=True):
+            raise RuntimeError('no ACK for %s' % payload[:2])
         raw = self.sign.read_reply()
         if len(raw) < 4 or raw[0] != 0xB1:
             raise RuntimeError('no reply frame, got %s' % raw.hex())
@@ -94,10 +104,17 @@ class Ota:
         data = raw[3:3 + n]
         if len(data) != n or sum(data) & 0xFF != raw[3 + n]:
             raise RuntimeError('bad reply frame %s' % raw.hex())
+        if self.sign.done:
+            self.sign.wait_done()
+        else:
+            time.sleep(self.sign.post_ack)
         return data
 
     def info(self):
-        return parse_info(self.cmd(b'\xb5I'))
+        """also switches the link to the DONE handshake when the firmware offers it"""
+        raw = self.cmd(b'\xb5I')
+        self.sign.done = bool(features(raw) & FEATURE_DONE)
+        return parse_info(raw)
 
     def page_crcs(self):
         out = []
