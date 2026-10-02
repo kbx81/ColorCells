@@ -167,17 +167,27 @@ STORE_TEXT_LIMIT     equ RAM_VARS+0x1fd   ; free text bytes; scan bound for stor
 STORE_WARN_LIMIT     equ RAM_VARS+0x1ff   ; STORE_END here trips the 100 KEYS LEFT warning
 STORE_GUARD          equ RAM_VARS+0x201   ; store_repair writes a space at MSG_STORE-1 every boot
 MSG_STORE            equ RAM_VARS+0x202
-PKT_READY            equ 0x5ef0
-PKT_BUF              equ 0x5ef1
-PKT_STATE            equ 0x5ff1
-PKT_CKSUM            equ 0x5ff2
-PKT_FLAG             equ 0x5ff3
-PKT_LEN              equ 0x5ff4
-PKT_VECTOR           equ 0x5ff5
-PKT_ADDR             equ 0x5ff7
-PKT_PTR              equ 0x5ff8
-PKT_REMAIN           equ 0x5ffa
+; ---- Top of RAM (patch 13). Everything at a fixed address sits in the last
+;      272 bytes below RAM_TOP: on the stock 8 K chip 7Fxx aliases 5Fxx, so the
+;      same build runs on either; only the store's ceiling is decided at boot.
+RAM_TOP              equ 0x8000
+PKT_READY            equ RAM_TOP-0x110   ; 7EF0 (5EF0 stock)
+PKT_BUF              equ PKT_READY+1
+PKT_STATE            equ RAM_TOP-0x0f
+PKT_CKSUM            equ RAM_TOP-0x0e
+PKT_FLAG             equ RAM_TOP-0x0d
+PKT_LEN              equ RAM_TOP-0x0c
+PKT_VECTOR           equ RAM_TOP-0x0b
+PKT_ADDR             equ RAM_TOP-0x09
+PKT_PTR              equ RAM_TOP-0x08
+PKT_REMAIN           equ RAM_TOP-0x06
 CTRL_LATCH           equ 0x8000
+; ---- OTA (CC784_ota.md): the boot stub's RAM, above the packet parser state,
+;      and the added '273 bank register. store_init leaves these bytes alone.
+NMI_VEC              equ RAM_TOP-4   ; NMI_VECTOR jumps here once NMI_MAGIC holds 0xA5
+NMI_MAGIC            equ RAM_TOP-2
+ROM_BANK             equ RAM_TOP-1   ; bank the stub booted; BANK_REG cannot be read back
+BANK_REG             equ 0xc000      ; write-only: bit 0 = EEPROM A14 (bits 1-2 reserved for A15/A16)
 
 PORT_40_OUT          equ 0x40
 PORT_ROW0            equ 0x48
@@ -190,23 +200,341 @@ PORT_IN              equ 0xc0
 ; demand is ~120 bytes (B4 query chain ~40 + tick6_service with rx_consume ~40
 ; + int/NMI frames), hence bug B1.  Patched: 256-byte stack at 0x5DF0..0x5EEF,
 ; carved off the top of the message store so nothing else has to move.
-STACK_TOP            equ 0x5ef0      ; first PUSH lands at 0x5EEE
+STACK_TOP            equ PKT_READY   ; first PUSH lands two below
 ; FLASH blink: frames per half period of CTRL_LATCH bit 7. Stock 13 = 2.4 Hz;
 ; 7 gave a visible ~5 Hz on the sign (2026-09-19), which is what proved bit 7
 ; is the blink clock. Change here to retune, nothing else references it.
 FLASH_HALF_PERIOD    equ 13
 STACK_SIZE           equ 128         ; measured high-water 70 bytes, worst-case chain ~108
-STORE_TOP            equ STACK_TOP-STACK_SIZE-1
-; store_init derives these three from STORE_TOP; keep them in step or the store
-; scans, the "100 KEYS LEFT" warning and the B4 '1' memory report disagree.
-STORE_WARN           equ STORE_TOP-100            ; 0x5E8B stock
-STORE_SIZE_INIT      equ STORE_TOP-MSG_STORE+1    ; 0x1B0E stock
-STORE_TEXT_FREE      equ STORE_SIZE_INIT-301      ; 0x19E1 stock (301 = framing)
+STORE_TOP            equ STACK_TOP-STACK_SIZE-1   ; with a 32 K chip (16 K usable)
+STORE_TOP_8K         equ STORE_TOP-0x2000         ; with the stock 8 K chip
+; store_init derives the warning level, the text allowance (301 = framing) and
+; the B4 '1' size from whichever ceiling the RAM test picks.
 
         org 0x0000
 
-; ---- RESET: cold start: set SP, run init routines, EI, jump to main loop
+; ============================================================================
+;  BOOT STUB 0000-00FF (CC784_ota.md §4). Byte-identical in both banks and
+;  written by the T48 only: the OTA handler refuses its pages. It may reference
+;  nothing in the app except the fixed jump table below, so that app changes
+;  never change its bytes.
+; ============================================================================
+STUB_END             equ 0x0200
+APP_START            equ STUB_END
+APP_INT              equ STUB_END+3
+APP_NMI              equ STUB_END+6
+STUB_STACK           equ PKT_READY
+STUB_RAM             equ 0x4000      ; stub_lib runs here (FRAMEBUF: idle at boot and during pkt_process)
+TRAILER_MAGIC        equ 0x3141544f  ; "OTA1"
+; Trailer page at 3FC0: +0 magic, +4 seq, +5 state, +6 CRC-16 of STUB_END..3FBF,
+; +8 CRC-16 of bytes +0..+7. CRC-16/XMODEM (poly 1021, init 0), tools/cc784_ota.py.
+
+; ---- RESET: choose a bank, point the NMI at its app, run it
 RESET:
+        DI
+        XOR A
+        LD (NMI_MAGIC),A        ; RAM is random at power-up: no vector yet
+        LD SP,STUB_STACK
+        JP stub_main
+
+        ds 0x0038-$,0xff
+
+; ---- INT_VECTOR: IM 1 entry, through the jump table
+INT_VECTOR:
+        JP APP_INT
+
+        ds 0x0066-$,0xff
+
+; ---- NMI_VECTOR: through NMI_VEC when it is valid; else ignored. The mains NMI
+;      cannot be masked, and while the stub is checking a bank the code at
+;      APP_NMI may be anything.
+NMI_VECTOR:
+        PUSH AF
+        LD A,(NMI_MAGIC)
+        CP 0xa5
+        JR nz,nmi_ignore
+        POP AF
+        PUSH HL
+        LD HL,(NMI_VEC)
+        EX (SP),HL
+        RET
+
+nmi_ignore:
+        POP AF
+        RETN
+
+; ---- stub_main: check both trailers; prefer the newer sequence number; a
+;      bank whose image CRC fails loses to the other; with nothing valid, bank 0
+;      runs anyway (the T48 case). Everything that touches BANK_REG runs from
+;      RAM (stub_lib), so the other bank's contents never execute here.
+stub_main:
+        XOR A
+        LD (ROM_BANK),A         ; the lib restores this bank after each look
+        LD HL,stub_lib
+        LD DE,STUB_RAM
+        LD BC,STUB_LIB_SIZE
+        LDIR
+        XOR A
+        CALL lib_trailer_check
+        PUSH AF                 ; valid0
+        PUSH BC                 ; C = seq0
+        LD A,1
+        CALL lib_trailer_check
+        LD E,A                  ; E = valid1, C = seq1
+        POP HL                  ; L = seq0
+        POP AF
+        LD B,A                  ; B = valid0
+        OR E
+        JR z,stub_boot0         ; neither trailer is valid
+        LD A,B
+        AND E
+        JR nz,stub_both
+        LD A,B
+        OR A
+        LD A,0
+        JR nz,stub_try_one      ; only bank 0 is valid
+        INC A                   ; only bank 1 is valid
+
+stub_try_one:
+        CALL lib_image_check
+        JP c,lib_boot
+        JR stub_boot0
+
+stub_both:
+        LD A,L                  ; seq0 - seq1, signed
+        SUB C
+        LD A,0
+        JP p,stub_try_pair      ; bank 0 is as new or newer: it goes first
+        INC A
+
+stub_try_pair:
+        PUSH AF
+        CALL lib_image_check
+        JR c,stub_boot_pop
+        POP AF
+        XOR 1
+        CALL lib_image_check
+        JP c,lib_boot
+
+stub_boot0:
+        XOR A
+        JP lib_boot
+
+stub_boot_pop:
+        POP AF
+        JP lib_boot
+
+; ============================================================================
+;  stub_lib: assembled to run at STUB_RAM. The stub copies it there at boot; the
+;  app copies it there again for the B5 commands. Every routine leaves BANK_REG
+;  on ROM_BANK, the bank the code is running from.
+; ============================================================================
+stub_lib:
+        DISP STUB_RAM
+
+; ---- lib_copy: A = bank, HL = source in the ROM window, DE = destination in
+;      RAM, BC = length. HL/DE advance as LDIR leaves them.
+lib_copy:
+        LD (BANK_REG),A
+        LDIR
+        LD A,(ROM_BANK)
+        LD (BANK_REG),A
+        RET
+
+; ---- lib_page_writer: HL = 64 source bytes in RAM, DE = page address in the
+;      ROM window (64-aligned), B = target bank. Interrupts must be off. Out:
+;      A = 0 written and verified, 1 verify failed, 2 chip never finished.
+;      Waits for the mains NMI first so the 10 ms write cycle, during which the
+;      ROM is unreadable, cannot collide with the next one.
+lib_page_writer:
+        HALT
+        PUSH DE
+        PUSH HL
+        LD A,1
+        LD (BANK_REG),A
+        LD A,0xaa
+        LD (0x1555),A           ; chip 5555
+        XOR A
+        LD (BANK_REG),A
+        LD A,0x55
+        LD (0x2aaa),A           ; chip 2AAA
+        LD A,1
+        LD (BANK_REG),A
+        LD A,0xa0
+        LD (0x1555),A           ; chip 5555: SDP write enable, stays armed
+        LD A,B
+        LD (BANK_REG),A
+        LD BC,64
+        LDIR
+        DEC HL
+        LD B,(HL)               ; last byte written, for DATA polling
+        DEC DE
+        LD C,0                  ; ~500 us: let the page-load window close first
+
+pw_settle:
+        DEC C
+        JR nz,pw_settle
+        LD HL,0x1800            ; poll timeout, ~30 ms
+
+pw_poll:
+        LD A,(DE)
+        XOR B
+        AND 0x80
+        JR z,pw_verify
+        DEC HL
+        LD A,H
+        OR L
+        JR nz,pw_poll
+        LD A,2
+        JR pw_done
+
+pw_verify:
+        POP HL
+        POP DE
+        PUSH DE
+        PUSH HL
+        LD B,64
+
+pw_cmp:
+        LD A,(DE)
+        CP (HL)
+        JR nz,pw_bad
+        INC HL
+        INC DE
+        DJNZ pw_cmp
+        XOR A
+        JR pw_done
+
+pw_bad:
+        LD A,1
+
+pw_done:
+        POP HL
+        POP DE
+        LD B,A
+        LD A,(ROM_BANK)
+        LD (BANK_REG),A
+        LD A,B
+        RET
+lib_app_end:                    ; the app copies the lib only this far
+
+; ---- lib_crc16: CRC-16/XMODEM of BC bytes at HL into DE (start with DE = 0)
+lib_crc16:
+        LD A,(HL)
+        XOR D
+        LD D,A
+        PUSH BC
+        LD B,8
+
+crc_bit:
+        SLA E
+        RL D
+        JR nc,crc_next
+        LD A,D
+        XOR 0x10
+        LD D,A
+        LD A,E
+        XOR 0x21
+        LD E,A
+
+crc_next:
+        DJNZ crc_bit
+        POP BC
+        INC HL
+        DEC BC
+        LD A,B
+        OR C
+        JR nz,lib_crc16
+        RET
+
+; ---- lib_trailer_check: A = bank -> A = FF and C = seq if its trailer is valid, else A = 0
+lib_trailer_check:
+        LD (BANK_REG),A
+        LD HL,TRAILER
+        LD DE,0
+        LD BC,8
+        CALL lib_crc16
+        LD HL,(TRAILER+8)
+        OR A
+        SBC HL,DE
+        JR nz,tc_bad
+        LD HL,(TRAILER)
+        LD DE,TRAILER_MAGIC & 0xffff
+        OR A
+        SBC HL,DE
+        JR nz,tc_bad
+        LD HL,(TRAILER+2)
+        LD DE,TRAILER_MAGIC >> 16
+        OR A
+        SBC HL,DE
+        JR nz,tc_bad
+        LD A,(TRAILER+4)
+        LD C,A
+        LD A,0xff
+        JR tc_done
+
+tc_bad:
+        XOR A
+
+tc_done:
+        LD B,A
+        LD A,(ROM_BANK)
+        LD (BANK_REG),A
+        LD A,B
+        RET
+
+; ---- lib_image_check: A = bank -> CY if the app image CRC matches its trailer; A kept
+lib_image_check:
+        PUSH AF
+        LD (BANK_REG),A
+        LD HL,STUB_END
+        LD BC,0x3fc0-STUB_END
+        LD DE,0
+        CALL lib_crc16
+        LD HL,(TRAILER+6)
+        OR A
+        SBC HL,DE
+        SCF
+        JR z,ic_done
+        OR A
+
+ic_done:
+        LD A,(ROM_BANK)         ; LD leaves the flags alone
+        LD (BANK_REG),A
+        POP BC
+        LD A,B
+        RET
+
+; ---- lib_boot: A = bank. Select it, publish it, enable the NMI, enter its app
+lib_boot:
+        LD (ROM_BANK),A
+        LD (BANK_REG),A
+        LD HL,APP_NMI
+        LD (NMI_VEC),HL
+        LD A,0xa5
+        LD (NMI_MAGIC),A
+        JP APP_START
+
+        ENT
+STUB_LIB_SIZE        equ $-stub_lib
+STUB_LIB_APP_SIZE    equ lib_app_end-STUB_RAM
+ROM_CRC16            equ stub_lib+(lib_crc16-STUB_RAM)   ; position-independent: callable in ROM too
+
+        ds STUB_END-$,0xff
+
+; ============================================================================
+;  APPLICATION. The stub enters through this jump table and nowhere else.
+; ============================================================================
+        JP app_start
+        JP int_timer
+        JP nmi_entry
+
+; ---- data: 16-byte firmware ID, returned by query B4 '0' (0048 in stock)
+ROM_ID:
+        db "78409O1702930205"
+
+; ---- app_start: cold start: set SP, run init routines, EI, jump to main loop
+app_start:
         LD SP,STACK_TOP
         CALL init_vars
         CALL store_init
@@ -221,25 +549,8 @@ restart_display:
         EI
         JP main_loop
 
-; ---- pad to 0x0038, the Z80's fixed IM 1 interrupt vector
-        ds 0x0038-$,0xff
-
-; ---- INT_VECTOR: IM1 interrupt entry (periodic timer, ~1300 Hz)
-INT_VECTOR:
-        JP int_timer
-
-; ---- pad to 0x0048, where the ID string sits
-        ds 0x0048-$,0xff
-
-; ---- data 0048-0057: 16-byte firmware ID, returned by query B4 '0'
-ROM_ID:
-        db "78409O1702930205"
-
-; ---- pad to 0x0066, the Z80's fixed NMI vector
-        ds 0x0066-$,0xff
-
-; ---- NMI_VECTOR: NMI = real-time clock tick (mains frequency); calls clock_tick
-NMI_VECTOR:
+; ---- nmi_entry: NMI = real-time clock tick (mains frequency); calls clock_tick
+nmi_entry:
         PUSH AF
         PUSH BC
         PUSH DE
@@ -590,6 +901,8 @@ rx_have_byte:
         AND A
         JR z,rx_idle_byte
         CALL pkt_feed_byte
+        XOR A                   ; B12: a payload byte is not a key; a 0x20 left
+        LD (RX_BYTE),A          ; here would release a WAIT (wait_poll)
         JP tick6_exit
 
 rx_idle_byte:
@@ -3273,21 +3586,41 @@ clr_seq_loop:
 store_init:
         LD A,0xff
         LD (QUERIES_ENABLED),A
+        ; P13: which chip? An 8 K RAM mirrors 6000 onto 4000. FRAMEBUF is
+        ; scratch at this point (the stub's library copy, cleared by init_render).
+        LD A,0x55
+        LD (FRAMEBUF),A
+        CPL
+        LD (FRAMEBUF+0x2000),A
         LD HL,STORE_TOP
+        LD A,(FRAMEBUF)
+        CP 0x55
+        JR z,store_init_limits
+        LD HL,STORE_TOP_8K
+
+store_init_limits:
         LD (STORE_LIMIT),HL
         LD (STORE_END),HL
-        LD HL,STORE_WARN
+        PUSH HL
+        LD DE,100
+        OR A
+        SBC HL,DE
         LD (STORE_WARN_LIMIT),HL
-        LD HL,STORE_TEXT_FREE
-        LD (STORE_TEXT_LIMIT),HL
-        LD HL,STORE_SIZE_INIT
+        POP HL
+        LD DE,MSG_STORE-1
+        OR A
+        SBC HL,DE               ; size = top - MSG_STORE + 1
         LD (STORE_SIZE),HL
+        LD DE,301
+        OR A
+        SBC HL,DE
+        LD (STORE_TEXT_LIMIT),HL
         ; P1: the store terminator no longer sits one byte below the page to
         ; be cleared, so write it first, then set HL/BC for the clear.
         LD HL,(STORE_LIMIT)
         LD (HL),0xda
-        LD BC,0x0110
-        LD HL,0x5ef0
+        LD BC,NMI_VEC-PKT_READY ; stop short of the boot stub's bytes
+        LD HL,PKT_READY
 
 store_init_zero_page:
         LD (HL),0
@@ -3481,16 +3814,18 @@ tx_send_byte:
 
 tx_wait_slot:
         CALL tx_try_queue
-        AND A
-        JR nz,tx_wait_slot
+        JR c,tx_wait_slot
         POP DE
         POP HL
         RET
 
-; ---- tx_try_queue
+; ---- tx_try_queue: queue A; CY if the transmitter was busy and nothing was queued.
+;      B10: stock signalled "queued" with A = 0 and "busy" with A unchanged, so a
+;      0x00 byte offered to a busy transmitter was silently dropped.
 tx_try_queue:
         LD HL,TX_STATUS
         BIT 1,(HL)
+        SCF
         RET nz
         LD (TX_PENDING),A
         SET 1,(HL)
@@ -3888,17 +4223,17 @@ query_0_romid:
         LD HL,TXBUF
         LD (HL),0x10
         INC HL
-        LD DE,0x48
+        LD DE,ROM_ID            ; stock: the raw 0048 in four pieces
         LD BC,3
         EX DE,HL
         LDIR
-        LD HL,0x4b
+        LD HL,ROM_ID+3
         LD BC,3
         LDIR
-        LD HL,0x4e
+        LD HL,ROM_ID+6
         LD BC,6
         LDIR
-        LD HL,0x54
+        LD HL,ROM_ID+12
         LD BC,4
         LDIR
         LD HL,TXBUF
@@ -6606,6 +6941,8 @@ pkt_byte_loop:
         JP z,cmd_B3_append
         CP 0xb4
         JP z,cmd_B4_query
+        CP 0xb5
+        JP z,cmd_B5_ota
 
 ; ---- pkt_insert_text: Insert CUR_CHAR at STORE_CURSOR (shifts the store up; refuses when CHAN_LOCK or memory full)
 pkt_insert_text:
@@ -6754,6 +7091,323 @@ query_wait_tx:
         JR nz,query_wait_tx
         DI
         JP z,pkt_next
+
+; ---- cmd_B5_ota: OTA commands (CC784_ota.md §6). B5 must be the first payload
+;      byte and the frame ends with the command. Runs under pkt_process's DI;
+;      interrupts come back only for the reply. Replies are tx_send_frame
+;      frames: one status byte (0 ok, 1 verify failed, 2 chip timeout, 3 page
+;      out of range, 4 CRC mismatch, 5 bad arguments) or the data asked for.
+;        B5 'I'                 -> bank, then 10 trailer bytes per bank
+;        B5 'C' page n          -> n CRC-16s of idle-bank pages (n <= 42)
+;        B5 'B'                 -> erase the idle bank's trailer page
+;        B5 'W' page crc data   -> write 1-3 pages of data (crc covers data)
+;        B5 'F' seq crc         -> CRC the idle bank; if it matches, write its trailer
+;        B5 'R'                 -> reset (no reply)
+OTA_IDLE             equ TXBUF+0x55     ; the idle bank; replies never reach this byte
+OTA_PAGE_BUF         equ PKT_BUF+0x80   ; 64-byte scratch; the commands using it have short payloads
+cmd_B5_ota:
+        LD HL,stub_lib
+        LD DE,STUB_RAM
+        LD BC,STUB_LIB_APP_SIZE ; fits FRAMEBUF; the full lib would run into the variables
+        LDIR
+        LD A,(ROM_BANK)
+        XOR 1
+        LD (OTA_IDLE),A
+        LD A,(PKT_BUF)
+        CP 0xb5
+        JR nz,ota_bad_args
+        LD A,(PKT_BUF+1)
+        CP 'I'
+        JP z,ota_info
+        CP 'C'
+        JP z,ota_crc
+        CP 'B'
+        JP z,ota_begin
+        CP 'W'
+        JP z,ota_write
+        CP 'F'
+        JP z,ota_finish
+        CP 'R'
+        JP z,RESET
+
+ota_bad_args:
+        LD A,5
+
+; ---- ota_status: A = the one-byte reply
+ota_status:
+        LD HL,TXBUF
+        LD (HL),1
+        INC HL
+        LD (HL),A
+
+; ---- ota_reply: send TXBUF (len, data) and finish the packet. The library
+;      copy sits in FRAMEBUF and would be painted by the refresh once EI: blank
+;      first, as cmd_B4_query does (it can do so before its work, we after).
+ota_reply:
+        CALL clear_framebuf
+        CALL shift_chain_clear
+        EI
+        LD HL,TXBUF
+        CALL tx_send_frame
+
+ota_wait_tx:
+        LD A,(TX_STATUS)
+        AND 3
+        JR nz,ota_wait_tx
+        DI
+        JP pkt_process_done
+
+; ---- ota_info: ROM_BANK, then the first 10 trailer bytes of bank 0 and bank 1
+;      (magic, seq, state, image crc, trailer crc); the host judges them
+ota_info:
+        LD HL,TXBUF
+        LD (HL),21
+        INC HL
+        LD A,(ROM_BANK)
+        LD (HL),A
+        INC HL
+        EX DE,HL
+        XOR A
+        CALL ota_trailer_copy
+        LD A,1
+        CALL ota_trailer_copy
+        JP ota_reply
+
+; ---- ota_trailer_copy: A = bank, DE = destination for 10 bytes; DE advances
+ota_trailer_copy:
+        LD HL,TRAILER
+        LD BC,10
+        JP lib_copy
+
+; ---- ota_crc: 'C' page n -> 2n bytes of page CRCs from the idle bank
+ota_crc:
+        LD A,(PKT_BUF+3)
+        OR A
+        JR z,ota_bad_args
+        CP 43
+        JR nc,ota_bad_args
+        LD B,A
+        ADD A,A
+        LD HL,TXBUF
+        LD (HL),A
+        LD IX,TXBUF+1
+        LD A,(PKT_BUF+2)
+        LD C,A
+
+ota_crc_loop:
+        LD A,C
+        CALL ota_page_crc
+        LD (IX+0),E
+        LD (IX+1),D
+        INC IX
+        INC IX
+        INC C
+        DJNZ ota_crc_loop
+        JP ota_reply
+
+; ---- ota_page_crc: A = page of the idle bank -> DE = its CRC-16 (BC kept)
+ota_page_crc:
+        PUSH BC
+        LD L,A
+        LD H,0
+        ADD HL,HL
+        ADD HL,HL
+        ADD HL,HL
+        ADD HL,HL
+        ADD HL,HL
+        ADD HL,HL
+        CALL ota_fetch_page
+        LD BC,64
+        LD DE,0
+        CALL ROM_CRC16
+        POP BC
+        RET
+
+; ---- ota_fetch_page: HL = address in the idle bank -> 64 bytes at OTA_PAGE_BUF, HL = the buffer
+ota_fetch_page:
+        LD DE,OTA_PAGE_BUF
+        LD BC,64
+        LD A,(OTA_IDLE)
+        CALL lib_copy
+        LD HL,OTA_PAGE_BUF
+        RET
+
+; ---- ota_erase_buf: OTA_PAGE_BUF = 64 x FF, HL = the buffer
+ota_erase_buf:
+        LD HL,OTA_PAGE_BUF
+        LD B,64
+
+ota_erase_loop:
+        LD (HL),0xff
+        INC HL
+        DJNZ ota_erase_loop
+        LD HL,OTA_PAGE_BUF
+        RET
+
+; ---- ota_begin: 'B' -> the idle bank's trailer page becomes FF, and the panel
+;      shows UPDATING (held, not scrolled) through every restart until the
+;      reboot: TEST_MODE makes seq_next_channel display TEST_MSG_BUF instead of
+;      the sequence, and init_vars clears it on boot.
+ota_begin:
+        LD HL,ota_updating_msg
+        LD DE,TEST_MSG_BUF
+        LD BC,28                ; the whole buffer, so a longer message changes one page
+        LDIR
+        LD A,0xff
+        LD (TEST_MODE),A
+        CALL ota_erase_buf
+
+; ---- ota_write_trailer: write OTA_PAGE_BUF over the idle bank's trailer, reply the status
+ota_write_trailer:
+        LD HL,OTA_PAGE_BUF
+        LD DE,TRAILER
+        LD A,(OTA_IDLE)
+        LD B,A
+        CALL lib_page_writer
+        JP ota_status
+
+; ---- ota_write: 'W' page crc data[64k] -> pages page..page+k-1 of the idle bank
+ota_write:
+        LD A,(PKT_LEN)
+        SUB 5
+        JP c,ota_bad_args
+        JP z,ota_bad_args
+        LD C,A
+        AND 0x3f
+        JP nz,ota_bad_args      ; whole pages only
+        LD A,C
+        RLCA
+        RLCA
+        AND 3
+        LD C,A                  ; C = pages in the frame, 1..3
+        LD A,(PKT_BUF+2)
+        CP STUB_END/64
+        LD B,A
+        LD A,3
+        JP c,ota_status         ; the stub is never written over the air
+        LD A,C
+        DEC A
+        ADD A,B
+        LD A,3
+        JP c,ota_status         ; past the end of the bank
+        LD A,C                  ; CRC of the data: 64 * C bytes
+        RRCA
+        RRCA
+        LD C,A
+        LD B,0                  ; BC = 64 * pages
+        LD HL,PKT_BUF+5
+        LD DE,0
+        CALL ROM_CRC16
+        LD HL,(PKT_BUF+3)
+        OR A
+        SBC HL,DE
+        LD A,4
+        JP nz,ota_status
+        LD A,(PKT_BUF+2)
+        LD D,A                  ; DE = page * 64
+        LD E,0
+        SRL D
+        RR E
+        SRL D
+        RR E
+        LD A,(PKT_LEN)
+        SUB 5
+        RLCA
+        RLCA
+        AND 3
+        LD C,A
+        LD HL,PKT_BUF+5
+
+ota_write_loop:
+        LD A,(OTA_IDLE)
+        LD B,A
+        PUSH BC
+        CALL lib_page_writer    ; HL, DE preserved
+        POP BC
+        OR A
+        JP nz,ota_status
+        LD A,L
+        ADD A,64
+        LD L,A
+        JR nc,ota_write_next
+        INC H
+
+ota_write_next:
+        LD A,E
+        ADD A,64
+        LD E,A
+        JR nc,ota_write_count
+        INC D
+
+ota_write_count:
+        DEC C
+        JR nz,ota_write_loop
+        XOR A
+        JP ota_status
+
+; ---- ota_finish: 'F' seq crc -> CRC the idle bank's app; on a match write its trailer
+ota_finish:
+        LD DE,0                 ; running CRC; the source pointer lives in HL'
+        EXX
+        LD HL,STUB_END
+        EXX
+
+ota_finish_loop:
+        EXX
+        PUSH HL
+        EXX
+        POP HL
+        PUSH DE
+        CALL ota_fetch_page     ; HL = buffer
+        POP DE
+        LD BC,64
+        CALL ROM_CRC16
+        EXX
+        LD BC,64
+        ADD HL,BC
+        LD A,H
+        CP 0x3f
+        JR nz,ota_finish_next
+        LD A,L
+        CP 0xc0
+        JR z,ota_finish_done
+
+ota_finish_next:
+        EXX
+        JR ota_finish_loop
+
+ota_finish_done:
+        EXX
+        LD HL,(PKT_BUF+3)
+        OR A
+        SBC HL,DE
+        LD A,4
+        JP nz,ota_status
+        CALL ota_erase_buf
+        LD (HL),'O'
+        INC HL
+        LD (HL),'T'
+        INC HL
+        LD (HL),'A'
+        INC HL
+        LD (HL),'1'
+        INC HL
+        LD A,(PKT_BUF+2)
+        LD (HL),A               ; seq
+        INC HL
+        LD (HL),3               ; state GOOD
+        INC HL
+        LD A,(PKT_BUF+3)
+        LD (HL),A
+        INC HL
+        LD A,(PKT_BUF+4)
+        LD (HL),A
+        LD HL,OTA_PAGE_BUF
+        LD BC,8
+        LD DE,0
+        CALL ROM_CRC16
+        LD (OTA_PAGE_BUF+8),DE
+        JP ota_write_trailer
 
 ; ---- cmd_1E_colour_A0: 1E n -> insert 0xA0|(n&15)
 cmd_1E_colour_A0:
@@ -7602,4 +8256,16 @@ TEST_MESSAGE:
         db "CURRENT TEST  "
         db 0x10,0x17,0x17,0x17,0x17,0x17,0x17,0x17," ",0x03
 
-        ds 0x8000-$,0xff        ; unused upper half of the 27C256
+; ---- ota_updating_msg: what the panel shows from B5 'B' to the reboot, via the
+;      test-mode buffer (28 bytes max). PAUSE, THIN, the word, WAIT: parked until
+;      a key. Last thing before the trailer, so editing it moves nothing else.
+ota_updating_msg:
+        db 0x19,0xb9,"> FW UPDATE <",0xba,0x03
+
+; ---- trailer page 3FC0-3FFF (CC784_ota.md §3): magic, sequence number, state
+;      and image CRC, filled in by tools/cc784_ota.py pack. Erased in the build.
+        ds 0x3fc0-$,0xff
+TRAILER:
+        ds 0x4000-$,0xff
+
+        ds 0x8000-$,0xff        ; bank B: the packer fills it, the T48 image carries both
