@@ -137,6 +137,12 @@ bytes of the bank are free.
     message from `B5 'B'` to the reboot through the factory test mode.
 15. **APPEND seats like DELETE_TEXT** (fixes B11): the extra step back onto an empty
     channel's marker is gone.
+19. **RAINBOW starts on a random colour.** `BC` set the cycle index to 1 and
+    the per-character step advances before it looks up, so every rainbow
+    began on orange. The index now starts at 1–5 from a running 8-bit
+    generator (MAGIC's `RND_SEED`, stirred with the mains and tick counters),
+    so each display cycle begins on a different one of the five colours, on
+    AC and DC alike.
 18. **Trial and confirm.** `F` writes a new image's trailer as TRIAL; the
     stub rewrites a TRIAL trailer as TRIED before booting it and treats TRIED
     as invalid, so an image that crashes, hangs or cannot talk is skipped at

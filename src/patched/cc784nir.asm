@@ -2000,9 +2000,29 @@ attr_rainbow:
         LD (CUR_COLOUR),A
 
 rainbow_on:
-        LD A,1
+        ; P19: start anywhere in the cycle. rainbow_step advances before it
+        ; looks up, so an index of 1..5 makes the first character orange,
+        ; yellow, lime, green or red; stock always started at 1 (orange).
+        LD A,(RND_SEED)         ; a running 8-bit generator (a = 5, c odd: full
+        LD B,A                  ; period), so the start keeps moving even on a
+        ADD A,A                 ; DC supply where the counters are phase-locked
+        ADD A,A                 ; to the display cycle; MAGIC reseeds it on entry
+        ADD A,B
+        INC A
+        LD B,A
+        LD A,(NMI_COUNT)
+        ADD A,B
+        LD B,A
+        LD A,(TICK6_COUNT)
+        ADD A,B
+        LD (RND_SEED),A
+
+rainbow_mod5:
+        SUB 5
+        JR nc,rainbow_mod5
+        ADD A,6                 ; -5..-1 -> 1..5
         LD (RAINBOW_IDX),A
-        LD (MAGIC_COLOUR_SET),A
+        LD (MAGIC_COLOUR_SET),A ; any non-zero value means "set"
         POP HL
         JP render_next_char
 
