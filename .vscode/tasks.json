@@ -107,21 +107,62 @@
       "problemMatcher": []
     },
     {
+      "label": "Pack OTA image",
+      "detail": "Fills the trailer page of the patched build (cc784nir_bank.bin, what push sends) and writes the 32 K chip image for the T48 (cc784nir_chip.bin: the same app in both banks, seq 1 and 0).",
+      "type": "shell",
+      "command": "uv",
+      "args": [
+        "run",
+        "tools/cc784_ota.py",
+        "pack",
+        "src/patched/cc784nir_patched.bin",
+        "-o",
+        "src/patched/cc784nir_bank.bin",
+        "--t48",
+        "src/patched/cc784nir_chip.bin"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "dependsOn": "Build patched ROM",
+      "presentation": {
+        "reveal": "always",
+        "clear": true
+      },
+      "problemMatcher": []
+    },
+    {
       "label": "AT28C256-15PU -- program",
-      "detail": "Same image as the M27C256; the two socket bodges make the part electrically a 27C256. -u clears software data protection first. NOTE: pin 27 (/WE) to VCC and pin 1 (A14) to Z80 pin 4 before this chip goes in the sign.",
+      "detail": "Burns the packed 32 K chip image (both banks). -u disables software data protection before writing, -P re-enables it after: with /WE on /WR, an unprotected chip gets written by any crash. Bodges per CC784_ota.md §2: pin 27 (/WE) to Z80 /WR with a 10 k pull-up, pin 22 (/OE) to Z80 /RD, pin 1 (A14) to the added '273's Q0.",
       "type": "shell",
       "command": "minipro",
       "args": [
         "-p",
         "AT28C256",
         "-u",
+        "-P",
         "-w",
-        "cc784nir_patched.bin"
+        "cc784nir_chip.bin"
       ],
       "options": {
         "cwd": "${workspaceFolder}/src/patched"
       },
-      "dependsOn": "Build patched ROM",
+      "dependsOn": "Pack OTA image",
+      "presentation": {
+        "reveal": "always",
+        "clear": true
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "OTA: emulator regression",
+      "detail": "EEPROM model self-test, boot stub scenarios, a full B5 update, the host tool's push, all against the emulated sign. fuzz [RUNS] is separate (slow).",
+      "type": "shell",
+      "command": "uv run tools/cc784_sim.py eeprom && uv run tools/cc784_sim.py ota && uv run tools/cc784_sim.py update && uv run tools/cc784_sim.py push && uv run tools/cc784_sim.py ram",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": "test",
       "presentation": {
         "reveal": "always",
         "clear": true

@@ -38,8 +38,9 @@ class ESPHomeLink:
     The asyncio loop runs on a background thread; the command code in cc784.py
     stays synchronous and pulls received bytes from a thread-safe queue."""
 
-    def __init__(self, host, key, port=6053, instance=None, verbose=False, list_only=False):
+    def __init__(self, host, key, port=6053, instance=None, verbose=False, list_only=False, chunk=32):
         self.host, self.key, self.port, self.verbose = host, key, port, verbose
+        self.chunk = chunk
         self.instance_sel, self.list_only = instance, list_only
         self.instance = None
         self.rx = queue.Queue()
@@ -112,10 +113,13 @@ class ESPHomeLink:
         # lost bytes and then dropped the API connection. Feed it in pieces paced
         # at the line rate (300 baud = 27 bytes/s) so it never holds more than one.
         data = bytes(data)
-        for i in range(0, len(data), 32):
-            piece = data[i:i + 32]
+        if self.chunk <= 0:                      # whole frame in one write
+            self._run(self._write(data))
+            return
+        for i in range(0, len(data), self.chunk):
+            piece = data[i:i + self.chunk]
             self._run(self._write(piece))
-            if i + 32 < len(data):
+            if i + self.chunk < len(data):
                 time.sleep(len(piece) * 10 / 300.0)
 
     def read(self, n: int, timeout: float) -> bytes:
@@ -150,11 +154,13 @@ def main():
     ap.add_argument('-P', '--api-port', type=int, default=6053)
     ap.add_argument('-i', '--instance', default=None, help='serial_proxy name or index (default 0)')
     ap.add_argument('--list', action='store_true', help='list serial_proxy instances and exit')
+    ap.add_argument('--chunk', type=int, default=32,
+                    help='bytes per proxy write, paced at the line rate (default 32; 0 = one write)')
     cc784.add_common_args(ap)
     a = ap.parse_args()
     if not a.key:
         ap.error("an encryption key is required (-k or $ESPHOME_KEY)")
-    link = ESPHomeLink(a.host, a.key, a.api_port, a.instance, a.verbose, a.list)
+    link = ESPHomeLink(a.host, a.key, a.api_port, a.instance, a.verbose, a.list, a.chunk)
     try:
         cc784.run(link, a, ap)
     finally:
