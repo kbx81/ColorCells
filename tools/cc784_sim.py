@@ -185,9 +185,10 @@ def assemble(src_dir):
 
 
 class Sign:
-    def __init__(self, rom, syms, fresh_ram=True, seed=1, sdp=True, ram8k=False):
+    def __init__(self, rom, syms, fresh_ram=True, seed=1, sdp=True, ram8k=False, mains=True):
         # rom: one 16 K bank (the rest of the chip erased) or the whole chip image
         # ram8k: the stock 6264, which mirrors 4000-5FFF at 6000-7FFF
+        # mains=False: a DC supply, no NMI ever
         image = bytes(rom) + b'\xff' * (2 * BANK_SIZE - len(rom)) if len(rom) <= BANK_SIZE else bytes(rom)
         self.faults = []
         self.ee = Eeprom(image, sdp=sdp, faults=self.faults)
@@ -215,7 +216,7 @@ class Sign:
         m.set_input_callback(self._on_input)
         m.set_output_callback(self._on_output)
         self.t = 0
-        self.next_int, self.next_nmi = TICK_T, NMI_T
+        self.next_int, self.next_nmi = TICK_T, (NMI_T if mains else 1 << 62)
         self.last_inta = 0
         self.min_stack, self.min_stack_pc = self.stack_top, None
         self.rom_writes = 0
@@ -513,6 +514,19 @@ def cmd_ota():
         check('%s (booted %d, %d frames, %d faults)' % (name, got, len(s.frames), len(s.faults)),
               got == want and s.frames and not s.faults)
 
+    # trial/confirm: a TRIAL bank boots once and comes out TRIED; a power cycle then skips it
+    trial = cc784_ota.pack(app, 2, cc784_ota.STATE_TRIAL)
+    s = boot(b1 + trial)
+    t1 = cc784_ota.parse_trailer(s.ee.bank_image(1))
+    check('TRIAL bank boots (bank %d) and is marked TRIED (%s)' % (s.ram('ROM_BANK')[0], t1),
+          s.ram('ROM_BANK')[0] == 1 and t1 and t1['state'] == cc784_ota.STATE_TRIED and not s.faults)
+    s2 = boot(bytes(s.ee.image))
+    check('power cycle: TRIED bank skipped, bank 0 runs (bank %d)' % s2.ram('ROM_BANK')[0], s2.ram('ROM_BANK')[0] == 0 and not s2.faults)
+    s = boot(b1 + trial, mains=False)
+    t1 = cc784_ota.parse_trailer(s.ee.bank_image(1))
+    check('DC supply: TRIAL boots and is marked TRIED without an NMI (bank %d, %s)' % (s.ram('ROM_BANK')[0], t1),
+          s.ram('ROM_BANK')[0] == 1 and t1 and t1['state'] == cc784_ota.STATE_TRIED and not s.faults)
+
     # boot time: from reset until the stub publishes the bank (NMI_MAGIC set)
     for name, image in (('both valid, one CRC pass', b1 + b2), ('first choice corrupt, two passes', b1 + corrupt(b2))):
         s = Sign(image, syms, fresh_ram=True)
@@ -522,25 +536,32 @@ def cmd_ota():
         print('  boot, %s: %.0f ms' % (name, s.t / CPU_HZ * 1000))
 
     # page writer: copy the template to RAM and call it as the app would
+    src, trap = 0x5000, 0x5100
+    data = bytes((i * 7 + 3) & 0xFF for i in range(64))
+    def writer_harness(s):
+        m = s.m
+        m.set_memory_block(src, data)
+        m.set_memory_block(syms['STUB_RAM'], rom[syms['stub_lib']:syms['stub_lib'] + syms['STUB_LIB_SIZE']])
+        m.set_memory_block(trap, b'\x76')              # HALT as a landing pad
+        def call_writer(page_addr, bank):
+            m.iff1 = m.iff2 = 0
+            m.hl, m.de, m.b = src, page_addr, bank
+            m.sp = 0x5ee0
+            m.memory[m.sp - 2], m.memory[m.sp - 1] = trap & 0xFF, trap >> 8
+            m.sp -= 2
+            m.pc = syms['lib_page_writer']
+            t0 = s.t
+            while m.pc != trap + 1 and s.t - t0 < CPU_HZ // 4:
+                s.run(SLICE * 8)
+            return m.a, (s.t - t0) / CPU_HZ * 1000
+        return call_writer
+    sdc = boot(b1 + b0, ms=500, mains=False)
+    a, ms = writer_harness(sdc)(0x2040, 1)
+    check('DC supply: page write without an NMI wait, status %d in %.1f ms' % (a, ms),
+          a == 0 and ms < 15 and sdc.ee.bank_image(1)[0x2040:0x2080] == data and not sdc.faults)
     s = boot(b1 + b0, ms=500)
     m = s.m
-    src = 0x5000
-    data = bytes((i * 7 + 3) & 0xFF for i in range(64))
-    m.set_memory_block(src, data)
-    m.set_memory_block(syms['STUB_RAM'], rom[syms['stub_lib']:syms['stub_lib'] + syms['STUB_LIB_SIZE']])
-    trap = 0x5100
-    m.set_memory_block(trap, b'\x76')                  # HALT as a landing pad
-    def call_writer(page_addr, bank, sdp_faults_ok=False):
-        m.iff1 = m.iff2 = 0
-        m.hl, m.de, m.b = src, page_addr, bank
-        m.sp = 0x5ee0
-        m.memory[m.sp - 2], m.memory[m.sp - 1] = trap & 0xFF, trap >> 8
-        m.sp -= 2
-        m.pc = syms['lib_page_writer']
-        t0 = s.t
-        while m.pc != trap + 1 and s.t - t0 < CPU_HZ // 4:
-            s.run(SLICE * 8)
-        return m.a, (s.t - t0) / CPU_HZ * 1000
+    call_writer = writer_harness(s)
     n = len(s.faults)
     a, ms = call_writer(0x2000, 1)
     check('page write to bank 1: status %d in %.1f ms' % (a, ms), a == 0 and 5 < ms < 30)
@@ -636,10 +657,12 @@ def cmd_update():
     check('UPDATING still parked after frames carrying 0x20 bytes (%d frames in 3 s)' % len(s.frames), len(s.frames) <= 1)
     image_crc = cc784_ota.crc16(new_bank[cc784_ota.STUB_END:cc784_ota.TRAILER])
     r = ota_cmd(s, b'\xb5F' + bytes([2]) + image_crc.to_bytes(2, 'little'), wait_ms=6000)
-    check('F: image crc ok, trailer written (%s)' % (r.hex() if r else r), r == b'\x00' and s.ee.bank_image(1) == new_bank)
+    got = s.ee.bank_image(1); tg = cc784_ota.parse_trailer(got)
+    check('F: image crc ok, trailer written as TRIAL (%s, %s)' % (r.hex() if r else r, tg),
+          r == b'\x00' and got[:cc784_ota.TRAILER] == new_bank[:cc784_ota.TRAILER] and tg and tg['state'] == cc784_ota.STATE_TRIAL and tg['crc_ok'])
     info = ota_cmd(s, b'\xb5I')
     bank, t0, t1 = cc784_ota.parse_info(info) if info else (None, None, None)
-    check('I: bank 1 valid, seq 2, GOOD (%s)' % t1, t1 and t1['seq'] == 2 and t1['state'] == 3)
+    check('I: bank 1 valid, seq 2, TRIAL (%s)' % t1, t1 and t1['seq'] == 2 and t1['state'] == cc784_ota.STATE_TRIAL)
     check('no faults so far (%d)' % len(s.faults), not s.faults)
     for f in s.faults[:5]:
         print('    ', f)
@@ -658,6 +681,22 @@ def cmd_update():
     s.send_frame(b'\xb5R', addr=1, flag=0x80); s.rx_wait(); s.run_ms(4000)
     check('R: rebooted into bank 1', s.ram('ROM_BANK')[0] == 1)
     check('R: test mode cleared by the boot', s.ram('TEST_MODE')[0] == 0)
+    info = ota_cmd(s, b'\xb5I')
+    bank, t0, t1 = cc784_ota.parse_info(info)
+    check('after the trial boot the bank is TRIED (%s), features %02X' % (t1, info[21]),
+          t1 and t1['state'] == cc784_ota.STATE_TRIED and info[21] & 0x07 == 0x07)
+    r = ota_cmd(s, b'\xb5K' + bytes([cc784_ota.STATE_GOOD, 2]), wait_ms=6000)
+    bank, t0, t1 = cc784_ota.parse_info(ota_cmd(s, b'\xb5I'))
+    check('K: confirmed GOOD (%s, %s)' % (r.hex() if r else r, t1), r == b'\x00' and t1 and t1['state'] == cc784_ota.STATE_GOOD)
+    s2 = Sign(bytes(s.ee.image), syms, fresh_ram=True); s2.run_ms(3000)
+    check('power cycle after confirm stays on bank 1', s2.ram('ROM_BANK')[0] == 1)
+    # a trial image that hangs: the next power cycle brings the old image back
+    hang = bytearray(new_app); hang[cc784_ota.STUB_END:cc784_ota.STUB_END + 2] = b'\x18\xfe'   # JR $ at the jump table
+    hang_bank = cc784_ota.pack(bytes(hang), 3, cc784_ota.STATE_TRIAL)
+    s3 = Sign(s.ee.bank_image(1) + hang_bank, syms, fresh_ram=True); s3.run_ms(3000)
+    check('hanging TRIAL boots (bank %d, %d frames)' % (s3.ram('ROM_BANK')[0], len(s3.frames)), s3.ram('ROM_BANK')[0] == 1 and len(s3.frames) < 3)
+    s4 = Sign(bytes(s3.ee.image), syms, fresh_ram=True); s4.run_ms(3000)
+    check('power cycle: back on the GOOD image (bank %d, %d frames)' % (s4.ram('ROM_BANK')[0], len(s4.frames)), s4.ram('ROM_BANK')[0] == 0 and len(s4.frames) > 20)
     s.send_frame(b'\xb4\x30', addr=1, flag=0x80); s.rx_wait(); s.run_ms(2500)
     check('new firmware answers B4 0', b'78409O1702930205' in s.tx_bytes())
     s.frames.clear(); s.run_ms(30000)
@@ -726,8 +765,10 @@ def cmd_push():
     sign.post_ack = 0.2
     ok = cc784_ota.push(sign, new_bank, seq=None)
     got = s.ee.bank_image(1)
-    ok = (ok and got[:cc784_ota.TRAILER] == new_bank[:cc784_ota.TRAILER] and cc784_ota.parse_trailer(got)['seq'] == 2
+    t = cc784_ota.parse_trailer(got)
+    ok = (ok and got[:cc784_ota.TRAILER] == new_bank[:cc784_ota.TRAILER] and t['seq'] == 2 and t['state'] == cc784_ota.STATE_GOOD
           and s.ram('ROM_BANK')[0] == 1 and not s.faults)
+    ok = ok and cc784_ota.rollback(cc784_ota.Ota(sign)) and s.ram('ROM_BANK')[0] == 0
     print('host push: %s (%d faults)' % ('OK' if ok else 'FAIL', len(s.faults)))
     return ok
 
@@ -778,8 +819,8 @@ def cmd_fuzz(runs=100, seed=1):
         bank = s2.ram('ROM_BANK')[0]
         t = cc784_ota.parse_trailer(s2.ee.bank_image(bank))
         good = t and t['crc_ok'] and s2.frames and not s2.faults and not s.faults
-        if good and bank == 1 and s2.ee.bank_image(1) != new_bank:
-            good = False
+        if good and bank == 1 and s2.ee.bank_image(1)[:cc784_ota.TRAILER] != new_bank[:cc784_ota.TRAILER]:
+            good = False                                    # the trailer's state may be TRIED/GOOD by now
         if not good:
             bad += 1
             print('  run %d: %s -> booted bank %d, trailer %s, %d frames, faults %d/%d'

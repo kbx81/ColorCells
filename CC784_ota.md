@@ -36,23 +36,31 @@ checks and the first power-up are in `AT28C256.md`.
 
 | Range | Content | Written by |
 |---|---|---|
-| `0000–01FF` | boot stub: reset, `0038`, `0066`, bank choice, `stub_lib` | T48 only |
-| `0200–0208` | jump table: `JP app_start`, `JP int_timer`, `JP nmi_entry` | OTA |
-| `0209–3FBF` | application (`ROM_ID` directly after the table) | OTA |
+| `0000–023F` | boot stub: reset, `0038`, `0066`, bank choice, trial marking, `stub_lib` | T48 only |
+| `0240–0248` | jump table: `JP app_start`, `JP int_timer`, `JP nmi_entry` | OTA |
+| `0249–3FBF` | application (`ROM_ID` directly after the table) | OTA |
 | `3FC0–3FFF` | trailer page | OTA, written last |
 
-**Trailer:** `+0` `"OTA1"`, `+4` sequence number, `+5` state (3 = GOOD; 1 and
-2 are reserved for a trial/confirm scheme), `+6` CRC-16 of `0200–3FBF`,
-`+8` CRC-16 of bytes `+0..+7`, rest `FF`. CRC-16/XMODEM (poly `1021`, init
-0), little-endian words.
+**Trailer:** `+0` `"OTA1"`, `+4` sequence number, `+5` state (1 TRIAL, 2
+TRIED, 3 GOOD), `+6` CRC-16 of `0240–3FBF`, `+8` CRC-16 of bytes `+0..+7`,
+rest `FF`. CRC-16/XMODEM (poly `1021`, init 0), little-endian words.
+
+**Trial and confirm:** `F` writes a new image's trailer as TRIAL. The stub
+boots a TRIAL bank once, rewriting its trailer as TRIED first, and treats a
+TRIED trailer as invalid ever after. So a new image gets exactly one chance:
+if it answers, the host confirms it (`K`) and the trailer becomes GOOD; if
+it crashes, hangs or cannot talk, the next reset boots the other bank. A
+hung sign needs a power cycle to get there, since nothing on the board
+resets the CPU.
 
 **Stub rule:** the stub never changes over the air. The `W` command refuses
-pages 0–7, `push` refuses an image whose stub pages differ from the sign's,
+pages 0–8, `push` refuses an image whose stub pages differ from the sign's,
 and the stub references nothing in the application except the jump table, so
 application changes never alter its bytes. A stub change needs the T48.
 
-**RAM used:** `7FFC–7FFF` (`NMI_VEC`, `NMI_MAGIC`, `ROM_BANK`), which the
-stock 6264 mirrors from `5FFC–5FFF`. The page writer and the bank-touching
+**RAM used:** `7FFC–7FFF` (`NMI_VEC`, `NMI_MAGIC`, `ROM_BANK`) and `7FF0`
+(`NMI_SEEN`, set by every mains NMI since reset), which the stock 6264
+mirrors from `5Fxx`. The page writer and the bank-touching
 routines run from `FRAMEBUF` (`4000`), which is idle while a packet is
 processed. No message-store space is used.
 
@@ -66,10 +74,11 @@ processed. No message-store space is used.
 3. Candidate order: newer sequence number first (signed 8-bit difference,
    ties to bank 0); if only one is valid, that one; if none, bank 0 without
    further checks (the state after a T48 burn of a raw build).
-4. CRC the candidate's `0200–3FBF`; on mismatch try the other. About 1 s per
+4. CRC the candidate's `0240–3FBF`; on mismatch try the other. About 1 s per
    pass at 8 MHz.
-5. Select the bank, record it in `ROM_BANK`, point `NMI_VEC` at the jump
-   table, jump to `0200`.
+5. Select the bank and record it in `ROM_BANK`. If its trailer says TRIAL,
+   rewrite it as TRIED (one page write). Point `NMI_VEC` at the jump table,
+   jump to `0240`.
 
 ## 4. The OTA command
 
@@ -83,18 +92,20 @@ for firmware that doesn't send one.
 
 | Payload | Reply |
 |---|---|
-| `B5 'I'` | `ROM_BANK`, the first 10 trailer bytes of bank 0 and of bank 1, then a features byte (bit 0: DONE supported) |
+| `B5 'I'` | `ROM_BANK`, the first 10 trailer bytes of bank 0 and of bank 1, then a features byte: bit 0 DONE handshake, bit 1 the mains NMI has fired since reset, bit 2 trial/confirm |
 | `B5 'C' page n` | `n` CRC-16s of idle-bank pages starting at `page`, n ≤ 42 |
 | `B5 'B'` | status; erases the idle bank's trailer and parks the display on "> FW UPDATE <" until the reboot |
 | `B5 'W' page crc16 data` | status; writes 1–3 consecutive pages, `crc16` over the data, pages < 8 refused |
-| `B5 'F' seq crc16` | status; CRCs the idle bank's `0200–3FBF`, and if it matches writes the trailer (GOOD, `seq`) |
+| `B5 'F' seq crc16` | status; CRCs the idle bank's `0240–3FBF`, and if it matches writes the trailer (TRIAL, `seq`) |
+| `B5 'K' state seq` | status; rewrites the running bank's trailer with that state and sequence number: `K 3 seq` confirms, `K 3 other−1` makes the other bank boot next |
 | `B5 'R'` | no reply; resets, which boots the newest valid bank |
 
 Status byte: 0 ok, 1 verify failed, 2 chip timeout, 3 page out of range,
 4 CRC mismatch, 5 bad arguments.
 
 **Page writes** (`lib_page_writer`, from RAM, interrupts off): wait for the
-mains NMI, send the SDP unlock sequence, select the target bank, load the 64
+mains NMI if one has ever fired (`NMI_SEEN`; on a DC supply there is nothing
+to collide with and the wait is skipped), send the SDP unlock sequence, select the target bank, load the 64
 bytes, let the chip's 10 ms write cycle finish, read the page back. The NMI
 wait exists because the chip is unreadable, vectors included, during its
 write cycle, and the mains NMI cannot be masked; writing right after one
@@ -127,11 +138,18 @@ uv run tools/cc784_ota.py push src/patched/cc784nir_bank.bin -p <port>          
 `push` reads both trailers (`I`, which also switches on the DONE handshake
 when the firmware offers it), CRCs every page of the idle bank (`C`, about
 25 s), sends only the pages that differ (`B`, then `W` in runs of up to three
-pages, ~7 s per run), verifies the whole image on the sign and writes
-the trailer with the next sequence number (`F`), reboots (`R`), waits 6 s and
-confirms the new bank is running (`I`). `-n` stops after the comparison and
-reports the page count; `-s` forces a sequence number. If it fails after `B`
-it sends `R`, which boots the old bank because the idle trailer is erased.
+pages, ~7 s per run), verifies the whole image on the sign and writes the
+trailer with the next sequence number (`F`), reboots (`R`), waits 8 s, checks
+that the new bank is running (`I`) and confirms it (`K`). `--trial` skips the
+confirmation: the new image runs, and a power cycle reverts it until you run
+`confirm`. `-n` stops after the comparison and reports the page count; `-s`
+forces a sequence number. If it fails after `B` it sends `R`, which boots the
+old bank because the idle trailer is erased.
+
+**`confirm`** marks the running image GOOD. **`rollback`** gives the running
+bank a lower sequence number than the other and reboots: the previous image
+is back in ten seconds with nothing transferred, as long as the next push
+hasn't overwritten it yet. **`info`** shows both banks.
 
 **What a push costs:** the diff is against the idle bank, which holds the
 image from *two* pushes ago, so a push carries the union of the last two
@@ -163,12 +181,6 @@ The `OTA: emulator regression` task runs the five fast ones.
 
 ## 7. Not built
 
-- **Trial/confirm rollback.** `F` would write state TRIAL; the stub would
-  mark a TRIAL bank TRIED before booting it and treat TRIED as invalid; the
-  host would confirm with a new command once the new firmware answers. This
-  would recover from an image that boots but cannot talk, which today needs
-  the T48. The trailer's state byte and ~60 spare stub bytes are reserved
-  for it.
 - **Layout pinning** (`ALIGN 64` slack between modules, fixed `ORG`s for the
   tables) so that small code edits stay small pushes. There are ~450 bytes
   of bank free, not enough yet.
@@ -184,8 +196,8 @@ The `OTA: emulator regression` task runs the five fast ones.
 - **Burn with `-u -P`.** `-u` only disables protection before writing; `-P`
   re-enables it. The task does both. With `/WE` on `/WR`, an unprotected
   chip can be written by a crashed program.
-- **AC power only for updates.** On a DC supply there is no mains NMI and
-  the page writer waits forever.
+- **DC supply.** The clock cannot run without the mains NMI, but updates
+  work: the page writer only syncs to the NMI if one has ever fired.
 - **Never load `I` with `C0` or above, never read `C000–FFFF`.** Refresh
   cycles and reads clock the bank register with whatever is on the bus. The
   emulator reports both as faults.

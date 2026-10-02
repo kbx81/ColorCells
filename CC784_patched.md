@@ -24,11 +24,12 @@ RAM, with the chip-size detection of patch 13:
 | `42C2–7E6F` | `MSG_STORE`, **15278 bytes** with a 62256; `42C2–5E6F`, **7086**, with the stock 6264 |
 | `7E70–7EEF` | **stack**, 128 bytes (`STACK_SIZE`); `5E70` on the 6264, which mirrors `6000–7FFF` onto `4000–5FFF` |
 | `7EF0–7FFB` | packet flag, buffer and parser state |
+| `7FF0` | `NMI_SEEN`: FF once a mains NMI has fired since reset |
 | `7FFC–7FFF` | boot stub: `NMI_VEC`, `NMI_MAGIC`, `ROM_BANK` |
 | `C000` | `BANK_REG`, the added '273 (write-only; bit 0 = EEPROM A14) |
 
-ROM: `0000–01FF` boot stub, `0200` jump table, `0209` `ROM_ID` (stock `0048`),
-application to `3FBF`, trailer page at `3FC0` (`CC784_ota.md` §2). About 450
+ROM: `0000–023F` boot stub, `0240` jump table, `0249` `ROM_ID` (stock `0048`),
+application to `3FBF`, trailer page at `3FC0` (`CC784_ota.md` §2). About 320
 bytes of the bank are free.
 
 ## 2. Patches
@@ -136,6 +137,14 @@ bytes of the bank are free.
     message from `B5 'B'` to the reboot through the factory test mode.
 15. **APPEND seats like DELETE_TEXT** (fixes B11): the extra step back onto an empty
     channel's marker is gone.
+18. **Trial and confirm.** `F` writes a new image's trailer as TRIAL; the
+    stub rewrites a TRIAL trailer as TRIED before booting it and treats TRIED
+    as invalid, so an image that crashes, hangs or cannot talk is skipped at
+    the next reset. `B5 'K' state seq` rewrites the running bank's trailer:
+    the host confirms (GOOD) once the image answers, or lowers the sequence
+    number to roll back. `NMI_SEEN` (`7FF0`), set by every mains NMI, lets the
+    page writer skip its NMI sync on a DC supply instead of waiting forever;
+    `I` reports it. The stub grew to `0240`.
 17. **Label strings parked in the index-space gaps** (+237 bytes). The
     editor's label lookup is `ATTR_LABEL_TABLE + 2·attr`, so the colour-name
     table must sit 256 bytes after it and the speed labels 128 bytes after

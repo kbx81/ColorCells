@@ -184,6 +184,7 @@ PKT_REMAIN           equ RAM_TOP-0x06
 CTRL_LATCH           equ 0x8000
 ; ---- OTA (CC784_ota.md): the boot stub's RAM, above the packet parser state,
 ;      and the added '273 bank register. store_init leaves these bytes alone.
+NMI_SEEN             equ RAM_TOP-0x10 ; FF once a mains NMI has fired since reset: the page writer syncs to the NMI only then (7FF0, between PKT_BUF and the parser state)
 NMI_VEC              equ RAM_TOP-4   ; NMI_VECTOR jumps here once NMI_MAGIC holds 0xA5
 NMI_MAGIC            equ RAM_TOP-2
 ROM_BANK             equ RAM_TOP-1   ; bank the stub booted; BANK_REG cannot be read back
@@ -236,7 +237,7 @@ CMD_OTA              equ 0xb5        ; B5 c ... (patch 11)
 DONE_BYTE            equ 0x04        ; sent after processing when the frame's flag was 81 (patch 16)
 
 ; ---- Boot stub and OTA (CC784_ota.md) ------------------------------------------
-STUB_END             equ 0x0200      ; the stub owns 0000-01FF; the app starts at the jump table here
+STUB_END             equ 0x0240      ; the stub owns 0000-023F; the app starts at the jump table here
 APP_START            equ STUB_END
 APP_INT              equ STUB_END+3
 APP_NMI              equ STUB_END+6
@@ -248,9 +249,12 @@ ROM_CRC16            equ stub_lib+(lib_crc16-STUB_RAM)    ; position-independent
 TRAILER_MAGIC        equ 0x3141544f  ; "OTA1"
 ; Trailer page at 3FC0: +0 magic, +4 seq, +5 state, +6 CRC-16 of STUB_END..3FBF,
 ; +8 CRC-16 of bytes +0..+7. CRC-16/XMODEM (poly 1021, init 0), tools/cc784_ota.py.
+STATE_TRIAL          equ 1           ; written by F: boot me once, then I need confirming
+STATE_TRIED          equ 2           ; the stub booted a TRIAL bank: invalid from now on unless confirmed
+STATE_GOOD           equ 3
 OTA_IDLE             equ TXBUF+0x55     ; the idle bank; replies never reach this byte
 OTA_PAGE_BUF         equ PKT_BUF+0x80   ; 64-byte scratch; the commands using it have short payloads
-OTA_FEATURES         equ 0x01           ; 'I' reply byte 21: bit 0 = DONE handshake (patch 16)
+OTA_FEATURES         equ 0x05           ; 'I' reply byte 21: bit 0 = DONE handshake (patch 16), bit 2 = trial/confirm (patch 18); bit 1 is NMI_SEEN
 
         org 0x0000
 
@@ -266,6 +270,7 @@ RESET:
         DI
         XOR A
         LD (NMI_MAGIC),A        ; RAM is random at power-up: no vector yet
+        LD (NMI_SEEN),A
         LD SP,STUB_STACK
         JP stub_main
 
@@ -282,6 +287,8 @@ INT_VECTOR:
 ;      APP_NMI may be anything.
 NMI_VECTOR:
         PUSH AF
+        LD A,0xff
+        LD (NMI_SEEN),A         ; the mains is alive (the page writer and a trial boot need it)
         LD A,(NMI_MAGIC)
         CP 0xa5
         JR nz,nmi_ignore
@@ -379,7 +386,12 @@ lib_copy:
 ;      Waits for the mains NMI first so the 10 ms write cycle, during which the
 ;      ROM is unreadable, cannot collide with the next one.
 lib_page_writer:
-        HALT
+        LD A,(NMI_SEEN)
+        OR A
+        JR z,pw_load            ; no mains NMI (DC supply): nothing to collide with
+        HALT                    ; else start right after one: the next is ~16 ms away
+
+pw_load:
         PUSH DE
         PUSH HL
         LD A,1
@@ -500,6 +512,9 @@ lib_trailer_check:
         OR A
         SBC HL,DE
         JR nz,tc_bad
+        LD A,(TRAILER+5)
+        CP STATE_TRIED          ; booted once as a trial and never confirmed
+        JR z,tc_bad
         LD A,(TRAILER+4)
         LD C,A
         LD A,0xff
@@ -541,6 +556,27 @@ ic_done:
 lib_boot:
         LD (ROM_BANK),A
         LD (BANK_REG),A
+        LD A,(TRAILER+5)
+        CP STATE_TRIAL
+        JR nz,boot_go           ; a trial boots once: mark it TRIED before running it
+        LD HL,TRAILER
+        LD DE,OTA_PAGE_BUF
+        LD BC,64
+        LDIR
+        LD A,STATE_TRIED
+        LD (OTA_PAGE_BUF+5),A
+        LD HL,OTA_PAGE_BUF
+        LD BC,8
+        LD DE,0
+        CALL lib_crc16
+        LD (OTA_PAGE_BUF+8),DE
+        LD HL,OTA_PAGE_BUF
+        LD DE,TRAILER
+        LD A,(ROM_BANK)
+        LD B,A
+        CALL lib_page_writer
+
+boot_go:
         LD HL,APP_NMI
         LD (NMI_VEC),HL
         LD A,0xa5
@@ -7141,6 +7177,7 @@ query_wait_tx:
 ;        B5 'B'                 -> erase the idle bank's trailer page
 ;        B5 'W' page crc data   -> write 1-3 pages of data (crc covers data)
 ;        B5 'F' seq crc         -> CRC the idle bank; if it matches, write its trailer
+;        B5 'K' state seq       -> rewrite the running bank's trailer (confirm, or roll back)
 ;        B5 'R'                 -> reset (no reply)
 cmd_B5_ota:
         LD HL,stub_lib
@@ -7164,6 +7201,8 @@ cmd_B5_ota:
         JP z,ota_write
         CP 'F'
         JP z,ota_finish
+        CP 'K'
+        JP z,ota_confirm
         CP 'R'
         JP z,RESET
 
@@ -7208,7 +7247,9 @@ ota_info:
         CALL ota_trailer_copy
         LD A,1
         CALL ota_trailer_copy
-        LD A,OTA_FEATURES
+        LD A,(NMI_SEEN)
+        AND 2
+        OR OTA_FEATURES
         LD (DE),A
         JP ota_reply
 
@@ -7282,6 +7323,30 @@ ota_erase_loop:
         DJNZ ota_erase_loop
         LD HL,OTA_PAGE_BUF
         RET
+
+; ---- ota_confirm: 'K' state seq -> the running bank's trailer rewritten with
+;      that state and sequence number (image CRC kept): confirm a trial, or
+;      lower the sequence number to roll back to the other bank at the reboot
+ota_confirm:
+        LD HL,TRAILER
+        LD DE,OTA_PAGE_BUF
+        LD BC,64
+        LDIR
+        LD A,(PKT_BUF+2)
+        LD (OTA_PAGE_BUF+5),A
+        LD A,(PKT_BUF+3)
+        LD (OTA_PAGE_BUF+4),A
+        LD HL,OTA_PAGE_BUF
+        LD BC,8
+        LD DE,0
+        CALL ROM_CRC16
+        LD (OTA_PAGE_BUF+8),DE
+        LD HL,OTA_PAGE_BUF
+        LD DE,TRAILER
+        LD A,(ROM_BANK)
+        LD B,A
+        CALL lib_page_writer
+        JP ota_status
 
 ; ---- ota_begin: 'B' -> the idle bank's trailer page becomes FF, and the panel
 ;      shows UPDATING (held, not scrolled) through every restart until the
@@ -7434,7 +7499,7 @@ ota_finish_done:
         LD A,(PKT_BUF+2)
         LD (HL),A               ; seq
         INC HL
-        LD (HL),3               ; state GOOD
+        LD (HL),STATE_TRIAL     ; the stub marks it TRIED when it boots it; K makes it GOOD
         INC HL
         LD A,(PKT_BUF+3)
         LD (HL),A
