@@ -69,9 +69,3 @@ src/**/*.bin
 
 # Assembler symbol dumps
 *.sym
-
-# Saleae exports (tens of MB each)
-analog.csv
-digital.csv
-good_analog.csv
-good_digital.csv
