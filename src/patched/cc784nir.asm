@@ -7494,7 +7494,9 @@ cmd_02_speed:
         LD (CUR_CHAR),A
         JP pkt_insert_text
 
-; ---- cmd_B3_append: B3: move STORE_CURSOR to end of current channel
+; ---- cmd_B3_append: B3: move STORE_CURSOR to end of current channel.
+;      B11: stock stepped back a second time when the byte before the 03 was a
+;      marker byte (an empty channel), so the first insert split the marker.
 cmd_B3_append:
         LD HL,(STORE_CURSOR)
 
@@ -7506,15 +7508,8 @@ append_find_end:
         JR append_find_end
 
 append_seat:
-        DEC HL
-        LD (STORE_CURSOR),HL
-        LD A,(HL)
-        CP 0xd0
-        JP c,pkt_next
-        CP 0xdb
-        JP nc,pkt_next
-        DEC HL
-        LD (STORE_CURSOR),HL
+        DEC HL                  ; the byte before the 03: last text byte, or the
+        LD (STORE_CURSOR),HL    ; marker's last byte when the channel is empty, as 0E seats it
         JP pkt_next
 
 ; ---- cmd_09_channel: 09 d d: select channel (2 ASCII digits, 0-99) ; channel 100 sets CHAN_LOCK
@@ -8260,7 +8255,7 @@ TEST_MESSAGE:
 ;      test-mode buffer (28 bytes max). PAUSE, THIN, the word, WAIT: parked until
 ;      a key. Last thing before the trailer, so editing it moves nothing else.
 ota_updating_msg:
-        db 0x19,0xb9,"> FW UPDATE <",0xba,0x03
+        db 0x19,0xb9,">FW UPDATE<",0xba,0x03
 
 ; ---- trailer page 3FC0-3FFF (CC784_ota.md §3): magic, sequence number, state
 ;      and image CRC, filled in by tools/cc784_ota.py pack. Erased in the build.

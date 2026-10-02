@@ -546,12 +546,14 @@ packet carrying a `20` — a space in a message, or `JR nz` in OTA page data —
 ends the wait. Seen as the OTA "UPDATING" display scrolling off at random
 moments. Patch 14 clears `RX_BYTE` after a byte has been fed to the parser.
 
-### B11 — `B3` append loses the first and last byte of the text that follows **[M, emulation only]**
-`09 01 B3 "XYZW"` into an empty channel leaves `YZ` in the store, on stock and
-patched alike (both in emulation). `09 02 0E "XYZW"` stores all four. Found
-2026-09-28 by the RAM fill test; `cc784.py` uses `B3` for every chunk after
-the first, so long messages sent with it may be losing two bytes per chunk on
-the sign too. Not yet traced or checked on hardware.
+### B11 — `B3` into an empty channel loses the first and last byte **[H, reproduced on the sign]**
+`09 01 B3 "XYZW"` leaves `YZ`; `09 02 0E "XYZW"` stores all four.
+`cmd_B3_append` seats the cursor on the byte before the channel's `03`, then,
+if that byte is a marker byte (the channel is empty), steps back once more
+onto the marker's first byte; the first insert then splits the marker and
+`store_repair` discards the strays. Appending to a channel that already has
+text is unaffected. Patch 15 removes the second step; `B3` then seats as `0E`
+does.
 
 ### B9 — a pending deferred packet turns the next frame into an editor session **[H, reproduced on the sign 2026-09-19]**
 While a packet accepted with `PKT_FLAG != 80` waits for `main_loop` to get
@@ -697,6 +699,8 @@ other difference is drift and should be reconciled.
     CRCs, begin, write 1–3 pages, finish, reset. Runs the stub's RAM library
     from `FRAMEBUF`; pages below `0200` refused. ≈ 540 bytes of ROM.
 12. **`tx_try_queue` reports busy with carry** (fixes B10).
+15. **`B3` seats like `0E`** (fixes B11): the extra step back onto an empty
+    channel's marker is gone.
 14. **Payload bytes are not keys** (fixes B12): `rx_consume` clears `RX_BYTE`
     after `pkt_feed_byte`. The OTA handler also blanks the panel before each
     reply (its RAM library sits in `FRAMEBUF`) and shows a parked UPDATING
