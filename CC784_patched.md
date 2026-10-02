@@ -201,6 +201,9 @@ bytes of the bank are free.
 - **Patches 10–11** — OTA pushes over the ESPHome bridge: identical image,
   one-page, ~100-page and interrupted-then-resumed updates, all booted and
   confirmed; the store survives every reboot.
+- **Patch 18** — a `--trial` push boots the new bank as TRIED and leaves it
+  unconfirmed; `confirm` makes it GOOD; `rollback` reboots into the other
+  bank with nothing transferred.
 - **B11/B12** — APPEND `"XYZW"` into an empty channel stores all four bytes;
   the update display stays put while pages carrying `20` arrive.
 - **FLASH clock** — `FLASH_HALF_PERIOD` 7 instead of 13 blinks visibly
