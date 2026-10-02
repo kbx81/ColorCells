@@ -192,6 +192,28 @@ KEY_ECHO_TX          equ RAM_VARS+0x23f   ; non-zero = echo accepted keys on ser
 STORE_TEXT_LIMIT     equ RAM_VARS+0x244   ; free text bytes; scan bound for store_repair
 STORE_WARN_LIMIT     equ RAM_VARS+0x246   ; STORE_END here trips the 100 KEYS LEFT warning
 
+; ---- Wire protocol bytes (CC784_protocol.md) ---------------------------------
+FRAME_START          equ 0xb1
+ADDR_BROADCAST       equ 0x2a        ; '*': processed, never answered
+REPLY_ACK            equ 0x06
+REPLY_NAK            equ 0x15
+CMD_SPEED            equ 0x02        ; 02 n
+CMD_CLEAR_ALL        equ 0x03
+CMD_SEQUENCE         equ 0x04        ; 04 dd dd ... [D]
+CMD_CHANNEL          equ 0x09        ; 09 dd
+CMD_END              equ 0x0d
+CMD_DELETE_TEXT      equ 0x0e
+CMD_FORE_IDX         equ 0x15        ; 15 n
+CMD_BACK_IDX         equ 0x16        ; 16 n
+CMD_SET_TIME         equ 0x17        ; 17 hhmm a
+CMD_COLOUR_A0        equ 0x1e        ; 1E n
+CMD_APPEND           equ 0xb3
+CMD_QUERY            equ 0xb4        ; B4 c
+QUERY_ROMID          equ '0'
+QUERY_MEMORY         equ '1'
+QUERY_NOP            equ '2'
+QUERY_DUMP           equ '3'
+
         org 0x0000
 
 ; ---- RESET: cold start: set SP, run init routines, EI, jump to main loop
@@ -596,7 +618,7 @@ rx_have_byte:
 
 rx_idle_byte:
         LD A,(RX_BYTE)
-        CP 0xb1
+        CP FRAME_START
         JR nz,rx_not_start
         LD A,(PKT_READY)
         AND A
@@ -3841,7 +3863,7 @@ pkt_st_cksum:
         SUB E
         LD E,A
         LD A,(PKT_ADDR)
-        CP 0x2a
+        CP ADDR_BROADCAST
         JR z,pkt_check_ok
         LD D,A
         LD A,(MY_ADDRESS)
@@ -3849,9 +3871,9 @@ pkt_st_cksum:
         JR nz,pkt_discard
         LD A,E
         AND A
-        LD A,6
+        LD A,REPLY_ACK
         JR z,pkt_send_reply
-        LD A,0x15
+        LD A,REPLY_NAK
 
 pkt_send_reply:
         CALL tx_send_byte
@@ -3931,16 +3953,16 @@ query_dispatch:
         AND A
         RET z
         LD A,(EDIT_KEY)
-        CP 0xb4
+        CP CMD_QUERY
         RET nz
         CALL menu_getchar
-        CP 0x30
+        CP QUERY_ROMID
         JP z,query_0_romid
-        CP 0x31
+        CP QUERY_MEMORY
         JP z,query_1_memory
-        CP 0x32
+        CP QUERY_NOP
         JP z,query_2_nop
-        CP 0x33
+        CP QUERY_DUMP
         JP z,query_3_dump
         RET
 
@@ -6754,29 +6776,29 @@ pkt_byte_loop:
         CALL is_ignored_byte
         AND A
         JP z,pkt_next
-        CP 2
+        CP CMD_SPEED
         JP z,cmd_02_speed
-        CP 3
+        CP CMD_CLEAR_ALL
         JP z,cmd_03_clear_all
-        CP 4
+        CP CMD_SEQUENCE
         JP z,cmd_04_sequence
-        CP 9
+        CP CMD_CHANNEL
         JP z,cmd_09_channel
-        CP 13
+        CP CMD_END
         JP z,pkt_process_done
-        CP 14
+        CP CMD_DELETE_TEXT
         JP z,cmd_0E_delete_text
-        CP 0x15
+        CP CMD_FORE_IDX
         JP z,cmd_15_fore_idx
-        CP 0x16
+        CP CMD_BACK_IDX
         JP z,cmd_16_back_idx
-        CP 0x17
+        CP CMD_SET_TIME
         JP z,cmd_17_set_time
-        CP 0x1e
+        CP CMD_COLOUR_A0
         JP z,cmd_1E_colour_A0
-        CP 0xb3
+        CP CMD_APPEND
         JP z,cmd_B3_append
-        CP 0xb4
+        CP CMD_QUERY
         JP z,cmd_B4_query
 
 ; ---- pkt_insert_text: Insert CUR_CHAR at STORE_CURSOR (shifts the store up; refuses when CHAN_LOCK or memory full)
@@ -6915,13 +6937,13 @@ cmd_B4_query:
         CALL shift_chain_clear
         EI
         CALL pkt_next_byte
-        CP 0x30
+        CP QUERY_ROMID
         CALL z,query_0_romid
-        CP 0x31
+        CP QUERY_MEMORY
         CALL z,query_1_memory
-        CP 0x32
+        CP QUERY_NOP
         CALL z,query_2_nop
-        CP 0x33
+        CP QUERY_DUMP
         CALL z,query_3_dump
 
 query_wait_tx:

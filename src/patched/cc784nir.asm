@@ -182,7 +182,6 @@ PKT_ADDR             equ RAM_TOP-0x09
 PKT_PTR              equ RAM_TOP-0x08
 PKT_REMAIN           equ RAM_TOP-0x06
 CTRL_LATCH           equ 0x8000
-DONE_BYTE            equ 0x04        ; P16: sent after processing when the frame's flag was 81
 ; ---- OTA (CC784_ota.md): the boot stub's RAM, above the packet parser state,
 ;      and the added '273 bank register. store_init leaves these bytes alone.
 NMI_VEC              equ RAM_TOP-4   ; NMI_VECTOR jumps here once NMI_MAGIC holds 0xA5
@@ -212,6 +211,47 @@ STORE_TOP_8K         equ STORE_TOP-0x2000         ; with the stock 8 K chip
 ; store_init derives the warning level, the text allowance (301 = framing) and
 ; the B4 '1' size from whichever ceiling the RAM test picks.
 
+; ---- Wire protocol bytes (CC784_protocol.md) ---------------------------------
+FRAME_START          equ 0xb1
+ADDR_BROADCAST       equ 0x2a        ; '*': processed, never answered
+REPLY_ACK            equ 0x06
+REPLY_NAK            equ 0x15
+CMD_SPEED            equ 0x02        ; 02 n
+CMD_CLEAR_ALL        equ 0x03
+CMD_SEQUENCE         equ 0x04        ; 04 dd dd ... [D]
+CMD_CHANNEL          equ 0x09        ; 09 dd
+CMD_END              equ 0x0d
+CMD_DELETE_TEXT      equ 0x0e
+CMD_FORE_IDX         equ 0x15        ; 15 n
+CMD_BACK_IDX         equ 0x16        ; 16 n
+CMD_SET_TIME         equ 0x17        ; 17 hhmm a
+CMD_COLOUR_A0        equ 0x1e        ; 1E n
+CMD_APPEND           equ 0xb3
+CMD_QUERY            equ 0xb4        ; B4 c
+QUERY_ROMID          equ '0'
+QUERY_MEMORY         equ '1'
+QUERY_NOP            equ '2'
+QUERY_DUMP           equ '3'
+CMD_OTA              equ 0xb5        ; B5 c ... (patch 11)
+DONE_BYTE            equ 0x04        ; sent after processing when the frame's flag was 81 (patch 16)
+
+; ---- Boot stub and OTA (CC784_ota.md) ------------------------------------------
+STUB_END             equ 0x0200      ; the stub owns 0000-01FF; the app starts at the jump table here
+APP_START            equ STUB_END
+APP_INT              equ STUB_END+3
+APP_NMI              equ STUB_END+6
+STUB_STACK           equ PKT_READY
+STUB_RAM             equ 0x4000      ; stub_lib runs here (FRAMEBUF: idle at boot and during pkt_process)
+STUB_LIB_SIZE        equ stub_lib_end-stub_lib             ; the whole library, copied at boot
+STUB_LIB_APP_SIZE    equ lib_app_end-STUB_RAM             ; the part the app copies: lib_copy and the page writer
+ROM_CRC16            equ stub_lib+(lib_crc16-STUB_RAM)    ; position-independent: callable in ROM too
+TRAILER_MAGIC        equ 0x3141544f  ; "OTA1"
+; Trailer page at 3FC0: +0 magic, +4 seq, +5 state, +6 CRC-16 of STUB_END..3FBF,
+; +8 CRC-16 of bytes +0..+7. CRC-16/XMODEM (poly 1021, init 0), tools/cc784_ota.py.
+OTA_IDLE             equ TXBUF+0x55     ; the idle bank; replies never reach this byte
+OTA_PAGE_BUF         equ PKT_BUF+0x80   ; 64-byte scratch; the commands using it have short payloads
+OTA_FEATURES         equ 0x01           ; 'I' reply byte 21: bit 0 = DONE handshake (patch 16)
+
         org 0x0000
 
 ; ============================================================================
@@ -220,15 +260,6 @@ STORE_TOP_8K         equ STORE_TOP-0x2000         ; with the stock 8 K chip
 ;  nothing in the app except the fixed jump table below, so that app changes
 ;  never change its bytes.
 ; ============================================================================
-STUB_END             equ 0x0200
-APP_START            equ STUB_END
-APP_INT              equ STUB_END+3
-APP_NMI              equ STUB_END+6
-STUB_STACK           equ PKT_READY
-STUB_RAM             equ 0x4000      ; stub_lib runs here (FRAMEBUF: idle at boot and during pkt_process)
-TRAILER_MAGIC        equ 0x3141544f  ; "OTA1"
-; Trailer page at 3FC0: +0 magic, +4 seq, +5 state, +6 CRC-16 of STUB_END..3FBF,
-; +8 CRC-16 of bytes +0..+7. CRC-16/XMODEM (poly 1021, init 0), tools/cc784_ota.py.
 
 ; ---- RESET: choose a bank, point the NMI at its app, run it
 RESET:
@@ -517,9 +548,7 @@ lib_boot:
         JP APP_START
 
         ENT
-STUB_LIB_SIZE        equ $-stub_lib
-STUB_LIB_APP_SIZE    equ lib_app_end-STUB_RAM
-ROM_CRC16            equ stub_lib+(lib_crc16-STUB_RAM)   ; position-independent: callable in ROM too
+stub_lib_end:
 
         ds STUB_END-$,0xff
 
@@ -908,7 +937,7 @@ rx_have_byte:
 
 rx_idle_byte:
         LD A,(RX_BYTE)
-        CP 0xb1
+        CP FRAME_START
         JR nz,rx_not_start
         LD A,(PKT_READY)
         AND A
@@ -4106,7 +4135,7 @@ pkt_st_cksum:
         SUB E
         LD E,A
         LD A,(PKT_ADDR)
-        CP 0x2a
+        CP ADDR_BROADCAST
         JR z,pkt_check_ok
         LD D,A
         LD A,(MY_ADDRESS)
@@ -4114,9 +4143,9 @@ pkt_st_cksum:
         JR nz,pkt_discard
         LD A,E
         AND A
-        LD A,6
+        LD A,REPLY_ACK
         JR z,pkt_send_reply
-        LD A,0x15
+        LD A,REPLY_NAK
 
 pkt_send_reply:
         CALL tx_send_byte
@@ -4196,16 +4225,16 @@ query_dispatch:
         AND A
         RET z
         LD A,(EDIT_KEY)
-        CP 0xb4
+        CP CMD_QUERY
         RET nz
         CALL menu_getchar
-        CP 0x30
+        CP QUERY_ROMID
         JP z,query_0_romid
-        CP 0x31
+        CP QUERY_MEMORY
         JP z,query_1_memory
-        CP 0x32
+        CP QUERY_NOP
         JP z,query_2_nop
-        CP 0x33
+        CP QUERY_DUMP
         JP z,query_3_dump
         RET
 
@@ -6918,31 +6947,31 @@ pkt_byte_loop:
         CALL is_ignored_byte
         AND A
         JP z,pkt_next
-        CP 2
+        CP CMD_SPEED
         JP z,cmd_02_speed
-        CP 3
+        CP CMD_CLEAR_ALL
         JP z,cmd_03_clear_all
-        CP 4
+        CP CMD_SEQUENCE
         JP z,cmd_04_sequence
-        CP 9
+        CP CMD_CHANNEL
         JP z,cmd_09_channel
-        CP 13
+        CP CMD_END
         JP z,pkt_process_done
-        CP 14
+        CP CMD_DELETE_TEXT
         JP z,cmd_0E_delete_text
-        CP 0x15
+        CP CMD_FORE_IDX
         JP z,cmd_15_fore_idx
-        CP 0x16
+        CP CMD_BACK_IDX
         JP z,cmd_16_back_idx
-        CP 0x17
+        CP CMD_SET_TIME
         JP z,cmd_17_set_time
-        CP 0x1e
+        CP CMD_COLOUR_A0
         JP z,cmd_1E_colour_A0
-        CP 0xb3
+        CP CMD_APPEND
         JP z,cmd_B3_append
-        CP 0xb4
+        CP CMD_QUERY
         JP z,cmd_B4_query
-        CP 0xb5
+        CP CMD_OTA
         JP z,cmd_B5_ota
 
 ; ---- pkt_insert_text: Insert CUR_CHAR at STORE_CURSOR (shifts the store up; refuses when CHAN_LOCK or memory full)
@@ -7016,7 +7045,7 @@ pkt_process_done:
         BIT 0,A
         JR z,pkt_done_no_ack
         LD A,(PKT_ADDR)
-        CP 0x2a
+        CP ADDR_BROADCAST
         JR z,pkt_done_no_ack
         LD A,DONE_BYTE
         CALL tx_try_queue
@@ -7090,13 +7119,13 @@ cmd_B4_query:
         CALL shift_chain_clear
         EI
         CALL pkt_next_byte
-        CP 0x30
+        CP QUERY_ROMID
         CALL z,query_0_romid
-        CP 0x31
+        CP QUERY_MEMORY
         CALL z,query_1_memory
-        CP 0x32
+        CP QUERY_NOP
         CALL z,query_2_nop
-        CP 0x33
+        CP QUERY_DUMP
         CALL z,query_3_dump
 
 query_wait_tx:
@@ -7117,9 +7146,6 @@ query_wait_tx:
 ;        B5 'W' page crc data   -> write 1-3 pages of data (crc covers data)
 ;        B5 'F' seq crc         -> CRC the idle bank; if it matches, write its trailer
 ;        B5 'R'                 -> reset (no reply)
-OTA_IDLE             equ TXBUF+0x55     ; the idle bank; replies never reach this byte
-OTA_FEATURES         equ 0x01           ; 'I' reply byte 21: bit 0 = DONE handshake (P16)
-OTA_PAGE_BUF         equ PKT_BUF+0x80   ; 64-byte scratch; the commands using it have short payloads
 cmd_B5_ota:
         LD HL,stub_lib
         LD DE,STUB_RAM
@@ -7129,7 +7155,7 @@ cmd_B5_ota:
         XOR 1
         LD (OTA_IDLE),A
         LD A,(PKT_BUF)
-        CP 0xb5
+        CP CMD_OTA
         JR nz,ota_bad_args
         LD A,(PKT_BUF+1)
         CP 'I'
