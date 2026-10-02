@@ -200,6 +200,9 @@ fixed 1 s pause.
 - **B8** — messages into channels 0, 42 and 99, then `B4 '3'`: all intact.
 - **Patches 7–8** — `B4 '1'` reports 7086 on the 6264; the store filled to
   the last byte in 250-byte chunks dumps back intact.
+- **Patch 7** — a message alternating BOLD, TINY (45 characters), NORMAL,
+  TINY, ITALIC, BIG and TINY (30 characters) renders cleanly; TINY's frame in
+  `TXBUF` and its line buffer in the 192-byte ring hold up on the panel.
 - **Patch 13** — `B4 '1'` reports 15278 on a 62256.
 - **Patches 10–11** — OTA pushes over the ESPHome bridge: identical image,
   one-page, ~100-page and interrupted-then-resumed updates, all booted and
