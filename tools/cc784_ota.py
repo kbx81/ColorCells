@@ -149,7 +149,7 @@ def push(sign, bank, seq=None, dry_run=False):
         except Exception:
             pass
         raise
-    time.sleep(6)
+    time.sleep(8)                            # stub CRC pass, app init, first restart
     running, t0, t1 = ota.info()
     t = t1 if running == 1 else t0
     ok = running == idle and t and t['seq'] == seq

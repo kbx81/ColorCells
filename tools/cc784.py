@@ -183,18 +183,31 @@ class Sign:
         if self.verbose and buf: print("  RX:", hexs(buf))
         return bytes(buf)
 
-    def read_reply(self, timeout=None):
-        """Read a reply frame B1 addr ... . Returns (raw_bytes) or b''."""
+    def read_reply(self, timeout=None, dump=False):
+        """Read a reply frame B1 addr ... . Returns (raw_bytes) or b''.
+        The frame's own header says how long it is: a length byte, or for the
+        store dump (dump=True) five ASCII digits. Reads until that many bytes
+        have arrived (a 15 K dump takes ten minutes at 300 baud) or the line
+        goes quiet."""
         timeout = timeout or self.timeout
-        t0 = time.time(); end = t0 + timeout; buf = bytearray()
-        while time.time() < end and time.time() - t0 < timeout + 5.0:   # hard ceiling
+        t0 = time.time(); end = t0 + timeout; buf = bytearray(); expected = None
+        while time.time() < end:
             b = self.link.read(1, 0.2)
-            if b:
-                # keep reading while bytes flow, but never shorten the original
-                # deadline: the ACK arrives first and a deferred query reply can
-                # be seconds behind it (main_loop only polls PKT_READY at the end
-                # of a display cycle).
-                buf += b; end = max(end, time.time() + 1.0)
+            if not b:
+                continue
+            buf += b
+            end = max(end, time.time() + 2.0)        # keep going while bytes flow
+            if expected is None:
+                f = buf[1:] if buf[:1] == bytes([ACK]) else buf   # the ACK comes first when addressed
+                if f[:1] == bytes([START]):
+                    if dump and len(f) >= 7 and f[2:7].isdigit():
+                        expected = len(buf) - len(f) + 7 + int(f[2:7]) + 1
+                    elif not dump and len(f) >= 3:
+                        expected = len(buf) - len(f) + 4 + f[2]
+                if expected:
+                    end = max(end, time.time() + (expected - len(buf)) * 10 / 300.0 + 2.0)
+            if expected and len(buf) >= expected:
+                break
         if self.verbose and buf: print("  RX:", hexs(buf))
         return bytes(buf)
 
@@ -206,7 +219,7 @@ class Sign:
         # current display cycle, and while it is pending the next frame's
         # address byte 01 drops the sign into the editor (firmware notes B9).
         self.send_frame(b'\xB4' + n.encode(), expect_ack=False, flag=0x80)
-        return self.read_reply()
+        return self.read_reply(dump=(n == '3'))
 
 # ---- commands ---------------------------------------------------------------
 def parse_reply(raw: bytes, kind: str):
