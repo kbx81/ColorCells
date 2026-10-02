@@ -106,8 +106,8 @@ bytes of the bank are free.
 9. **Remove the unreachable code.** A static reachability walk over the
    assembled listing (roots: the three vectors plus every label loaded as a
    vector or stored as data) leaves five islands nothing can jump to:
-   `keypad_scan` (47 bytes — the notes had it reached from the IR path; it is
-   not referenced at all), `menu_enter` (48 bytes — an "enter your address or
+   `keypad_scan` (47 bytes, not referenced at all), `menu_enter` (48 bytes —
+   an "enter your address or
    `*`" gate that nothing enters; serial `01` goes to `key_handler`), and
    three orphans behind unconditional jumps (an extra `LD A,0x20` after
    `clock_emit`, a digit-decrement stub after `editor_key_bgrnd`, a stray

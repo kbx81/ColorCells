@@ -29,7 +29,7 @@ hardware; **[M]** structure understood, details inferred; **[L]** hypothesis.
 | `4040–4197` | `FRAMEBUF` — 4 × 86 bytes |
 | `4198–41A1` | frame-buffer pointers/temps |
 | `41A2–41F7` | `TXBUF` — reply frame buffer (len byte + up to 0x55 data) |
-| `41F8–43E1` | variables (see the `equ` block in the source; every referenced location is now named from its use, and the handful the firmware writes but never reads are marked "never read" in their comments) |
+| `41F8–43E1` | variables (the `equ` block in the source names each from its use; the handful the firmware writes but never reads are marked "never read") |
 | `43CB/43CC` | `MY_ADDRESS` / its complement (RAM-validity check at boot) |
 | `43E2–5EF0` | `MSG_STORE` — message store (see §6); `STORE_LIMIT` at `43D8` |
 | `5EF0` | `PKT_READY` flag |
@@ -251,7 +251,7 @@ D0 D0 <text ch 0> 03   D0 D1 <text ch 1> 03  …  D9 D9 <text ch 99> 03   DA
 `ATTR_LABEL_TABLE` (`2D62`, indexed `+2*attr`) and `ATTR_LABEL_TABLE_B0`
 (`2EC2`, indexed `+2*(attr−B0)`) map each attribute byte to the string the
 on-sign editor displays for it. These are the firmware's own words, not
-inferred, which settles several earlier guesses:
+inferred:
 
 | Byte | Name | Byte | Name | Byte | Name |
 |---|---|---|---|---|---|
@@ -448,9 +448,8 @@ one-shot — cleared after every key.
 Both toggles live on **one physical key**, confirmed against the remote: it is
 labelled **UPPER/LOWER**, with **EUROPE** as its shifted function. Unshifted
 (key 41, IR code `95`, byte `1C`) it toggles `CAPS_LOCK`; shifted (byte `B6`)
-it toggles `EURO_STATE`. The EUROPE layer was initially misread as a graphics
-mode — `CHARSET_EURO` was named `CHARSET_GRAPHICS` — but it selects the 47
-accented characters of §7, and the firmware displays "EURO" for it at `2928`.
+it toggles `EURO_STATE`. The EUROPE layer is not a graphics mode: it selects
+the 47 accented characters of §7, and the firmware displays "EURO" for it.
 
 The tables are laid out 8 keys per row in the source with each entry glossed,
 so the full map is readable there. It cross-checks the attribute names from
@@ -596,9 +595,8 @@ writable in circuit is wired per `AT28C256.md`.
 
 ## 12. What is still unknown in the firmware
 
-- `BB`/`BD`/`B9`/`1D` are now traced (§7 engine internals) but not yet seen
-  on hardware; nor is the "3 ticks per row, two port groups" refresh (hardware
-  H11 — the panel's alternating red/green columns are the likely reason).
+- `BB`/`BD`/`B9`/`1D` are traced (§7 engine internals) but not yet watched
+  for on hardware.
 - `8F` is **YELLOW** [H — owner], the default text colour. `fx_halt` and WAIT
   reset every frame-buffer colour byte to it and effects force the row lead
   colour to it, so HALT/WAIT should turn the held text yellow. Not yet
