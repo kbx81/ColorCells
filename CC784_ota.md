@@ -71,11 +71,11 @@ processed. No message-store space is used.
 5. Select the bank, record it in `ROM_BANK`, point `NMI_VEC` at the jump
    table, jump to `0200`.
 
-## 4. The `B5` command
+## 4. The OTA command
 
 Sent inside the normal packet frame (`B1 addr 81 len payload cksum`),
-addressed, immediate mode; `B5` must be the first payload byte and the
-command ends the packet. Replies are reply frames (`B1 addr len data cksum`)
+addressed, immediate mode; the OTA command byte (`B5`, `CMD_OTA`) must be
+the first payload byte and the command ends the packet. Replies are reply frames (`B1 addr len data cksum`)
 and go out after the work. With flag `81` a `04` DONE byte follows the reply
 once the sign can receive again (the display restarts with interrupts off
 after every packet); the host waits for it, with a 1 s pause as the fallback
@@ -154,7 +154,7 @@ page timing, SDP and the watchdog). Before pushing a firmware change, run:
 | `uv run tools/cc784_sim.py compare OLD_TREE src/patched` | same panel frames and replies as the previous source tree |
 | `uv run tools/cc784_sim.py eeprom` | the chip model against the datasheet rules |
 | `uv run tools/cc784_sim.py ota` | the stub's bank choice in every trailer scenario, and the page writer |
-| `uv run tools/cc784_sim.py update` | a whole `B5` update over the fake serial line, including refusals |
+| `uv run tools/cc784_sim.py update` | a whole OTA update over the fake serial line, including refusals |
 | `uv run tools/cc784_sim.py push` | the real `push()` against the emulator |
 | `uv run tools/cc784_sim.py ram` | the build on the 6264 and on a 62256: sizes, fill, dump |
 | `uv run tools/cc784_sim.py fuzz [N]` | N power cuts at random instants of an update; every reboot must land in a verified bank (1000/1000 when last run) |

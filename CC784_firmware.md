@@ -172,21 +172,26 @@ capture and live ACKs.
 (`CTRL_LATCH |= 0F`), then walk `PKT_BUF`. Each byte: if in `IGNORE_TABLE`
 (`00 01 05 08 0A 0B 0C 1C 1D 7F`) skip; else dispatch:
 
-| Byte | Handler | Effect |
-|---|---|---|
-| `02 n` | `cmd_02_speed` | insert `F0 \| (n&7)` |
-| `03` | `cmd_03_clear_all` | reset the whole store |
-| `04 dd…[D/d]` | `cmd_04_sequence` | rebuild `SEQ_LIST` from 2-ASCII-digit channels (00–99) |
-| `09 dd` | `cmd_09_channel` | select channel dd; insertion point at its start; dd=100 sets `CHAN_LOCK` |
-| `0D` | — | end of packet |
-| `0E` | `cmd_0E_delete_text` | delete the selected channel's existing text |
-| `15 n` | `cmd_15_fore_idx` | insert `FG_IDX_TABLE[n]` (`8C 8D 8F 87 83 84 8E 80 8B 81`) |
-| `16 n` | `cmd_16_back_idx` | insert `BG_IDX_TABLE[n]` (`91 93 93 93 92 90`) |
-| `17 hhmm a` | `cmd_17_set_time` | 4 ASCII digits → `CLK_H10..CLK_M1`; `a`=`Y`/`y` AM else PM |
-| `1E n` | `cmd_1E_colour_A0` | insert `A0 \| (n&15)` |
-| `B3` | `cmd_B3_append` | insertion point → end of selected channel |
-| `B4 c` | `cmd_B4_query` | `'0'` ROM ID, `'1'` memory, `'2'` nop, `'3'` dump — **see bug B1** |
-| other | `pkt_insert_text` | insert byte into the store at the cursor |
+The command bytes are named in the source (`CMD_*`); the docs use those
+names, with the byte in brackets where the wire matters.
+
+| Command | Bytes | Handler | Effect |
+|---|---|---|---|
+| SPEED | `02 n` | `cmd_02_speed` | insert `F0 \| (n&7)` |
+| CLEAR_ALL | `03` | `cmd_03_clear_all` | reset the whole store |
+| SEQUENCE | `04 dd…[D/d]` | `cmd_04_sequence` | rebuild `SEQ_LIST` from 2-ASCII-digit channels (00–99) |
+| CHANNEL | `09 dd` | `cmd_09_channel` | select channel dd; insertion point at its start; dd=100 sets `CHAN_LOCK` |
+| END | `0D` | — | end of packet |
+| DELETE_TEXT | `0E` | `cmd_0E_delete_text` | delete the selected channel's existing text |
+| FORE_IDX | `15 n` | `cmd_15_fore_idx` | insert `FG_IDX_TABLE[n]` (`8C 8D 8F 87 83 84 8E 80 8B 81`) |
+| BACK_IDX | `16 n` | `cmd_16_back_idx` | insert `BG_IDX_TABLE[n]` (`91 93 93 93 92 90`) |
+| SET_TIME | `17 hhmm a` | `cmd_17_set_time` | 4 ASCII digits → `CLK_H10..CLK_M1`; `a`=`Y`/`y` AM else PM |
+| COLOUR_A0 | `1E n` | `cmd_1E_colour_A0` | insert `A0 \| (n&15)` |
+| APPEND | `B3` | `cmd_B3_append` | insertion point → end of selected channel |
+| QUERY | `B4 c` | `cmd_B4_query` | `c` = ROMID `'0'`, MEMORY `'1'`, NOP `'2'`, DUMP `'3'` — **see bug B1** |
+| (text) | other | `pkt_insert_text` | insert byte into the store at the cursor |
+
+The patched build adds OTA (`B5`), `CC784_ota.md`.
 
 `pkt_process_done` (`2B68`): clear flags, `OUT (40)` pulse, re-init render, jump
 to `main_loop` (never returns to the caller — this is why immediate-mode
@@ -195,7 +200,7 @@ processing "works" for normal packets).
 Query replies (`tx_send_frame 178D`): `B1 MY_ADDRESS len data cksum(data)` —
 note: **no flag byte** in replies, and `len` is a single binary byte.
 
-`'3'` (dump) cannot use that path — the store exceeds 255 bytes — so it sends
+QUERY DUMP cannot use that path — the store exceeds 255 bytes — so it sends
 `B1 addr <5 ASCII decimal digits = data length> <data…DA> cksum(data)`.
 Captured on hardware **[H]**, 100 empty channels plus three short messages:
 
@@ -238,10 +243,11 @@ D0 D0 <text ch 0> 03   D0 D1 <text ch 1> 03  …  D9 D9 <text ch 99> 03   DA
   `STORE_END`) by one byte and writes the character. ~6 900 byte moves per
   inserted byte with interrupts off (≈20–40 ms); a 250-byte chunk takes
   seconds. See bug B8 — fixed by a two-byte operand change.
-- **Cursor seating quirk:** `09 dd` alone leaves the cursor on the marker's
-  first byte, so a following insert would split the marker. `0E` (re-seats
-  at the marker's last byte and deletes old text) or `B3` (seats before the
-  `03`) must follow `09 dd` before any text. NETCC always sends `0E`.
+- **Cursor seating quirk:** CHANNEL alone leaves the cursor on the marker's
+  first byte, so a following insert would split the marker. DELETE_TEXT
+  (re-seats at the marker's last byte and deletes old text) or APPEND (seats
+  before the `03`) must follow CHANNEL before any text. NETCC always sends
+  DELETE_TEXT.
 - Typo at `2B1F` confirmed — see bug B6.
 
 ## 7. Rendering [M for behaviour, **H for the names**]
@@ -460,7 +466,7 @@ MAGIC/MAGIC OFF, key 55 is COLOR/BGRND. Key 25 is SHIFT in every layer.
 
 All in the stock firmware; the patched build fixes most of them.
 
-### B1 — `B4` queries overflow the stack and corrupt RAM **[H]**
+### B1 — QUERY replies overflow the stack and corrupt RAM **[H]**
 `cmd_B4_query` does `EI` and then `tx_send_frame` spin-waits per byte, while
 the call depth (`pkt_process→cmd_B4→query→tx_send_frame→tx_send_byte→tx_try_queue`
 ≈ 38 bytes) plus each interrupt's cost (return address + scheduled-handler
@@ -469,7 +475,7 @@ pushes + `tick6_service`'s 6 saved pairs and its calls ≈ 26 bytes) reaches the
 replies that differ every run, stray bytes emitted spontaneously afterwards,
 `SEQ_LIST` corrupted, eventual lock-up. Processing in immediate mode
 (`PKT_FLAG=80`) makes it worse (runs inside the tick service), but deferred
-mode (`flag=00`) still corrupts. NETCC never sent `B4`, so it was never seen.
+mode (`flag=00`) still corrupts. NETCC never sent a QUERY, so it was never seen.
 *Fixed by patch 1.*
 
 ### B2 — `cmd_17_set_time` stops the clock on a short packet **[H]**
@@ -481,7 +487,7 @@ NETCC's "status query" `17 32` triggers exactly this.
 ### B3 — immediate-mode processing is a latent hazard **[M]**
 `PKT_FLAG==80` runs `pkt_process` from within `tick6_service` with the stack
 half-consumed, relying on `pkt_process` never returning. Any future handler
-that returns or waits (like `B4`) breaks. No effect in normal use.
+that returns or waits (like QUERY) breaks. No effect in normal use.
 *Documented only; patch 1 removes its known trigger.*
 
 ### B4 — RX bytes lost while a packet is being processed **[H by design]**
@@ -509,7 +515,7 @@ meant. Reached when the cursor sits on a channel's `03` terminator: `A` is `3`
 there (the `CP 3` just matched), so instead of backing the cursor off the
 terminator it stamps `03` into the cursor's **low byte** and the next insert
 lands at a random offset inside the store. Not reachable from the standard
-`09 dd` / `0E` / `B3` sequences, which never leave the cursor on an `03`.
+CHANNEL / DELETE_TEXT / APPEND sequences, which never leave the cursor on an `03`.
 *Fixed by patch 3.*
 
 ### B7 — `MY_ADDRESS_INV` is not a complement on the reset path **[H]**
@@ -548,7 +554,7 @@ busy looked queued and was lost. Invisible in stock, where no reply ever
 carries a `00`; binary replies do.
 *Fixed by patch 12.*
 
-### B11 — `B3` into an empty channel loses the first and last byte **[H]**
+### B11 — APPEND into an empty channel loses the first and last byte **[H]**
 `09 01 B3 "XYZW"` leaves `YZ`; `09 02 0E "XYZW"` stores all four.
 `cmd_B3_append` seats the cursor on the byte before the channel's `03`, then,
 if that byte is a marker byte (the channel is empty), steps back once more
@@ -601,10 +607,11 @@ writable in circuit is wired per `AT28C256.md`.
   reset every frame-buffer colour byte to it and effects force the row lead
   colour to it, so HALT/WAIT should turn the held text yellow. Not yet
   watched for on the sign.
-- A bare `03` packet leaves `chan_select` fed with a garbage channel (A is
+- A bare CLEAR_ALL packet leaves `chan_select` fed with a garbage channel (A is
   `store_finalize`'s leftover `B|C`) and the error return unchecked, so the
-  cursor lands near channel 99's marker. NETCC always follows `03` with
-  `09 dd 0E`, which re-seats it, so this is a trap only for hand-built packets.
+  cursor lands near channel 99's marker. NETCC always follows CLEAR_ALL with
+  CHANNEL and DELETE_TEXT, which re-seat it, so this is a trap only for
+  hand-built packets.
 - Background codes `94–9F`. `COLOUR_NAME_TABLE` shows only four distinct
   background names (B-BLK, B-RED, B-YEL, B-GRE) repeated four times across the
   16 slots, so `94–9F` may simply alias `90–93`. Untested on hardware.

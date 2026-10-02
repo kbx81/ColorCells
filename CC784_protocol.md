@@ -128,9 +128,10 @@ Control bytes used by the CC784 build (the NC900 build uses different ones):
 Channels are `00`–`99`, always written as **two ASCII digits**; the sign stores
 them as a two-byte marker `D0+tens D0+units`. Channel 100 is the read-only
 built-in demo. All channels share one 6 625-byte pool (no per-channel limit).
-**A channel header `09 d d` must be followed by `0E` (replace) or `B3`
-(append) before any text** — on its own it leaves the insertion point on the
-channel marker and the text would corrupt it.
+**A channel header (CHANNEL, `09 d d`) must be followed by DELETE_TEXT
+(`0E`, replace) or APPEND (`B3`) before any text** — on its own it leaves the
+insertion point on the channel marker and the text would corrupt it. The
+names are the firmware source's `CMD_*` constants; §8.3 lists them all.
 
 ### 4.1 Load a message into a channel
 
@@ -406,27 +407,29 @@ idle ──B1──> addr ──> flag(0x80) ──> len ──> len×payload �
 The parser walks the payload byte by byte. Anything not listed is inserted
 into the current message as text/attribute data.
 
-| Byte(s) | Action |
-|---|---|
-| `00 01 05 08 0A 0B 0C 1C 1D 7F` | Ignored |
-| `02 n` | Speed = `0xF0 \| (n & 7)` (alternative to sending `F0`–`F7` directly) |
-| `03` | Clear all messages |
-| `04 d d [d d …] ['D'\|'d']` | Display sequence; each channel is **two ASCII digits (00–99)**; optional `D`/`d` terminator |
-| `09 d d` | Select channel `dd` (00–99) and set insertion point at its start |
-| `0D` | End of packet (stop parsing) |
-| `0E` | Delete existing content of the selected channel (so `09 dd 0E` = "replace") |
-| `15 n` | Foreground colour by index, n = 0–9 → `8C 8D 8F 87 83 84 8E 80 8B 81` |
-| `16 n` | Background colour by index, n = 0–5 → `91 93 93 93 92 90` |
-| `17 h h m m a` | Set clock: 4 ASCII digits HHMM, `a` = `Y`/`y` AM, anything else PM. (Bug: a truncated `17` stops the clock.) |
-| `1E n` | Insert byte `0xA0 \| (n & 15)` (an alternate colour range, see below) |
-| `B3` | Continuation: move insertion point to the end of the selected channel (append) |
-| `B4 '0'` | Reply with the 16-byte ROM ID string |
-| `B4 '1'` | Reply with two 5-digit ASCII numbers: total and free message memory |
-| `B4 '2'` | No-op |
-| `B4 '3'` | Reply with a dump of the whole message store (see 8.4) |
+| Command | Byte(s) | Action |
+|---|---|---|
+| (ignored) | `00 01 05 08 0A 0B 0C 1C 1D 7F` | Skipped |
+| SPEED | `02 n` | Speed = `0xF0 \| (n & 7)` (alternative to sending `F0`–`F7` directly) |
+| CLEAR_ALL | `03` | Clear all messages |
+| SEQUENCE | `04 d d [d d …] ['D'\|'d']` | Display sequence; each channel is **two ASCII digits (00–99)**; optional `D`/`d` terminator |
+| CHANNEL | `09 d d` | Select channel `dd` (00–99) and set insertion point at its start |
+| END | `0D` | End of packet (stop parsing) |
+| DELETE_TEXT | `0E` | Delete existing content of the selected channel (so CHANNEL then DELETE_TEXT = "replace") |
+| FORE_IDX | `15 n` | Foreground colour by index, n = 0–9 → `8C 8D 8F 87 83 84 8E 80 8B 81` |
+| BACK_IDX | `16 n` | Background colour by index, n = 0–5 → `91 93 93 93 92 90` |
+| SET_TIME | `17 h h m m a` | Set clock: 4 ASCII digits HHMM, `a` = `Y`/`y` AM, anything else PM. (Stock bug: a truncated SET_TIME stops the clock.) |
+| COLOUR_A0 | `1E n` | Insert byte `0xA0 \| (n & 15)` (an alternate colour range, see below) |
+| APPEND | `B3` | Continuation: move insertion point to the end of the selected channel |
+| QUERY ROMID | `B4 '0'` | Reply with the 16-byte ROM ID string |
+| QUERY MEMORY | `B4 '1'` | Reply with two 5-digit ASCII numbers: total and free message memory |
+| QUERY NOP | `B4 '2'` | No-op |
+| QUERY DUMP | `B4 '3'` | Reply with a dump of the whole message store (see 8.4) |
+| OTA | `B5 c …` | Patched firmware only: `CC784_ota.md` §4 |
 
 So the NETCC-style status query (`17 32`) does nothing useful on this
-firmware — that screen was for the network models. Use `B4 '1'` / `B4 '3'`.
+firmware — that screen was for the network models. Use QUERY MEMORY and
+QUERY DUMP.
 
 ### 8.4 Reply frames
 

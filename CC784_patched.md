@@ -118,7 +118,7 @@ bytes of the bank are free.
     jump table at `0200`; the `0066` NMI goes through a RAM vector guarded by
     `NMI_MAGIC`. `ROM_ID` sits in the app, and `query_0_romid` uses the
     label rather than a raw `0048`. Boot is ~1 s slower: the CRC pass.
-11. **`B5` OTA command set** (`cmd_B5_ota`, `CC784_ota.md` §6): info, page
+11. **OTA command set** (`CMD_OTA` = `B5`, `cmd_B5_ota`, `CC784_ota.md` §4): info, page
     CRCs, begin, write 1–3 pages, finish, reset. Runs the stub's RAM library
     from `FRAMEBUF`; pages below `0200` refused. ≈ 540 bytes of ROM.
 12. **`tx_try_queue` reports busy with carry** (fixes B10).
@@ -134,7 +134,7 @@ bytes of the bank are free.
     after `pkt_feed_byte`. The OTA handler also blanks the panel before each
     reply (its RAM library sits in `FRAMEBUF`) and shows a parked UPDATING
     message from `B5 'B'` to the reboot through the factory test mode.
-15. **`B3` seats like `0E`** (fixes B11): the extra step back onto an empty
+15. **APPEND seats like DELETE_TEXT** (fixes B11): the extra step back onto an empty
     channel's marker is gone.
 16. **DONE handshake.** Immediate mode is "flag bit 7 set"; with bit 0 set as
     well (`81`) `pkt_process_done` queues a `04` byte, which leaves on the
@@ -183,7 +183,7 @@ bytes of the bank are free.
 - **Patches 10–11** — OTA pushes over the ESPHome bridge: identical image,
   one-page, ~100-page and interrupted-then-resumed updates, all booted and
   confirmed; the store survives every reboot.
-- **B11/B12** — `B3 "XYZW"` into an empty channel stores all four bytes;
+- **B11/B12** — APPEND `"XYZW"` into an empty channel stores all four bytes;
   the update display stays put while pages carrying `20` arrive.
 - **FLASH clock** — `FLASH_HALF_PERIOD` 7 instead of 13 blinks visibly
   faster (~5 Hz against ~2.4 Hz): latch bit 7 is the blink clock.
