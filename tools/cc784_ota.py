@@ -10,6 +10,9 @@ cc784_ota.py - build and deliver OTA firmware images for the CC784 (CC784_ota.md
     cc784_ota.py diff OLD.bin NEW.bin
         The 64-byte pages that differ, and the transfer time at 300 baud.
 
+    cc784_ota.py info (-p PORT | -H HOST -k KEY) [-a ADDR]
+        Which bank the sign is running and what both trailers say.
+
     cc784_ota.py push BANK.bin (-p PORT | -H HOST -k KEY) [-a ADDR] [-s SEQ] [-n]
         Update the sign: read both trailers, CRC every page of the idle bank,
         send only the pages that differ, write the trailer, reboot, confirm.
@@ -112,11 +115,18 @@ class Ota:
             raise RuntimeError('%s failed: status %d' % (what, r[0] if r else -1))
 
 
+def describe(running, t0, t1):
+    for b, t in ((0, t0), (1, t1)):
+        tag = 'running' if b == running else 'idle   '
+        print('bank %d (%s): %s' % (b, tag, 'seq %d, state %d, image crc %04X' % (t['seq'], t['state'], t['crc']) if t else 'no valid trailer'))
+
+
 def push(sign, bank, seq=None, dry_run=False):
+    sign.quiet = True
     ota = Ota(sign)
     running, t0, t1 = ota.info()
     idle = running ^ 1
-    print('running bank %d: %s\nidle bank %d:    %s' % (running, t0 if running == 0 else t1, idle, t1 if running == 0 else t0))
+    describe(running, t0, t1)
     if seq is None:
         seq = (max(t['seq'] for t in (t0, t1) if t) + 1) & 0xFF if (t0 or t1) else 1
     print('new sequence number %d; reading the idle bank\'s page CRCs' % seq)
@@ -143,7 +153,8 @@ def push(sign, bank, seq=None, dry_run=False):
     running, t0, t1 = ota.info()
     t = t1 if running == 1 else t0
     ok = running == idle and t and t['seq'] == seq
-    print('%s: running bank %d, %s' % ('OK' if ok else 'NOT RUNNING THE NEW IMAGE', running, t))
+    print('OK' if ok else 'NOT RUNNING THE NEW IMAGE')
+    describe(running, t0, t1)
     return ok
 
 
@@ -175,25 +186,33 @@ def main():
     u = sub.add_parser('push')
     u.add_argument('bank'); u.add_argument('-s', '--seq', type=int)
     u.add_argument('-n', '--dry-run', action='store_true')
-    u.add_argument('-p', '--port'); u.add_argument('-H', '--host')
-    u.add_argument('-k', '--key', default=os.environ.get('ESPHOME_KEY'))
-    u.add_argument('-a', '--addr', type=int, default=1); u.add_argument('-v', '--verbose', action='store_true')
+    i = sub.add_parser('info')
+    for x in (u, i):
+        x.add_argument('-p', '--port'); x.add_argument('-H', '--host')
+        x.add_argument('-k', '--key', default=os.environ.get('ESPHOME_KEY'))
+        x.add_argument('-a', '--addr', type=int, default=1); x.add_argument('-v', '--verbose', action='store_true')
     a = ap.parse_args()
 
-    if a.cmd == 'push':
+    if a.cmd in ('push', 'info'):
         import cc784
-        bank = pathlib.Path(a.bank).read_bytes()[:BANK]
-        if not parse_trailer(bank):
-            sys.exit('%s has no valid trailer: run pack first' % a.bank)
+        if a.cmd == 'push':
+            bank = pathlib.Path(a.bank).read_bytes()[:BANK]
+            if not parse_trailer(bank):
+                sys.exit('%s has no valid trailer: run pack first' % a.bank)
         if a.host:
             import cc784_esphome
             link = cc784_esphome.ESPHomeLink(a.host, a.key, verbose=a.verbose)
         elif a.port:
             link = cc784.SerialLink(a.port)
         else:
-            ap.error('push needs -p PORT or -H HOST')
+            ap.error('%s needs -p PORT or -H HOST' % a.cmd)
         try:
-            sys.exit(0 if push(cc784.Sign(link, a.addr, verbose=a.verbose), bank, a.seq, a.dry_run) else 1)
+            sign = cc784.Sign(link, a.addr, verbose=a.verbose)
+            if a.cmd == 'info':
+                sign.quiet = True
+                describe(*Ota(sign).info())
+                sys.exit(0)
+            sys.exit(0 if push(sign, bank, a.seq, a.dry_run) else 1)
         finally:
             link.close()
 

@@ -139,6 +139,7 @@ class Sign:
         self.link = link
         self.addr, self.gap, self.timeout, self.verbose = addr, gap, timeout, verbose
         self.post_ack = 1.0          # pause after each frame: the sign is deaf while it processes
+        self.quiet = False           # suppress the per-frame ACK line (bulk senders)
 
     def send_frame(self, payload: bytes, expect_ack=None, retries=3, flag=0x80):
         f = frame(self.addr, payload, flag)
@@ -160,7 +161,7 @@ class Sign:
             # retry mid-frame is what desyncs the parser
             r = self.read_bytes(1, self.timeout + len(f) * 10 / 300.0)
             if r == bytes([ACK]):
-                print("  ACK")
+                if not self.quiet: print("  ACK")
                 # the ACK goes out BEFORE the packet is processed, and processing
                 # runs with interrupts off: ~0.25 s on an empty store, ~0.75 s
                 # when it is nearly full (init_sequence rescans the store for
