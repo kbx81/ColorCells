@@ -45,19 +45,29 @@ only its base moves). The patched build uses a different geometry
 I/O ports: `IN C0` (input mux), `OUT 40` (column shift clock), `OUT 48–4F`
 (column data, row in A0–A2), `OUT 80` (strobe). See hardware notes.
 
-Data blocks in ROM: `INIT_DATA 0601`, `RX_TIMING 164A`, `TX_TIMING 1654`,
-`DEC_TABLE 18E8`, `IR_KEY_TABLE 2427`, `FG_IDX_TABLE 2718`, `BG_IDX_TABLE 2722`,
-`IGNORE_TABLE 2D57`, `ATTR_LABEL_TABLE 2D62` (editor label tables and their
-strings run to `2FF2`; previously mislabelled `GLYPH_PTR_TABLE` — it holds no
-glyph pointers and was never referenced), `MENU_STRINGS 2FF3`, `FONT 3135`
-(8 bytes/glyph: 7 columns + width, **glyphs 0–190 only**), `CHAR_FLAGS 372D`,
-`CHARSET_* 382D–396E`, `DEMO_MESSAGE 396F`, `TEST_MESSAGE 3C09`.
+Data blocks in ROM:
 
-`CHAR_FLAGS` (`372D`, 256 bytes indexed by character code) was rendered as 32
-further `FONT` glyphs by the original disassembly, but it is a flags table: bit
-0 is tested by `store_fix_bad_bytes`, bit 1 by the message scanners to decide whether a
-byte is printable text. `TEST_MESSAGE` is a built-in test pattern ("CURRENT
-TEST" plus seven `17` bytes) sitting inside the demo text with its own `03`.
+| Address | Block | What it is |
+|---|---|---|
+| `0601` | `INIT_DATA` | RAM images copied out by `init_vars` (below) |
+| `164A` | `RX_TIMING` | serial RX bit-sampling intervals (§3) |
+| `1654` | `TX_TIMING` | serial TX bit intervals (§3) |
+| `18E8` | `DEC_TABLE` | decimal conversion |
+| `2427` | `IR_KEY_TABLE` | IR code → key number (§8) |
+| `2718` | `FG_IDX_TABLE` | `15 n` foreground colour bytes (§5) |
+| `2722` | `BG_IDX_TABLE` | `16 n` background colour bytes (§5) |
+| `2D57` | `IGNORE_TABLE` | packet bytes skipped by `pkt_process` (§5) |
+| `2D62–2FF2` | `ATTR_LABEL_TABLE` and its strings | the editor's name for each attribute byte (§7) |
+| `2FF3` | `MENU_STRINGS` | menu prompts and colour names |
+| `3135` | `FONT` | 8 bytes per glyph: 7 columns + width; glyphs 0–190 only |
+| `372D` | `CHAR_FLAGS` | 256 flag bytes indexed by character code (below) |
+| `382D–396E` | `CHARSET_*` | the five key layers (§9) |
+| `396F` | `DEMO_MESSAGE` | channel 100 |
+| `3C09` | `TEST_MESSAGE` | the factory test pattern, inside the demo text with its own `03` |
+
+`CHAR_FLAGS` bit 0 is tested by `store_fix_bad_bytes`, bit 1 by the message
+scanners to decide whether a byte is printable text. `TEST_MESSAGE` is
+"CURRENT TEST" plus seven `17` bytes.
 
 `INIT_DATA` is four RAM images copied out by `init_vars` — to `FB_COLPTR`
 (10 bytes), `STAGE_PTR` (8), `CLK_RUN` (90) and `4336` (36) — so every byte
@@ -255,13 +265,6 @@ inferred, which settles several earlier guesses:
 | `10` | BIG | `1B` | DOWN | `BD` | **MAGIC OFF** |
 | `11` | NORM | `1D` | **SHIFT** | `BE` | TINY |
 | `12` | BOLD | `1E` | **GRAPH** | | |
-
-Bold entries correct or replace earlier guesses. Previously `06` was read as
-"pause" and `19` as "jump" — they are in fact HALT and PAUSE; `0F`/`18` are
-RIGHT/LEFT rather than "wipe back"/"crawl"; `BB` was "extra effect (unnamed)"
-and is HOLD; `BD` was "restart" and is MAGIC OFF. `B9` (THIN), `1D` (SHIFT)
-and `1E` (GRAPH) were not previously listed. `10`–`16`, `1A`, `1B`, `1F`, `B0`,
-`BA`, `BC` and `BE` are confirmed as they stood.
 
 Related tables in the same block: `COLOUR_NAME_TABLE` (`2E62`) gives the 16
 foreground names then the four background names repeated four times;

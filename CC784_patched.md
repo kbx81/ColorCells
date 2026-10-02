@@ -37,15 +37,12 @@ bytes of the bank are free.
    stack carved off the top of the message store — originally 256 bytes,
    now 128 (`STACK_SIZE`, see patch 7 and the stack measurements in
    `CC784_firmware.md` §2).
-   There are **seven** `LD SP,403F` sites, not three: reset `0000`,
-   `fx_end_of_channel` `0F5E`, `menu_enter` `19CA`, `key_handler` `1A0D`,
-   `1CEE`, `pkt_process` `2A70`, `pkt_process_done` `2B68`. Worst-case demand
-   is ~120 bytes (query chain ~40 + `tick6_service`/`rx_consume` ~40 + INT and
-   NMI frames), so 256 is comfortable. `store_init`'s four store constants all
-   shift down by `0x100` together (`STORE_TOP` `5DEF`, warn `5D8B`,
-   `STORE_SIZE` `1A0E`, free-text bound `18E1`); `store_init` now writes the
-   `0xDA` store terminator through `STORE_LIMIT` before zeroing the
-   `5EF0–5FFF` page, because the terminator no longer sits one byte below it.
+   All seven `LD SP` sites use the symbol (reset, `fx_end_of_channel`,
+   `menu_enter`, `key_handler`, the editor, `pkt_process`,
+   `pkt_process_done`). The store's ceiling and the constants `store_init`
+   derives from it move down together, and `store_init` writes the `0xDA`
+   store terminator through `STORE_LIMIT` before zeroing the packet page,
+   because the terminator no longer sits one byte below it.
 2. **Restore the clock** (fixes B2). `pkt_process_done` sets `CLK_RUN=FF`
    inline, just before its `CALL shift_chain_clear`. This covers every early
    exit, not just `cmd_17`'s.
@@ -230,7 +227,6 @@ trailers and must not be burned: `cc784nir_chip.bin` is what the T48 burns
 (task `AT28C256-15PU -- program`) and `cc784nir_bank.bin` what
 `cc784_ota.py push` sends.
 
-Before any push, run the emulator regression (`CC784_ota.md` §6): `stack
-patched`, `compare` against the previous tree, `eeprom`, `ota`, `update`,
-`push`, `ram`, and `fuzz` for changes to the stub or the writer. The emulator
-itself is described in `CC784_firmware.md` §11.
+Before any push, run the emulator regression set in `CC784_ota.md` §6, plus
+`fuzz` for changes to the stub or the page writer. The emulator itself is
+described in `CC784_firmware.md` §11.
