@@ -202,7 +202,8 @@ bytes of the bank are free.
   one-page, ~100-page and interrupted-then-resumed updates, all booted and
   confirmed; the store survives every reboot.
 - **Patch 18** — a `--trial` push boots the new bank as TRIED and leaves it
-  unconfirmed; `confirm` makes it GOOD; `rollback` reboots into the other
+  unconfirmed; a power cycle then comes back on the GOOD bank with the trial
+  skipped; `confirm` makes a trial GOOD; `rollback` reboots into the other
   bank with nothing transferred.
 - **B11/B12** — APPEND `"XYZW"` into an empty channel stores all four bytes;
   the update display stays put while pages carrying `20` arrive.
