@@ -50,7 +50,7 @@ Every transmission to the sign is one frame:
 |---|---|
 | `0xB1` | Start of frame (constant) |
 | `addr` | Sign address as a **binary byte** (whatever is set on the sign's address switch/menu). `0x2A` (`*`) is used as the broadcast "all signs" address; the program does not wait for an ACK when using it. |
-| `0x80` | Constant. Firmware stores it and, if it is exactly `0x80`, processes the packet immediately instead of deferring to the main loop. No other effect (see §8). |
+| `0x80` | Flag. Stock firmware processes the packet immediately if it is exactly `0x80`, else defers it to the main loop (see §8). The patched firmware treats bit 7 as "immediate" and bit 0 as "send DONE": with `0x81` the sign sends a `0x04` byte once the packet has been processed, i.e. the moment it can receive again. |
 | `len` | Number of payload bytes that follow (does **not** include the checksum) |
 | payload | 1–254 bytes, see §4 |
 | `cksum` | **8-bit additive checksum: sum of all payload bytes, modulo 256.** The 4 header bytes are excluded. No inversion, no two's-complement. |
@@ -392,7 +392,10 @@ idle ──B1──> addr ──> flag(0x80) ──> len ──> len×payload �
 * After the ACK is fully shifted out, the packet is processed **with
   interrupts disabled**, so any bytes arriving during processing are lost.
   Wait for the ACK, then a little longer, before the next frame. For broadcast
-  frames (no ACK) pad ~0.5 s between frames.
+  frames (no ACK) pad ~0.5 s between frames. The patched firmware replaces
+  the guess: send flag `0x81` and wait for the `0x04` DONE byte, which follows
+  the ACK (and any query reply) once processing has finished. Broadcast
+  frames get no DONE either.
 * **Default address is 0.** If the RAM has lost its contents (very likely after
   20 years) the sign only answers to `addr = 0x00` or `0x2A` until you set an
   address from its own menu. NETCC's "address 1" will be ignored. Use `0x2A`

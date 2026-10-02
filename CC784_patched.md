@@ -136,6 +136,13 @@ bytes of the bank are free.
     message from `B5 'B'` to the reboot through the factory test mode.
 15. **`B3` seats like `0E`** (fixes B11): the extra step back onto an empty
     channel's marker is gone.
+16. **DONE handshake.** Immediate mode is "flag bit 7 set"; with bit 0 set as
+    well (`81`) `pkt_process_done` queues a `04` byte, which leaves on the
+    `EI` that makes the sign receptive again, so the sender waits for it
+    instead of guessing at the deaf window of B4. Addressed frames only;
+    NETCC's `80` is unchanged. `B5 'I'` gains a features byte (bit 0) so the
+    host can tell. `cc784.py --done` and `cc784_ota.py` use it; chunked
+    messages and OTA pages then follow each other at wire speed.
 
 ## 3. Rejected
 
@@ -157,36 +164,7 @@ bytes of the bank are free.
   it has to cover by one to three orders of magnitude — but see the
   completion byte below, which replaces the padding with a real handshake.
 
-## 4. Proposed: a completion byte
-
-Keep the ACK where it is and add a second reply, DONE, when processing has
-finished: ACK = "received, processing", DONE = "you may send again". This is
-the handshake B4 has always needed — the deaf window varies from 0.25 s to
-0.75 s with the store and sequence, and today `cc784.py` guesses at it with a
-fixed 1 s pause.
-
-- **Where:** `pkt_process_done`, the single exit of every processed packet.
-  TX is idle there (the ACK finished before `DI`; query replies finish inside
-  their handlers), so a non-blocking `tx_try_queue` of the byte is enough —
-  about ten bytes of ROM. The byte leaves on `restart_display`'s `EI`, i.e.
-  the instant the sign is receptive again, and reaches the sender ~40 ms
-  later regardless of how long the window was.
-- **Opt-in, so NETCC is untouched:** the parser tests `PKT_FLAG == 80` for
-  immediate mode; make it "bit 7 set" and let bit 0 request DONE. NETCC's
-  `80` behaves exactly as today; `81` gets ACK, processing, DONE. NETCC's
-  reader would otherwise find a stray byte after each ACK.
-- **Rules:** DONE follows only an ACK that led to processing, i.e. addressed
-  frames with `len > 0` (zero-length frames are ACKed and finished; broadcast
-  frames get neither, so a multi-sign bus never has two talkers). NAK, or a
-  parser error that resets, means no DONE — the sender times out and retries
-  as now. A deferred frame (`01`) still gets its DONE when `main_loop` gets
-  round to it, which makes the B9 wait visible instead of silent.
-- **Value:** anything the sign never sends today — not `06`, `15` or `B1`.
-  `04` (EOT) reads naturally.
-- **Sender side:** `cc784.py` waits for DONE instead of sleeping; chunked
-  messages then pipeline at wire speed with no guessed gaps.
-
-## 5. Verified on the sign
+## 4. Verified on the sign
 
 - **B1** — ten immediate-mode `B4 '0'` queries in a row, all byte-identical,
   and a following `B4 '1'` unchanged. Stock garbles the replies and corrupts
@@ -210,7 +188,7 @@ fixed 1 s pause.
 - **FLASH clock** — `FLASH_HALF_PERIOD` 7 instead of 13 blinks visibly
   faster (~5 Hz against ~2.4 Hz): latch bit 7 is the blink clock.
 
-## 6. Rebuilding and testing
+## 5. Rebuilding and testing
 
 ```
 cd src/patched && sjasmplus cc784nir.asm   # -> cc784nir_patched.bin

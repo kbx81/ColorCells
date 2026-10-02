@@ -644,6 +644,16 @@ def cmd_update():
     for f in s.faults[:5]:
         print('    ', f)
 
+    # the DONE handshake: ACK, processing, 04; a frame sent at once must land
+    s.tx_edges.clear(); s.send_frame(b'\x09\x30\x31\x0eHELLO', addr=1, flag=0x81); s.rx_wait()
+    for _ in range(80):
+        s.run_ms(25)
+        if s.tx_bytes()[:2] == b'\x06\x04': break
+    s.send_frame(b'\x09\x30\x32\x0eWORLD', addr=1, flag=0x81); s.rx_wait(); s.run_ms(1500)
+    store = s.ram('MSG_STORE', 600)
+    check('DONE after a flag-81 frame, next frame lands at once (tx %s)' % s.tx_bytes().hex(),
+          s.tx_bytes() == b'\x06\x04\x06\x04' and store[store.index(b'\xd0\xd2') + 2:][:5] == b'WORLD')
+    check('I reports the DONE feature', len(info) > 21 and info[21] & 1)
     s.tx_edges.clear(); s.frames.clear()
     s.send_frame(b'\xb5R', addr=1, flag=0x80); s.rx_wait(); s.run_ms(4000)
     check('R: rebooted into bank 1', s.ram('ROM_BANK')[0] == 1)

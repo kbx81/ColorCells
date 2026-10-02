@@ -182,6 +182,7 @@ PKT_ADDR             equ RAM_TOP-0x09
 PKT_PTR              equ RAM_TOP-0x08
 PKT_REMAIN           equ RAM_TOP-0x06
 CTRL_LATCH           equ 0x8000
+DONE_BYTE            equ 0x04        ; P16: sent after processing when the frame's flag was 81
 ; ---- OTA (CC784_ota.md): the boot stub's RAM, above the packet parser state,
 ;      and the added '273 bank register. store_init leaves these bytes alone.
 NMI_VEC              equ RAM_TOP-4   ; NMI_VECTOR jumps here once NMI_MAGIC holds 0xA5
@@ -4132,8 +4133,8 @@ pkt_check_ok:
         XOR A
         LD (PKT_STATE),A
         LD A,(PKT_FLAG)
-        CP 0x80
-        JP z,pkt_process
+        BIT 7,A                 ; P16: 80 or 81 is immediate (stock: exactly 80)
+        JP nz,pkt_process
         RET
 
 pkt_discard:
@@ -7008,6 +7009,19 @@ pkt_process_done:
         ; never restarts. Restoring it on the way out covers every early exit.
         LD A,0xff
         LD (CLK_RUN),A
+        ; P16: flag bit 0 asks for a DONE byte once the packet has been
+        ; processed. TX is idle here, and the byte leaves on restart_display's
+        ; EI, the moment the sign can hear again. Never for broadcast frames.
+        LD A,(PKT_FLAG)
+        BIT 0,A
+        JR z,pkt_done_no_ack
+        LD A,(PKT_ADDR)
+        CP 0x2a
+        JR z,pkt_done_no_ack
+        LD A,DONE_BYTE
+        CALL tx_try_queue
+
+pkt_done_no_ack:
         CALL shift_chain_clear
         JP restart_display
 
@@ -7097,13 +7111,14 @@ query_wait_tx:
 ;      interrupts come back only for the reply. Replies are tx_send_frame
 ;      frames: one status byte (0 ok, 1 verify failed, 2 chip timeout, 3 page
 ;      out of range, 4 CRC mismatch, 5 bad arguments) or the data asked for.
-;        B5 'I'                 -> bank, then 10 trailer bytes per bank
+;        B5 'I'                 -> bank, 10 trailer bytes per bank, features byte
 ;        B5 'C' page n          -> n CRC-16s of idle-bank pages (n <= 42)
 ;        B5 'B'                 -> erase the idle bank's trailer page
 ;        B5 'W' page crc data   -> write 1-3 pages of data (crc covers data)
 ;        B5 'F' seq crc         -> CRC the idle bank; if it matches, write its trailer
 ;        B5 'R'                 -> reset (no reply)
 OTA_IDLE             equ TXBUF+0x55     ; the idle bank; replies never reach this byte
+OTA_FEATURES         equ 0x01           ; 'I' reply byte 21: bit 0 = DONE handshake (P16)
 OTA_PAGE_BUF         equ PKT_BUF+0x80   ; 64-byte scratch; the commands using it have short payloads
 cmd_B5_ota:
         LD HL,stub_lib
@@ -7161,7 +7176,7 @@ ota_wait_tx:
 ;      (magic, seq, state, image crc, trailer crc); the host judges them
 ota_info:
         LD HL,TXBUF
-        LD (HL),21
+        LD (HL),22
         INC HL
         LD A,(ROM_BANK)
         LD (HL),A
@@ -7171,6 +7186,8 @@ ota_info:
         CALL ota_trailer_copy
         LD A,1
         CALL ota_trailer_copy
+        LD A,OTA_FEATURES
+        LD (DE),A
         JP ota_reply
 
 ; ---- ota_trailer_copy: A = bank, DE = destination for 10 bytes; DE advances

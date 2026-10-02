@@ -495,7 +495,7 @@ empty store, rising to **~0.75 s** with the store nearly full. A frame started
 inside the window loses its header and is never seen — no NAK. On the sign
 this showed as every first attempt of a chunked message vanishing while its
 retry 12 s later succeeded.
-*By design; the host pauses after each reply. A completion byte is proposed (`CC784_patched.md`).*
+*By design; the host pauses after each reply, or waits for the DONE byte of patch 16.*
 
 ### B5 — default address after RAM loss is 0 **[H]**
 NETCC's default is address 1; a sign with dead/absent battery answers only to

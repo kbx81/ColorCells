@@ -73,16 +73,17 @@ processed. No message-store space is used.
 
 ## 4. The `B5` command
 
-Sent inside the normal packet frame (`B1 addr 80 len payload cksum`),
+Sent inside the normal packet frame (`B1 addr 81 len payload cksum`),
 addressed, immediate mode; `B5` must be the first payload byte and the
 command ends the packet. Replies are reply frames (`B1 addr len data cksum`)
-and go out after the work, so the reply is the completion signal. The sign is
-still deaf for a moment afterwards while the display restarts (bug B4); the
-host waits 1 s after each reply.
+and go out after the work. With flag `81` a `04` DONE byte follows the reply
+once the sign can receive again (the display restarts with interrupts off
+after every packet); the host waits for it, with a 1 s pause as the fallback
+for firmware that doesn't send one.
 
 | Payload | Reply |
 |---|---|
-| `B5 'I'` | `ROM_BANK`, then the first 10 trailer bytes of bank 0 and of bank 1 |
+| `B5 'I'` | `ROM_BANK`, the first 10 trailer bytes of bank 0 and of bank 1, then a features byte (bit 0: DONE supported) |
 | `B5 'C' page n` | `n` CRC-16s of idle-bank pages starting at `page`, n ≤ 42 |
 | `B5 'B'` | status; erases the idle bank's trailer and parks the display on "> FW UPDATE <" until the reboot |
 | `B5 'W' page crc16 data` | status; writes 1–3 consecutive pages, `crc16` over the data, pages < 8 refused |
@@ -123,9 +124,10 @@ uv run tools/cc784_ota.py push src/patched/cc784nir_bank.bin -H <bridge> -k <key
 uv run tools/cc784_ota.py push src/patched/cc784nir_bank.bin -p <port>              # serial
 ```
 
-`push` reads both trailers (`I`), CRCs every page of the idle bank (`C`,
-about 30 s), sends only the pages that differ (`B`, then `W` in runs of up to
-three pages, ~7 s per run), verifies the whole image on the sign and writes
+`push` reads both trailers (`I`, which also switches on the DONE handshake
+when the firmware offers it), CRCs every page of the idle bank (`C`, about
+25 s), sends only the pages that differ (`B`, then `W` in runs of up to three
+pages, ~7 s per run), verifies the whole image on the sign and writes
 the trailer with the next sequence number (`F`), reboots (`R`), waits 6 s and
 confirms the new bank is running (`I`). `-n` stops after the comparison and
 reports the page count; `-s` forces a sequence number. If it fails after `B`
@@ -194,8 +196,9 @@ The `OTA: emulator regression` task runs the five fast ones.
   (B10), and a `20` byte inside a packet counted as the SPACE key and
   released a WAIT (B12).
 - **A reply is not "ready for the next frame".** The sign restarts its
-  display after every packet with interrupts off (B4); send the next frame
-  no sooner than 1 s after a reply.
+  display after every packet with interrupts off (B4). Use flag `81` and wait
+  for the `04` DONE byte; without it, send the next frame no sooner than 1 s
+  after a reply.
 - **The sign's RX is DB9 pin 8**, not pin 2; the factory cable crosses
   3→2, 8→3 and ties 2 to 5.
 - **Both banks identical hides bank-register faults.** A register that is
