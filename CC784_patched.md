@@ -207,6 +207,7 @@ bytes of the bank are free.
 - **Patches 10–11** — OTA pushes over the ESPHome bridge: identical image,
   one-page, ~100-page and interrupted-then-resumed updates, all booted and
   confirmed; the store survives every reboot.
+- **Patch 19** — a RAINBOW message starts on a different colour each cycle.
 - **Patch 18** — a `--trial` push boots the new bank as TRIED and leaves it
   unconfirmed; a power cycle then comes back on the GOOD bank with the trial
   skipped; `confirm` makes a trial GOOD; `rollback` reboots into the other
