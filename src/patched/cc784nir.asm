@@ -5493,10 +5493,6 @@ editor_reshow:
         JP nc,editor_loop
         JP show_top_of_msg
 
-; ---- data 207b-2086:
-STR_TOP_OF_MSG:
-        db "TOP OF MSG ",0x00
-
 ; ---- show_top_of_msg: 05 and after most edits: "TOP OF MSG nn"
 show_top_of_msg:
         CALL init_render
@@ -7878,6 +7874,8 @@ SPEED_STR_TABLE:
         dw STR_SPEED_5                            ; 05  .S5.
         dw STR_SPEED_6                            ; 06  .S6.
         dw STR_SPEED_7                            ; 07  .S7.
+STR_TOP_OF_MSG:                 ; show_top_of_msg adds the channel digits
+        db "TOP OF MSG ",0x00
 MENU_STRINGS:
         db " ADDRESS? ",0x00
 MENU_STR_MSG_FULL:
