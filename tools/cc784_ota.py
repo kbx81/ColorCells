@@ -13,13 +13,19 @@ cc784_ota.py - build and deliver OTA firmware images for the CC784 (CC784_ota.md
     cc784_ota.py info (-p PORT | -H HOST -k KEY) [-a ADDR]
         Which bank the sign is running and what both trailers say.
 
-    cc784_ota.py push BANK.bin (-p PORT | -H HOST -k KEY) [-a ADDR] [-s SEQ] [-n]
+    cc784_ota.py push BANK.bin (-p PORT | -H HOST -k KEY) [-a ADDR] [-s SEQ] [-n] [--trial]
         Update the sign: read both trailers, CRC every page of the idle bank,
-        send only the pages that differ, write the trailer, reboot, confirm.
-        -n stops after the page comparison. The stub pages must already match.
+        send only the pages that differ, write the trailer, reboot, and confirm
+        the new image once it answers. --trial leaves it unconfirmed (a power
+        cycle reverts it) until `confirm`. -n stops after the page comparison.
+        The stub pages must already match.
 
-Trailer at 3FC0: +0 "OTA1", +4 seq, +5 state, +6 CRC-16 of 0200..3FBF, +8 CRC-16
+    cc784_ota.py confirm / rollback (-p PORT | -H HOST -k KEY)
+        Mark the running image GOOD, or reboot into the other bank.
+
+Trailer at 3FC0: +0 "OTA1", +4 seq, +5 state, +6 CRC-16 of 0240..3FBF, +8 CRC-16
 of bytes +0..+7, little-endian words. CRC-16/XMODEM: poly 1021, init 0.
+State: 1 TRIAL (written by F), 2 TRIED (the stub booted it once), 3 GOOD.
 """
 import argparse, os, pathlib, sys, time
 
@@ -27,7 +33,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 BANK = 0x4000
 PAGE = 64
-STUB_END = 0x0200          # STUB_END in cc784nir.asm; pages below it are never sent
+STUB_END = 0x0240          # STUB_END in cc784nir.asm; pages below it are never sent
 TRAILER = 0x3FC0
 MAGIC = b'OTA1'
 STATE_TRIAL, STATE_TRIED, STATE_GOOD = 1, 2, 3
@@ -66,7 +72,8 @@ def parse_trailer(bank):
     return t
 
 
-FEATURE_DONE = 0x01
+FEATURE_DONE, FEATURE_MAINS, FEATURE_TRIAL = 0x01, 0x02, 0x04
+STATE_NAMES = {STATE_TRIAL: 'TRIAL', STATE_TRIED: 'TRIED', STATE_GOOD: 'GOOD'}
 
 
 def parse_info(reply):
@@ -113,8 +120,13 @@ class Ota:
     def info(self):
         """also switches the link to the DONE handshake when the firmware offers it"""
         raw = self.cmd(b'\xb5I')
-        self.sign.done = bool(features(raw) & FEATURE_DONE)
+        self.features = features(raw)
+        self.sign.done = bool(self.features & FEATURE_DONE)
         return parse_info(raw)
+
+    def set_state(self, state, seq):
+        """K: rewrite the running bank's trailer with this state and sequence number"""
+        self.status(b'\xb5K' + bytes([state, seq & 0xFF]), 'set state')
 
     def page_crcs(self):
         out = []
@@ -135,10 +147,41 @@ class Ota:
 def describe(running, t0, t1):
     for b, t in ((0, t0), (1, t1)):
         tag = 'running' if b == running else 'idle   '
-        print('bank %d (%s): %s' % (b, tag, 'seq %d, state %d, image crc %04X' % (t['seq'], t['state'], t['crc']) if t else 'no valid trailer'))
+        print('bank %d (%s): %s' % (b, tag, 'seq %d, %s, image crc %04X' % (t['seq'], STATE_NAMES.get(t['state'], t['state']), t['crc']) if t else 'no valid trailer'))
 
 
-def push(sign, bank, seq=None, dry_run=False):
+def confirm(ota):
+    """mark the running bank GOOD (after a trial boot it is TRIED)"""
+    running, t0, t1 = ota.info()
+    t = t1 if running else t0
+    if not t:
+        raise RuntimeError('the running bank has no valid trailer')
+    if t['state'] == STATE_GOOD:
+        print('already GOOD'); return True
+    ota.set_state(STATE_GOOD, t['seq'])
+    running, t0, t1 = ota.info()
+    t = t1 if running else t0
+    ok = t and t['state'] == STATE_GOOD
+    print('confirmed' if ok else 'CONFIRM FAILED'); describe(running, t0, t1)
+    return ok
+
+
+def rollback(ota):
+    """boot the other bank next: give the running bank a lower sequence number, reboot"""
+    running, t0, t1 = ota.info()
+    mine, other = (t1, t0) if running else (t0, t1)
+    if not other or other['state'] != STATE_GOOD:
+        raise RuntimeError('the other bank is not a GOOD image to roll back to')
+    ota.set_state(STATE_GOOD, other['seq'] - 1)
+    ota.cmd(b'\xb5R', reply=False)
+    time.sleep(8)
+    running2, t0, t1 = ota.info()
+    ok = running2 != running
+    print('rolled back' if ok else 'STILL ON THE SAME BANK'); describe(running2, t0, t1)
+    return ok
+
+
+def push(sign, bank, seq=None, dry_run=False, trial=False):
     sign.quiet = True
     ota = Ota(sign)
     running, t0, t1 = ota.info()
@@ -170,7 +213,17 @@ def push(sign, bank, seq=None, dry_run=False):
     running, t0, t1 = ota.info()
     t = t1 if running == 1 else t0
     ok = running == idle and t and t['seq'] == seq
-    print('OK' if ok else 'NOT RUNNING THE NEW IMAGE')
+    if not ok:
+        print('NOT RUNNING THE NEW IMAGE'); describe(running, t0, t1); return False
+    if ota.features & FEATURE_TRIAL and t['state'] != STATE_GOOD:
+        if trial:
+            print('running the new image as a TRIAL: confirm it with `confirm`, or power-cycle to revert')
+        else:
+            ota.set_state(STATE_GOOD, seq)
+            running, t0, t1 = ota.info()
+            t = t1 if running == 1 else t0
+            ok = t and t['state'] == STATE_GOOD
+    print('OK' if ok else 'CONFIRM FAILED')
     describe(running, t0, t1)
     return ok
 
@@ -203,14 +256,16 @@ def main():
     u = sub.add_parser('push')
     u.add_argument('bank'); u.add_argument('-s', '--seq', type=int)
     u.add_argument('-n', '--dry-run', action='store_true')
+    u.add_argument('--trial', action='store_true', help='leave the new image unconfirmed: a power cycle reverts it until `confirm`')
     i = sub.add_parser('info')
-    for x in (u, i):
+    c = sub.add_parser('confirm'); r = sub.add_parser('rollback')
+    for x in (u, i, c, r):
         x.add_argument('-p', '--port'); x.add_argument('-H', '--host')
         x.add_argument('-k', '--key', default=os.environ.get('ESPHOME_KEY'))
         x.add_argument('-a', '--addr', type=int, default=1); x.add_argument('-v', '--verbose', action='store_true')
     a = ap.parse_args()
 
-    if a.cmd in ('push', 'info'):
+    if a.cmd in ('push', 'info', 'confirm', 'rollback'):
         import cc784
         if a.cmd == 'push':
             bank = pathlib.Path(a.bank).read_bytes()[:BANK]
@@ -225,11 +280,14 @@ def main():
             ap.error('%s needs -p PORT or -H HOST' % a.cmd)
         try:
             sign = cc784.Sign(link, a.addr, verbose=a.verbose)
+            sign.quiet = True
             if a.cmd == 'info':
-                sign.quiet = True
-                describe(*Ota(sign).info())
-                sys.exit(0)
-            sys.exit(0 if push(sign, bank, a.seq, a.dry_run) else 1)
+                describe(*Ota(sign).info()); sys.exit(0)
+            if a.cmd == 'confirm':
+                sys.exit(0 if confirm(Ota(sign)) else 1)
+            if a.cmd == 'rollback':
+                sys.exit(0 if rollback(Ota(sign)) else 1)
+            sys.exit(0 if push(sign, bank, a.seq, a.dry_run, a.trial) else 1)
         finally:
             link.close()
 
