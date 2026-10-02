@@ -46,9 +46,14 @@ uses a different geometry** (patch 7):
 |---|---|
 | `4000–40BF` | `FRAMEBUF` — 192-byte column ring (was 344 from `4040`) |
 | `40C0–42C1` | pointers, `TXBUF`, variables — same order, 72 dead bytes removed (patch 8) |
-| `42C2–5E6F` | `MSG_STORE`, **7086 bytes** (stock 6926; patch 7 alone gave 7014) |
-| `5E70–5EEF` | **stack**, 128 bytes (`STACK_SIZE`) |
-| `5EF0–5FFF` | packet flag, buffer and parser state, unchanged |
+| `42C2–7E6F` | `MSG_STORE`, **15278 bytes** with a 62256; `42C2–5E6F`, **7086**, with the stock 6264 (`store_init` tests for the mirror at boot, patch 13) |
+| `7E70–7EEF` | **stack**, 128 bytes (`STACK_SIZE`); `5E70` on the 6264, which mirrors `6000–7FFF` onto `4000–5FFF` |
+| `7EF0–7FFB` | packet flag, buffer and parser state (`5EF0` before patch 13) |
+| `7FFC–7FFF` | boot stub: `NMI_VEC`, `NMI_MAGIC`, `ROM_BANK` (patch 10); `store_init` stops short of them |
+| `C000` | `BANK_REG`, the added '273 (write-only; bit 0 = EEPROM A14) |
+
+ROM, patched build (`CC784_ota.md` §3): `0000–01FF` boot stub, `0200` app
+jump table, `ROM_ID` at `0209` (stock `0048`), trailer page at `3FC0`.
 
 I/O ports: `IN C0` (input mux), `OUT 40` (column shift clock), `OUT 48–4F`
 (column data, row in A0–A2), `OUT 80` (strobe). See hardware notes.
@@ -528,6 +533,26 @@ only `STORE_END − STORE_CURSOR + 1` bytes — 174 for channel 42 in an empty
 store, i.e. ~39× fewer; for channel 0 it is ~6900× fewer. Verified by
 simulating both loops: the resulting store is byte-identical.
 
+### B10 — `tx_send_byte` drops a `00` byte offered to a busy transmitter **[H, emulation]**
+`tx_try_queue` returned A = 0 for "queued" and A unchanged for "busy", and
+`tx_send_byte` retried on A ≠ 0 — so a `00` byte that found the transmitter
+busy looked queued and was lost. Invisible in stock (no reply ever carries a
+`00`); the OTA `I` reply lost its bank byte. Patch 12.
+
+### B12 — a `20` byte inside a packet releases WAIT **[H, seen on the sign 2026-10-01]**
+`rx_fifo_get` leaves every received byte in `RX_BYTE`, and `wait_poll` (the
+`BA` WAIT spin) releases on `RX_BYTE == 20`, meaning the SPACE key. So any
+packet carrying a `20` — a space in a message, or `JR nz` in OTA page data —
+ends the wait. Seen as the OTA "UPDATING" display scrolling off at random
+moments. Patch 14 clears `RX_BYTE` after a byte has been fed to the parser.
+
+### B11 — `B3` append loses the first and last byte of the text that follows **[M, emulation only]**
+`09 01 B3 "XYZW"` into an empty channel leaves `YZ` in the store, on stock and
+patched alike (both in emulation). `09 02 0E "XYZW"` stores all four. Found
+2026-09-28 by the RAM fill test; `cc784.py` uses `B3` for every chunk after
+the first, so long messages sent with it may be losing two bytes per chunk on
+the sign too. Not yet traced or checked on hardware.
+
 ### B9 — a pending deferred packet turns the next frame into an editor session **[H, reproduced on the sign 2026-09-19]**
 While a packet accepted with `PKT_FLAG != 80` waits for `main_loop` to get
 round to it, `rx_idle_byte` ignores the next `B1` but not the bytes after it:
@@ -662,6 +687,29 @@ other difference is drift and should be reconciled.
    last raw code address in the source, `LD HL,0xC4` for `tick6_service` in
    `int_timer`, fixed in both trees in the patch 8 commit.
 
+10. **Boot stub, bank register and A/B layout** (`CC784_ota.md`). `0000–01FF`
+    is a stub that picks a bank by trailer and CRC and runs its app through a
+    jump table at `0200`; the `0066` NMI goes through a RAM vector guarded by
+    `NMI_MAGIC`. `ROM_ID` moved with the app, which exposed a raw `0048` in
+    `query_0_romid` (now the label). `store_init` zeroes `5EF0–5FFB` instead
+    of the whole page. `compare` clean; boot is ~1 s slower (the CRC pass).
+11. **`B5` OTA command set** (`cmd_B5_ota`, `CC784_ota.md` §6): info, page
+    CRCs, begin, write 1–3 pages, finish, reset. Runs the stub's RAM library
+    from `FRAMEBUF`; pages below `0200` refused. ≈ 540 bytes of ROM.
+12. **`tx_try_queue` reports busy with carry** (fixes B10).
+14. **Payload bytes are not keys** (fixes B12): `rx_consume` clears `RX_BYTE`
+    after `pkt_feed_byte`. The OTA handler also blanks the panel before each
+    reply (its RAM library sits in `FRAMEBUF`) and shows a parked UPDATING
+    message from `B5 'B'` to the reboot through the factory test mode.
+13. **RAM at the top of the 16 K window; chip size detected at boot.** The
+    board decodes RAM for all of `4000–7FFF`; the 6264 mirrors the upper half.
+    Everything at a fixed address (stack, packet buffers, the stub's bytes)
+    now sits under `RAM_TOP` = `8000`, which the 6264 aliases to `5Exx/5Fxx`
+    for free, and `store_init` writes a marker through the mirror to pick
+    `STORE_TOP` (15278 bytes) or `STORE_TOP_8K` (7086). One build for both
+    chips; a 62256 is two lifted pins (`AT28C256.md`). Verified in emulation
+    on both: fill to the last byte, overfill dropped, dump intact.
+
 ### Rejected
 
 - **Always defer processing** (proposed for B3) — *regression*. `main_loop`
@@ -684,7 +732,7 @@ other difference is drift and should be reconciled.
 - ~~Remove dead code~~ — the objection (it moves every address and breaks the
   per-line address comments) died with the address comments; done as patch 9.
 
-### Proposed: a completion byte (patch 10 candidate)
+### Proposed: a completion byte
 
 Keep the ACK where it is and add a second reply, DONE, when processing has
 finished: ACK = "received, processing", DONE = "you may send again". This is
@@ -747,8 +795,12 @@ fixed 1 s pause.
 git clone --recurse-submodules https://github.com/z00m128/sjasmplus && make
 cd src/stock   && sjasmplus cc784nir.asm   # -> cc784nir.bin
 cd src/patched && sjasmplus cc784nir.asm   # -> cc784nir_patched.bin
+uv run tools/cc784_ota.py pack src/patched/cc784nir_patched.bin \
+    -o src/patched/cc784nir_bank.bin --t48 src/patched/cc784nir_chip.bin
 ```
-Or the `Build stock ROM` / `Build patched ROM` tasks. `src/stock/cc784nir.bin`
+Or the `Build stock ROM` / `Build patched ROM` / `Pack OTA image` tasks. The
+raw patched build has empty trailers: `cc784nir_chip.bin` is what the T48
+burns and `cc784nir_bank.bin` what `cc784_ota.py push` sends. `src/stock/cc784nir.bin`
 must stay at md5 `c021af146a50b93a22d13535201b7eaa` — that is the regression
 test for every edit to the stock source, and the `Verify stock ROM is
 byte-identical` task asserts it.
@@ -763,7 +815,9 @@ reproduces the hardware captures byte for byte (`B4 '0'` → `06 B1 01 10
 "78409O1702930205" 58`) and B1's overflow on stock, so it is the regression
 test for anything that moves RAM or touches the interrupt paths. MAGIC mode
 seeds its randomness from the mains counter, so frame comparisons use a
-message without it.
+message without it. The emulator also models the AT28C256 with the OTA
+bodges and the board's watchdog; `eeprom`, `ota`, `update`, `push` and
+`fuzz` are the OTA regression set (`CC784_ota.md` §8).
 
 For a W27C512 in the 27C256 socket, program the 32 KB image twice
 (`cat cc784nir.bin cc784nir.bin > w27c512.bin`): the board ties pin 1 (A15)

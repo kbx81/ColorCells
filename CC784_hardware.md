@@ -91,22 +91,27 @@ With a DC supply the clock would not run; the supplied PSU is AC, so it does.
 
 ## 4. Serial port [H]
 
-DB9 wiring (traced on the backlit photo; through 220 Ω resistors R8/R9/R10):
+DB9 wiring, from the schematic (2026-09-27; corrects the earlier photo trace,
+which had RX on pin 2):
 
-| DB9 | LS244 pin | Direction | Function |
+| DB9 | Path | Direction | Function |
 |---|---|---|---|
-| 3 | 18 (1Y1 out) | sign → PC | **TX** (ACK/NAK, query replies) |
-| 2 | 17 (2A1 in) | PC → sign | **RX** |
-| 4 | 16 (1Y2 out) | sign → PC | DTR-like, probably held asserted |
-| 7 | 14 (1Y3 out) | sign → PC | RTS-like, probably held asserted |
-| 1 | 15 (2A2 in) | PC → sign | DCD-like input; not read by the firmware as far as seen |
+| 3 | U12 pin 18 (1Y1) ← `CTRL_LATCH` bit 4 | sign → PC | **TX** (ACK/NAK, query replies) |
+| 8 | R30 270 Ω → D8/D9 clamp → R7 3.3 k pull-up → U12 → `PORT_IN` bit 3 | PC → sign | **RX** — the only real RS-232 receiver on the board |
+| 4 | U12 pin 16 (1Y2) ← latch bit 5 | sign → PC | never driven by the firmware |
+| 7 | U12 pin 14 (1Y3) ← latch bit 6 | sign → PC | never driven by the firmware |
+| 1 | R8 pull-up → U12 → `PORT_IN` bit 1 | PC → sign | shares the net with the IR receiver output (factory bodge) |
+| 2 | R9 pull-up → U12 → `PORT_IN` bit 0 | PC → sign | not read; the factory cable ties it to pin 5 |
+| 6 | R6 pull-up → U12 → `PORT_IN` bit 2 | PC → sign | not read |
+| 9 | R31 10 Ω from +5 V | sign → PC | +5 V out |
 | 5 | — | — | GND |
 
-So the sign is wired like a DTE (TX on 3, RX on 2): a PC needs a **crossover**.
-Levels are **TTL** (0/+5 V out of the LS244); the input side is RS-232
-current-limited into a TTL input by the 220 Ω. Polarity as the firmware sees
-it: `PORT_IN` bit 3 = 1 during space; `CTRL_LATCH` bit 4 = 1 drives space.
-300 baud, 8 data, no parity; sign checks 1 stop bit, sends ~2.
+The factory cable is the crossover: sign 3 → PC 2, **sign 8 → PC 3**, and
+sign 2 and 5 → PC 5. Levels: TTL out of the LS244 on the outputs; pin 8 is the
+one input with a proper RS-232 clamp (negative swing shunted by D9, so bit 3
+reads 1 during space). Polarity as the firmware sees it: `PORT_IN` bit 3 = 1
+during space; `CTRL_LATCH` bit 4 = 1 drives space. 300 baud, 8 data, no
+parity; sign checks 1 stop bit, sends ~2.
 
 Working setups (both verified with live ACKs): USB-RS232 adapter + crossover;
 ESPHome `serial_proxy` via `cc784_esphome.py` (aioesphomeapi 46.4.x).
