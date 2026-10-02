@@ -33,16 +33,15 @@ bytes of the bank are free.
 
 ## 2. Patches
 
-1. **Relocate the stack** (fixes B1). `STACK_TOP` `403F` → `5EF0`, giving a
-   stack carved off the top of the message store — originally 256 bytes,
-   now 128 (`STACK_SIZE`, see patch 7 and the stack measurements in
-   `CC784_firmware.md` §2).
+1. **Relocate the stack** (fixes B1). The stack is carved off the top of the
+   message store instead of the 64 bytes below `4000`: 128 bytes
+   (`STACK_SIZE`; the measurements are in `CC784_firmware.md` §2).
    All seven `LD SP` sites use the symbol (reset, `fx_end_of_channel`,
    `menu_enter`, `key_handler`, the editor, `pkt_process`,
    `pkt_process_done`). The store's ceiling and the constants `store_init`
    derives from it move down together, and `store_init` writes the `0xDA`
    store terminator through `STORE_LIMIT` before zeroing the packet page,
-   because the terminator no longer sits one byte below it.
+   since the terminator does not sit inside that page.
 2. **Restore the clock** (fixes B2). `pkt_process_done` sets `CLK_RUN=FF`
    inline, just before its `CALL shift_chain_clear`. This covers every early
    exit, not just `cmd_17`'s.
@@ -71,38 +70,34 @@ bytes of the bank are free.
    rather than waiting to be set.
 7. **RAM re-layout: 7014-byte store** (+344 over patch 1's layout, +88 over
    stock). Three changes, each a constant:
-   - `STACK_SIZE` 256 → 128, sized from the measured 70-byte high-water mark
-     and the ~108-byte constructed worst case (§2).
+   - `STACK_SIZE` 128, sized from the measured 70-byte high-water mark and
+     the ~108-byte constructed worst case.
    - `FRAMEBUF_SIZE` 344 → 192. The column ring only ever holds the 86
      visible columns plus the glyph being written (at most 32 more; the
      renderer waits for the scroll to catch up before the next one) — the
-     four-rows-of-86 size was never used as such. The one thing that needed
-     the extra room was TINY mode's output frame at `FRAMEBUF+202`; it now
-     lives in `TXBUF`, which is idle while TINY text is displayed (effects are
-     off, and a packet resets everything anyway). The TINY line buffer itself
-     (`FRAMEBUF_TINY`, 189 bytes from the ring start) still fits.
-   - `FRAMEBUF` `4040` → `4000`: the old 64-byte stack slot was dead space in
-     the patched build.
-   `cc784_sim.py compare` against the previous build shows the same frames
-   and replies for every effect, the clock, TINY and the editor.
+     four-rows-of-86 size is not needed. TINY mode's output frame lives in
+     `TXBUF`, which is idle while TINY text is displayed (effects are off,
+     and a packet resets everything anyway); the TINY line buffer
+     (`FRAMEBUF_TINY`, 189 bytes from the ring start) fits in the ring.
+   - `FRAMEBUF` `4040` → `4000`: the stock stack slot is free once the stack
+     has moved.
+   `cc784_sim.py compare` shows the same frames and replies as the previous
+   layout for every effect, the clock, TINY and the editor.
 8. **Compact the variable block: 7086-byte store** (+72). Every byte of the
-   block that nothing reads is gone: the ten write-only variables
-   (`PREV_KEY`/`PREV_KEY2`, `STORE_WRAPPED`, `RX_SPARE`, `RX_STATE_COPY`,
-   `CHAN_STATE`, `STORE_BAD_COUNT`, `EFFECT_ID_COPY`, `PROG_MSG_FORCE`,
-   `SPARE_TIMER`) together with the code that fed them, and the unnamed bytes
-   between variables, including `INIT_DATA`'s misaligned second copies of
-   `RX_TIMING` and `rx_st_wait_start`. The order is unchanged and `INIT_DATA`
-   is regenerated as four runs matching the new positions. Three bytes that
-   looked dead were not, and the emulator census caught each: `NMI_COUNT+1`
-   is the high byte of a pointer `magic_short_word` reads through (kept and
-   named in the comment), `MSG_STORE-1` takes a space from `store_repair` on
-   every boot (`STORE_GUARD`), and the four bytes after `FB_COL` were read by
-   `tiny_scroll_off`, whose `LD HL,FB_COL` is a typo for the pointer: it
-   scanned the *variable block* for a colour byte and always found the `0x95`
-   constant, so TINY always pushed the display off first. The scan is gone and
-   that behaviour kept. Verified by an emulator census (every RAM byte read or
-   written across the suite, attributed to its symbol), a lockstep diff of
-   every variable against patch 7, and `compare`/`stack`.
+   block that nothing reads is gone: ten write-only variables together with
+   the code that fed them, and the unnamed bytes between variables, including
+   `INIT_DATA`'s misaligned second copies of `RX_TIMING` and
+   `rx_st_wait_start`. The order is unchanged and `INIT_DATA` is regenerated
+   as four runs matching the new positions. Three bytes that look dead are
+   not and are kept: `NMI_COUNT+1` is the high byte of a pointer
+   `magic_short_word` reads through, `MSG_STORE-1` takes a space from
+   `store_repair` on every boot (`STORE_GUARD`), and the four bytes after
+   `FB_COL` were what `tiny_scroll_off` scanned through a typo'd pointer,
+   always finding a `0x95` constant, so TINY always pushed the display off
+   first; the scan is gone and that behaviour kept. Verified by an emulator
+   census (every RAM byte read or written across the suite, attributed to its
+   symbol), a lockstep diff of every variable against patch 7, and
+   `compare`/`stack`.
 9. **Remove the unreachable code.** A static reachability walk over the
    assembled listing (roots: the three vectors plus every label loaded as a
    vector or stored as data) leaves five islands nothing can jump to:
@@ -123,8 +118,8 @@ bytes of the bank are free.
 10. **Boot stub, bank register and A/B layout** (`CC784_ota.md`). `0000–01FF`
     is a stub that picks a bank by trailer and CRC and runs its app through a
     jump table at `0200`; the `0066` NMI goes through a RAM vector guarded by
-    `NMI_MAGIC`. `ROM_ID` moved with the app (`query_0_romid` now uses the
-    label rather than a raw `0048`). Boot is ~1 s slower: the CRC pass.
+    `NMI_MAGIC`. `ROM_ID` sits in the app, and `query_0_romid` uses the
+    label rather than a raw `0048`. Boot is ~1 s slower: the CRC pass.
 11. **`B5` OTA command set** (`cmd_B5_ota`, `CC784_ota.md` §6): info, page
     CRCs, begin, write 1–3 pages, finish, reset. Runs the stub's RAM library
     from `FRAMEBUF`; pages below `0200` refused. ≈ 540 bytes of ROM.
@@ -132,7 +127,7 @@ bytes of the bank are free.
 13. **RAM at the top of the 16 K window; chip size detected at boot.** The
     board decodes RAM for all of `4000–7FFF`; the 6264 mirrors the upper half.
     Everything at a fixed address (stack, packet buffers, the stub's bytes)
-    now sits under `RAM_TOP` = `8000`, which the 6264 aliases to `5Exx/5Fxx`
+    sits under `RAM_TOP` = `8000`, which the 6264 aliases to `5Exx/5Fxx`
     for free, and `store_init` writes a marker through the mirror to pick
     `STORE_TOP` (15278 bytes) or `STORE_TOP_8K` (7086). One build for both
     chips; a 62256 is two wires (`AT28C256.md`).
@@ -210,7 +205,7 @@ fixed 1 s pause.
   one-page, ~100-page and interrupted-then-resumed updates, all booted and
   confirmed; the store survives every reboot.
 - **B11/B12** — `B3 "XYZW"` into an empty channel stores all four bytes;
-  the update display no longer moves while pages carrying `20` arrive.
+  the update display stays put while pages carrying `20` arrive.
 - **FLASH clock** — `FLASH_HALF_PERIOD` 13 → 7 blinks visibly faster (~5 Hz
   against ~2.4 Hz), which is what identified latch bit 7.
 
