@@ -456,7 +456,7 @@ so the full map is readable there. It cross-checks the attribute names from
 §7 independently: key 2 is BOLD unshifted and LEFT shifted, key 18 is
 MAGIC/MAGIC OFF, key 55 is COLOR/BGRND. Key 25 is SHIFT in every layer.
 
-## 10. Bugs found
+## 10. Bugs
 
 All in the stock firmware; the patched build fixes most of them.
 

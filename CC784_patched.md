@@ -111,9 +111,7 @@ bytes of the bank are free.
    pair), the five `NOP`s (two of them patch 4's size padding), and
    `tick6_service`'s re-entrancy guard, which tested `(IX)==AA && (IY)==55`
    against registers nothing ever points there. About 140 bytes of ROM, zero
-   behaviour: `compare` against patch 8 is clean. The walk also exposed the
-   last raw code address in the source, `LD HL,0xC4` for `tick6_service` in
-   `int_timer`, fixed in both trees.
+   behaviour (`compare` clean).
 
 10. **Boot stub, bank register and A/B layout** (`CC784_ota.md`). `0000–01FF`
     is a stub that picks a bank by trailer and CRC and runs its app through a
@@ -209,8 +207,8 @@ fixed 1 s pause.
   confirmed; the store survives every reboot.
 - **B11/B12** — `B3 "XYZW"` into an empty channel stores all four bytes;
   the update display stays put while pages carrying `20` arrive.
-- **FLASH clock** — `FLASH_HALF_PERIOD` 13 → 7 blinks visibly faster (~5 Hz
-  against ~2.4 Hz), which is what identified latch bit 7.
+- **FLASH clock** — `FLASH_HALF_PERIOD` 7 instead of 13 blinks visibly
+  faster (~5 Hz against ~2.4 Hz): latch bit 7 is the blink clock.
 
 ## 6. Rebuilding and testing
 
