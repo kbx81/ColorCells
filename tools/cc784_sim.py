@@ -17,13 +17,40 @@ cc784_sim.py - run the CC784NIR ROM under emulation (kosarev's z80 core) with a 
         sequence of distinct frames the panel was sent plus every serial reply. A few
         frames caught one scroll step apart are timing, not behaviour.
 
+    uv run tools/cc784_sim.py eeprom
+        Self-test of the banked EEPROM model below (no firmware involved).
+
+    uv run tools/cc784_sim.py ota
+        Boot stub bank selection in every trailer scenario, then the page writer.
+
+    uv run tools/cc784_sim.py update
+        A whole OTA over the fake serial line: B5 I/C/B/W/F/R, then boot from bank 1.
+
+    uv run tools/cc784_sim.py push
+        The same through the host tool itself (cc784_ota.push over a SimLink).
+
+    uv run tools/cc784_sim.py ram
+        The build on the stock 8 K RAM (mirrored) and on a 62256: sizes, fill, dump.
+
+    uv run tools/cc784_sim.py fuzz [RUNS]
+        Cut the power at a random instant of an update, RUNS times (default 100);
+        every reboot must land in a bank whose trailer and image CRC check out.
+
 Facts the model rests on (all traced in the firmware notes): INT every 1024 T
 (8 MHz / 1024; 4 MHz cannot keep up with the tick work, so the CPU is 8 MHz),
 NMI at 60 Hz, PORT_IN bit 3 = serial RX (1 = space), bit 1 = IR burst,
 CTRL_LATCH bit 4 = serial TX (1 = space). The stack watch counts only writes at
 SP, so store shuffles next to the stack do not register.
+
+The ROM is an AT28C256 with the OTA bodges (CC784_ota.md §2): /WE on Z80 /WR,
+/OE on /RD, A14..A16 from BANK_REG, a '273 written at C000 and zero at reset.
+Page writes, the 150 us byte-load timer, the 10 ms write cycle (every ROM read
+returns the status byte; an instruction fetch then is a fault) and software
+data protection are modelled; so is the board's watchdog, which zeroes
+CTRL_LATCH 512 us after the last interrupt acknowledge. Faults are collected in
+Sign.faults rather than raised, so a session can report them at the end.
 """
-import hashlib, os, pathlib, random, subprocess, sys, tempfile
+import hashlib, os, pathlib, random, subprocess, sys, tempfile, time
 
 import z80
 
@@ -37,6 +64,97 @@ NMI_T = CPU_HZ // 60
 BIT_T = round(CPU_HZ / 300)  # serial bit at 300 baud
 US = CPU_HZ / 1_000_000
 SLICE = 128                  # run granularity
+BANK_SIZE = 0x4000
+T_BLC = int(150 * US)        # AT28C256 page-load byte-to-byte limit
+T_WC = int(10_000 * US)      # AT28C256 write cycle, worst case
+WDOG_T = 4096                # HC4020 Q13 rises this many T after an INTA
+
+
+class PowerCut(Exception):
+    pass
+
+
+class Eeprom:
+    """AT28C256-style chip: 16 K banks selected by BANK_REG, 64-byte page writes,
+    software data protection. Times are Sign.t (T-states)."""
+    SDP_ON = ((0x5555, 0xAA), (0x2AAA, 0x55), (0x5555, 0xA0))
+    SDP_OFF = ((0x5555, 0xAA), (0x2AAA, 0x55), (0x5555, 0x80),
+               (0x5555, 0xAA), (0x2AAA, 0x55), (0x5555, 0x20))
+
+    def __init__(self, image, sdp=True, faults=None):
+        self.image = bytearray(image)
+        self.banks = len(self.image) // BANK_SIZE
+        self.sdp = sdp                  # protection armed
+        self.faults = faults if faults is not None else []
+        self.seq = []                   # SDP command bytes seen so far
+        self.unlocked = False           # a complete SDP_ON sequence precedes this page
+        self.page = None                # (page number, {addr: byte}) while loading
+        self.last_t = 0
+        self.busy_until = 0             # end of the internal write cycle
+        self.last_byte = 0
+        self.toggle = 0
+        self.last_page = None
+
+    def bank_image(self, bank):
+        bank %= self.banks
+        return bytes(self.image[bank * BANK_SIZE:(bank + 1) * BANK_SIZE])
+
+    def image_after_power_cut(self, t, rng):
+        """the chip as a power cut at t leaves it: a page mid-cycle is indeterminate"""
+        img = bytearray(self.image)
+        if self.page and self.page[0] >= 0:
+            base = self.page[0] * 64
+            for i in range(64):
+                img[base + i] = rng.randrange(256)
+        elif t < self.busy_until and self.last_page is not None:
+            base = self.last_page * 64
+            for i in range(64):
+                img[base + i] = rng.randrange(256)
+        return bytes(img)
+
+    def update(self, t):
+        if self.page and t - self.last_t > T_BLC:      # load window closed: program
+            self.busy_until = self.last_t + T_BLC + T_WC
+            for a, v in self.page[1].items():
+                self.image[a] = v
+            self.last_page = self.page[0] if self.page[0] >= 0 else None
+            self.page = None
+        return self.page is not None or t < self.busy_until
+
+    busy = update
+
+    def status(self):
+        """what a read returns while busy: /D7 of the last byte, D6 toggling"""
+        self.toggle ^= 1
+        return ((self.last_byte ^ 0x80) & 0x80) | (self.toggle << 6) | 0x3F
+
+    def write(self, addr, value, t):
+        if self.update(t) and not self.page:
+            self.faults.append((t, 'write during write cycle', addr, value))
+            return
+        self.last_byte = value
+        if self.page:
+            if addr >> 6 != self.page[0]:
+                self.faults.append((t, 'byte outside the open page', addr, value))
+                return
+            self.page[1][addr] = value
+            self.last_t = t
+            return
+        self.seq.append((addr, value))
+        n = len(self.seq)
+        if self.seq == list(self.SDP_ON[:n]) or self.seq == list(self.SDP_OFF[:n]):
+            if self.seq == list(self.SDP_ON):
+                self.sdp, self.unlocked, self.seq = True, True, []
+            elif self.seq == list(self.SDP_OFF):
+                self.sdp, self.seq = False, []
+                self.page, self.last_t = (-1, {}), t       # the sequence is itself a cycle
+            return
+        self.seq = []
+        if self.sdp and not self.unlocked:
+            self.faults.append((t, 'write blocked by SDP', addr, value))
+            return
+        self.unlocked = False
+        self.page, self.last_t = (addr >> 6, {addr: value}), t
 
 
 def assemble(src_dir):
@@ -57,7 +175,7 @@ def assemble(src_dir):
                            capture_output=True, text=True)
         if r.returncode:
             sys.exit(r.stdout + r.stderr)
-        rom = (pathlib.Path(tmp) / out_name).read_bytes()[:0x4000]
+        rom = (pathlib.Path(tmp) / out_name).read_bytes()
         syms = {}
         for line in sym.read_text().splitlines():
             name, _, val = line.partition(': EQU ')
@@ -67,23 +185,38 @@ def assemble(src_dir):
 
 
 class Sign:
-    def __init__(self, rom, syms, fresh_ram=True, seed=1):
-        self.rom, self.sym = rom, syms
+    def __init__(self, rom, syms, fresh_ram=True, seed=1, sdp=True, ram8k=False):
+        # rom: one 16 K bank (the rest of the chip erased) or the whole chip image
+        # ram8k: the stock 6264, which mirrors 4000-5FFF at 6000-7FFF
+        image = bytes(rom) + b'\xff' * (2 * BANK_SIZE - len(rom)) if len(rom) <= BANK_SIZE else bytes(rom)
+        self.faults = []
+        self.ee = Eeprom(image, sdp=sdp, faults=self.faults)
+        self.bank_reg = 0
+        self.ee_marked = self.busy_fault = False
+        self.cut_at = None                  # sim time at which PowerCut is raised
+        self.rom, self.sym = image[:BANK_SIZE], syms
         self.m = m = z80.Z80Machine()
-        m.set_memory_block(0, rom)
+        m.set_memory_block(0, self.rom)
         rng = random.Random(seed)
-        ram = bytes(rng.randrange(256) for _ in range(0x2000)) if fresh_ram else bytes(0x2000)
+        ram = bytes(rng.randrange(256) for _ in range(0x4000)) if fresh_ram else bytes(0x4000)
+        self.ram8k = ram8k
+        if ram8k:
+            ram = ram[:0x2000] * 2
+            m.mark_addrs(0x4000, 0x4000, m.WRITE_MARK)      # every RAM write is mirrored
         m.set_memory_block(0x4000, ram)
         self.stack_top = syms.get('STACK_TOP', 0x4040)
         self.stack_lo = 0x3E00 if self.stack_top == 0x4040 else self.stack_top - 0x300
         m.mark_addrs(self.stack_lo, self.stack_top - self.stack_lo, m.WRITE_MARK)
         m.mark_addrs(0x8000, 1, m.WRITE_MARK)
         m.mark_addrs(0x0000, 0x4000, m.WRITE_MARK)
+        m.mark_addrs(0xC000, 0x4000, m.WRITE_MARK | m.READ_MARK)
         m.set_write_callback(self._on_write)
+        m.set_read_callback(self._on_read)
         m.set_input_callback(self._on_input)
         m.set_output_callback(self._on_output)
         self.t = 0
         self.next_int, self.next_nmi = TICK_T, NMI_T
+        self.last_inta = 0
         self.min_stack, self.min_stack_pc = self.stack_top, None
         self.rom_writes = 0
         self.latch = 0
@@ -95,20 +228,63 @@ class Sign:
         self.burst, self.frames = [], []
 
     # ---- memory and port hooks
+    def _set_latch(self, value):
+        old, self.latch = self.latch, value
+        if (old ^ value) & 0x10:
+            self.tx_edges.append((self.t, (value >> 4) & 1))
+
+    def _chip_addr(self, addr):
+        return ((self.bank_reg % self.ee.banks) << 14) | addr
+
+    def _set_bank_reg(self, value):
+        self.bank_reg = value
+        self._ee_sync(force=True)
+
+    def _ee_sync(self, force=False):
+        """mirror the chip into 0000-3FFF: the selected bank when idle, the status
+        byte (via the read callback) while a write cycle is in progress"""
+        m = self.m
+        busy = self.ee.update(self.t)
+        if busy and not self.ee_marked:
+            m.mark_addrs(0, BANK_SIZE, m.READ_MARK)
+            self.ee_marked = True
+            self.busy_fault = False
+        elif not busy and (self.ee_marked or force):
+            if self.ee_marked:
+                m.unmark_addrs(0, BANK_SIZE, m.READ_MARK)
+                self.ee_marked = False
+            m.set_memory_block(0, self.ee.bank_image(self.bank_reg))
+
     def _on_write(self, addr, value):
         # a write-marked address is replaced by this callback, so store it ourselves
         if addr == 0x8000:
-            old, self.latch = self.latch, value
-            if (old ^ value) & 0x10:
-                self.tx_edges.append((self.t, (value >> 4) & 1))
+            self._set_latch(value)
+            return
+        if addr >= 0xC000:
+            self._set_bank_reg(value)
             return
         if addr < 0x4000:
-            self.rom_writes += 1          # swallowed, like the real EPROM
+            self.rom_writes += 1
+            self.ee.write(self._chip_addr(addr), value, self.t)
+            self._ee_sync()
         else:
             self.m.memory[addr] = value
+            if self.ram8k:
+                self.m.memory[addr ^ 0x2000] = value
         sp = self.m.sp
         if sp - 2 <= addr <= sp + 1 and addr < self.min_stack:
             self.min_stack, self.min_stack_pc = addr, self.m.pc
+
+    def _on_read(self, addr):
+        if addr >= 0xC000:
+            # a read also clocks the '273, with whatever floats on the bus
+            self.faults.append((self.t, 'read of BANK_REG clocks it with a floating bus', addr, 0xFF))
+            self._set_bank_reg(0xFF)
+            return 0xFF
+        if self.m.pc < 0x4000 and not self.busy_fault:
+            self.faults.append((self.t, 'instruction fetch from ROM during a write cycle', self.m.pc, 0))
+            self.busy_fault = True
+        return self.ee.status()
 
     def _level(self, events, idx_attr, level_attr):
         i, lvl = getattr(self, idx_attr), getattr(self, level_attr)
@@ -145,18 +321,20 @@ class Sign:
     def _irq(self):
         m = self.m
         if m.iff1 and not m.int_disabled:
-            self._push_pc(); m.iff1 = 0; m.iff2 = 0; m.pc = 0x38
+            self._push_pc(); m.iff1 = 0; m.iff2 = 0; m.pc = 0x38; m.halted = 0
             return True
         return False
 
     def _nmi(self):
-        self._push_pc(); self.m.iff1 = 0; self.m.pc = 0x66
+        self._push_pc(); self.m.iff1 = 0; self.m.pc = 0x66; self.m.halted = 0
 
     def run(self, t_states):
         end = self.t + t_states
         pending = False
         m = self.m
         while self.t < end:
+            if self.cut_at is not None and self.t >= self.cut_at:
+                raise PowerCut()
             if self.t >= self.next_int:
                 pending = True
                 self.next_int += TICK_T
@@ -165,9 +343,15 @@ class Sign:
             if m.index_rp_kind is z80.HL:
                 if pending and self._irq():
                     pending = False
+                    self.last_inta = self.t
                 if self.t >= self.next_nmi:
                     self._nmi()
                     self.next_nmi += NMI_T
+            # watchdog: Q13 of the free-running HC4020 clears CTRL_LATCH while high
+            if ((self.t - self.last_inta) // WDOG_T) & 1 and self.latch:
+                self._set_latch(0)
+            if self.ee_marked:
+                self._ee_sync()
             m.ticks_to_stop = SLICE
             m.run()
             self.t += SLICE
@@ -286,7 +470,406 @@ def cmd_stack(build):
     s.ir_key('STOP'); s.ir_wait(); s.run_ms(1500); report('SEQ menu, leave editor')
     s.run_ms(5000); report('display resumes 5 s')
     print('address now', s.ram('MY_ADDRESS', 2).hex(), ' store head', s.ram('MSG_STORE', 12).hex(),
-          ' writes into ROM', s.rom_writes)
+          ' writes into ROM', s.rom_writes, ' faults', len(s.faults))
+    for t, what, addr, value in s.faults[:5]:
+        print('  fault at %.3f s: %s (%04X %02X)' % (t / CPU_HZ, what, addr, value))
+
+
+def cmd_ota():
+    """boot stub and page writer against the chip model, every bank scenario"""
+    import cc784_ota
+    rom, syms = assemble(HERE.parent / 'src' / 'patched')
+    app = rom[:BANK_SIZE]
+    checks = []
+    def check(name, cond):
+        checks.append(bool(cond)); print('  %s %s' % ('ok  ' if cond else 'FAIL', name))
+
+    def corrupt(bank, at=0x2000):
+        b = bytearray(bank); b[at] ^= 0x01; return bytes(b)
+
+    def boot(image, ms=3000, **kw):
+        s = Sign(image, syms, fresh_ram=True, **kw)
+        s.run_ms(ms)
+        return s
+
+    erased = app                                       # trailer FF: as built, before pack
+    b1 = cc784_ota.pack(app, 1)
+    b2 = cc784_ota.pack(app, 2)
+    b0 = cc784_ota.pack(app, 0)
+    scenarios = [
+        ('erased trailers -> bank 0',                 erased + b'\xff' * BANK_SIZE, 0),
+        ('T48 image (seq 1 / seq 0) -> bank 0',       b1 + b0, 0),
+        ('bank 1 newer (seq 2) -> bank 1',            b1 + b2, 1),
+        ('equal seq -> bank 0',                       b1 + b1, 0),
+        ('seq wrap: 0 beats FF',                      cc784_ota.pack(app, 0xFF) + b0, 1),
+        ('bank 1 newer but image corrupt -> bank 0',  b1 + corrupt(b2), 0),
+        ('bank 0 corrupt, bank 1 older -> bank 1',    corrupt(b1) + b0, 1),
+        ('bank 0 trailer bad, bank 1 valid -> bank 1', erased + b0, 1),
+        ('both corrupt -> bank 0 regardless',         corrupt(b1) + corrupt(b0), 0),
+    ]
+    for name, image, want in scenarios:
+        s = boot(image)
+        got = s.ram('ROM_BANK')[0]
+        check('%s (booted %d, %d frames, %d faults)' % (name, got, len(s.frames), len(s.faults)),
+              got == want and s.frames and not s.faults)
+
+    # boot time: from reset until the stub publishes the bank (NMI_MAGIC set)
+    for name, image in (('both valid, one CRC pass', b1 + b2), ('first choice corrupt, two passes', b1 + corrupt(b2))):
+        s = Sign(image, syms, fresh_ram=True)
+        s.m.memory[syms['NMI_MAGIC']] = 0
+        while s.m.memory[syms['NMI_MAGIC']] != 0xA5 and s.t < 4 * CPU_HZ:
+            s.run(SLICE * 64)
+        print('  boot, %s: %.0f ms' % (name, s.t / CPU_HZ * 1000))
+
+    # page writer: copy the template to RAM and call it as the app would
+    s = boot(b1 + b0, ms=500)
+    m = s.m
+    src = 0x5000
+    data = bytes((i * 7 + 3) & 0xFF for i in range(64))
+    m.set_memory_block(src, data)
+    m.set_memory_block(syms['STUB_RAM'], rom[syms['stub_lib']:syms['stub_lib'] + syms['STUB_LIB_SIZE']])
+    trap = 0x5100
+    m.set_memory_block(trap, b'\x76')                  # HALT as a landing pad
+    def call_writer(page_addr, bank, sdp_faults_ok=False):
+        m.iff1 = m.iff2 = 0
+        m.hl, m.de, m.b = src, page_addr, bank
+        m.sp = 0x5ee0
+        m.memory[m.sp - 2], m.memory[m.sp - 1] = trap & 0xFF, trap >> 8
+        m.sp -= 2
+        m.pc = syms['lib_page_writer']
+        t0 = s.t
+        while m.pc != trap + 1 and s.t - t0 < CPU_HZ // 4:
+            s.run(SLICE * 8)
+        return m.a, (s.t - t0) / CPU_HZ * 1000
+    n = len(s.faults)
+    a, ms = call_writer(0x2000, 1)
+    check('page write to bank 1: status %d in %.1f ms' % (a, ms), a == 0 and 5 < ms < 30)
+    check('bank 1 page holds the data', s.ee.bank_image(1)[0x2000:0x2040] == data)
+    check('bank 0 untouched', s.ee.bank_image(0)[0x2000:0x2040] == b1[0x2000:0x2040])
+    check('running bank restored', s.bank_reg == 0)
+    check('no faults (%d)' % (len(s.faults) - n), len(s.faults) == n)
+    check('SDP armed by the preamble', s.ee.sdp)
+    a, ms = call_writer(0x3FC0, 1)
+    check('trailer page write: status %d' % a, a == 0 and s.ee.bank_image(1)[0x3FC0:0x4000] == data)
+    m.set_memory_block(src, bytes(64))
+    a, ms = call_writer(0x0000, 1)
+    check('stub page in the idle bank is writable by the writer itself (handler must refuse): %d' % a, a == 0)
+    print('OTA boot/write: %d/%d checks pass' % (sum(checks), len(checks)))
+    return all(checks)
+
+
+def ota_cmd(s, payload, addr=1, wait_ms=4000):
+    """send a B5 frame in immediate mode and return the reply data (None if none)"""
+    s.tx_edges.clear()
+    s.send_frame(payload, addr=addr, flag=0x80)
+    s.rx_wait()
+    for _ in range(wait_ms // 50):
+        s.run_ms(50)
+        tx = s.tx_bytes()
+        if len(tx) >= 4 and tx[0] == 0x06 and tx[1] == 0xB1 and len(tx) >= 5 + tx[3]:
+            s.run_ms(100)                       # the last byte may still be on the wire
+            tx = s.tx_bytes()
+            data = tx[4:4 + tx[3]]
+            assert sum(data) & 0xFF == tx[4 + tx[3]], 'reply checksum'
+            s.run_ms(1000)                      # the sign is deaf through restart_display (B4)
+            return data
+        if tx and tx[0] == 0x15:
+            return None
+    return None
+
+
+def cmd_update():
+    """a whole OTA over the fake serial line: stage in the idle bank, finish, reboot"""
+    import cc784_ota
+    rom, syms = assemble(HERE.parent / 'src' / 'patched')
+    app = rom[:BANK_SIZE]
+    checks = []
+    def check(name, cond):
+        checks.append(bool(cond)); print('  %s %s' % ('ok  ' if cond else 'FAIL', name))
+
+    # the "new firmware": the same app with one demo-message byte changed
+    new_app = app.replace(b'LARGE  IMPACT', b'LARGE  UPDATE')
+    assert new_app != app
+    b1, b0 = cc784_ota.pack(app, 1), cc784_ota.pack(app, 0)
+    new_bank = cc784_ota.pack(new_app, 2)
+    s = Sign(b1 + b0, syms, fresh_ram=True, sdp=False)      # fresh from the T48: SDP off
+    s.run_ms(2500)
+    check('booted bank 0', s.ram('ROM_BANK')[0] == 0)
+
+    info = ota_cmd(s, b'\xb5I')
+    bank, t0, t1 = cc784_ota.parse_info(info) if info else (None, None, None)
+    check('I: bank %s, trailers %s / %s' % (bank, t0, t1),
+          bank == 0 and t0 and t0['seq'] == 1 and t1 and t1['seq'] == 0)
+    pages = [p for p in cc784_ota.changed_pages(b0, new_bank) if p != 255]
+    check('diff is one or two pages (%s)' % pages, 1 <= len(pages) <= 2)
+    crcs = ota_cmd(s, b'\xb5C' + bytes([pages[0], 2]))
+    want = cc784_ota.crc16(b0[pages[0] * 64:(pages[0] + 1) * 64])
+    check('C: page crc matches the host view', crcs and int.from_bytes(crcs[:2], 'little') == want)
+
+    # refusals
+    r = ota_cmd(s, b'\xb5W' + bytes([3, 0, 0]) + bytes(64))
+    check('W into the stub refused (3)', r == b'\x03')
+    page = pages[0]
+    data = new_bank[page * 64:(page + 1) * 64]
+    r = ota_cmd(s, b'\xb5W' + bytes([page]) + (cc784_ota.crc16(data) ^ 1).to_bytes(2, 'little') + data)
+    check('W with a bad crc refused (4)', r == b'\x04')
+    r = ota_cmd(s, b'\xb5F' + bytes([2]) + (0x1234).to_bytes(2, 'little'))
+    check('F with the wrong image crc refused (4)', r == b'\x04')
+
+    # the update
+    r = ota_cmd(s, b'\xb5B')
+    check('B: trailer erased (%s)' % (r.hex() if r else r), r == b'\x00' and s.ee.bank_image(1)[0x3FC0:0x3FC4] == b'\xff' * 4)
+    s.run_ms(2000); s.frames.clear(); s.run_ms(3000)      # staging done, then it must sit still
+    lit = sum(1 for c in s.m.memory[syms['FRAMEBUF']:syms['FRAMEBUF'] + 192] if not c & 0x80 and c)
+    check('B: UPDATING parked on the panel (test mode set, %d frames in 3 s, %d lit columns)' % (len(s.frames), lit),
+          s.ram('TEST_MODE')[0] == 0xFF and len(s.frames) <= 1 and lit > 20)
+    check('SDP armed by the first write', s.ee.sdp)
+    for page in pages:
+        data = new_bank[page * 64:(page + 1) * 64]
+        r = ota_cmd(s, b'\xb5W' + bytes([page]) + cc784_ota.crc16(data).to_bytes(2, 'little') + data, wait_ms=6000)
+        check('W: page %d written (%s)' % (page, r.hex() if r else r), r == b'\x00' and s.ee.bank_image(1)[page * 64:(page + 1) * 64] == data)
+    # three pages in one frame, unchanged content, exercises the multi-page path
+    trio = new_bank[0x40 * 64:0x43 * 64]
+    r = ota_cmd(s, b'\xb5W' + bytes([0x40]) + cc784_ota.crc16(trio).to_bytes(2, 'little') + trio, wait_ms=8000)
+    check('W: three pages in one frame (%s)' % (r.hex() if r else r), r == b'\x00')
+    s.run_ms(2000); s.frames.clear(); s.run_ms(3000)
+    check('UPDATING still parked after frames carrying 0x20 bytes (%d frames in 3 s)' % len(s.frames), len(s.frames) <= 1)
+    image_crc = cc784_ota.crc16(new_bank[cc784_ota.STUB_END:cc784_ota.TRAILER])
+    r = ota_cmd(s, b'\xb5F' + bytes([2]) + image_crc.to_bytes(2, 'little'), wait_ms=6000)
+    check('F: image crc ok, trailer written (%s)' % (r.hex() if r else r), r == b'\x00' and s.ee.bank_image(1) == new_bank)
+    info = ota_cmd(s, b'\xb5I')
+    bank, t0, t1 = cc784_ota.parse_info(info) if info else (None, None, None)
+    check('I: bank 1 valid, seq 2, GOOD (%s)' % t1, t1 and t1['seq'] == 2 and t1['state'] == 3)
+    check('no faults so far (%d)' % len(s.faults), not s.faults)
+    for f in s.faults[:5]:
+        print('    ', f)
+
+    s.tx_edges.clear(); s.frames.clear()
+    s.send_frame(b'\xb5R', addr=1, flag=0x80); s.rx_wait(); s.run_ms(4000)
+    check('R: rebooted into bank 1', s.ram('ROM_BANK')[0] == 1)
+    check('R: test mode cleared by the boot', s.ram('TEST_MODE')[0] == 0)
+    s.send_frame(b'\xb4\x30', addr=1, flag=0x80); s.rx_wait(); s.run_ms(2500)
+    check('new firmware answers B4 0', b'78409O1702930205' in s.tx_bytes())
+    s.frames.clear(); s.run_ms(30000)
+    check('demo runs from bank 1 (%d frames)' % len(s.frames), len(s.frames) > 100)
+    check('no faults (%d)' % len(s.faults), not s.faults)
+    print('OTA update: %d/%d checks pass' % (sum(checks), len(checks)))
+    return all(checks)
+
+
+class SimLink:
+    """a cc784.py transport whose far end is the emulated sign; read timeouts are
+    sim time, and the wall-clock gaps between calls (the host's sleeps) advance the
+    sim too, so the host tool's pacing is honoured"""
+    def __init__(self, sign):
+        self.s = sign
+        self.delivered = 0
+        self.last = time.time()
+
+    def _catch_up(self):
+        now = time.time()
+        self.s.run_ms(min(10_000, (now - self.last) * 1000))
+        self.last = time.time()
+
+    def _available(self):
+        out = self.s.tx_bytes()
+        edges = self.s.tx_edges
+        if edges and self.s.t - edges[-1][0] < 11 * BIT_T:
+            out = out[:-1]                      # the last byte may still be on the wire
+        return out
+
+    def write(self, data):
+        self._catch_up()
+        self.s.send_bytes(data)
+        self.s.rx_wait()
+
+    def read(self, n, timeout):
+        self._catch_up()
+        deadline = self.s.t + int(timeout * CPU_HZ)
+        while True:
+            have = self._available()[self.delivered:]
+            if len(have) >= n or self.s.t >= deadline:
+                out = have[:n]
+                self.delivered += len(out)
+                self.last = time.time()
+                return out
+            self.s.run_ms(20)
+
+    def reset_input(self):
+        self.s.tx_edges.clear()
+        self.delivered = 0
+
+    def close(self):
+        pass
+
+
+def cmd_push():
+    """the host tool's push() end to end against the emulated sign"""
+    import cc784, cc784_ota
+    rom, syms = assemble(HERE.parent / 'src' / 'patched')
+    app = rom[:BANK_SIZE]
+    new_app = app.replace(b'LARGE  IMPACT', b'LARGE  UPDATE')
+    new_bank = cc784_ota.pack(new_app, 7)
+    s = Sign(cc784_ota.pack(app, 1) + cc784_ota.pack(app, 0), syms, fresh_ram=True, sdp=False)
+    s.run_ms(2500)
+    sign = cc784.Sign(SimLink(s), 1)
+    sign.post_ack = 0.2
+    ok = cc784_ota.push(sign, new_bank, seq=None)
+    got = s.ee.bank_image(1)
+    ok = (ok and got[:cc784_ota.TRAILER] == new_bank[:cc784_ota.TRAILER] and cc784_ota.parse_trailer(got)['seq'] == 2
+          and s.ram('ROM_BANK')[0] == 1 and not s.faults)
+    print('host push: %s (%d faults)' % ('OK' if ok else 'FAIL', len(s.faults)))
+    return ok
+
+
+def cmd_fuzz(runs=100, seed=1):
+    """cut the power at a random instant of an update, reboot, and demand a good bank"""
+    import cc784_ota
+    rom, syms = assemble(HERE.parent / 'src' / 'patched')
+    app = rom[:BANK_SIZE]
+    new_app = app.replace(b'LARGE  IMPACT', b'LARGE  UPDATE')
+    old_bank, new_bank = cc784_ota.pack(app, 1), cc784_ota.pack(new_app, 2)
+    base = cc784_ota.pack(app, 0)
+    pages = [p for p in cc784_ota.changed_pages(base, new_bank) if p != 255] + [0x40, 0x41, 0x42]
+    image_crc = cc784_ota.crc16(new_bank[cc784_ota.STUB_END:cc784_ota.TRAILER])
+
+    def update(s):
+        marks = [s.t]
+        ota_cmd(s, b'\xb5B')
+        for p in pages:
+            d = new_bank[p * 64:(p + 1) * 64]
+            ota_cmd(s, b'\xb5W' + bytes([p]) + cc784_ota.crc16(d).to_bytes(2, 'little') + d, wait_ms=6000)
+        ota_cmd(s, b'\xb5F' + bytes([2]) + image_crc.to_bytes(2, 'little'), wait_ms=6000)
+        marks.append(s.t)
+        s.send_frame(b'\xb5R', addr=1, flag=0x80); s.rx_wait(); s.run_ms(4000)
+        marks.append(s.t)
+        return marks
+
+    s = Sign(old_bank + base, syms, fresh_ram=True, sdp=False)
+    s.run_ms(2500)
+    t_begin, t_finish, t_end = update(s)
+    assert s.ram('ROM_BANK')[0] == 1, 'the reference update did not boot bank 1'
+    print('reference update: %.1f s of sign time; cutting between B and the reboot' % ((t_end - t_begin) / CPU_HZ))
+
+    rng = random.Random(seed)
+    bad = 0
+    for i in range(runs):
+        s = Sign(old_bank + base, syms, fresh_ram=True, sdp=False, seed=i)
+        s.run_ms(2500)
+        s.cut_at = s.t + rng.randrange(t_begin - 2500 * int(1000 * US), t_end - 2500 * int(1000 * US))
+        try:
+            update(s)
+            cut = 'no cut'
+        except PowerCut:
+            cut = 'cut at %.1f s' % ((s.t - t_begin) / CPU_HZ + 2.5)
+        image = s.ee.image_after_power_cut(s.t, rng)
+        s2 = Sign(image, syms, fresh_ram=True, seed=i + 1000)
+        s2.run_ms(3000)
+        bank = s2.ram('ROM_BANK')[0]
+        t = cc784_ota.parse_trailer(s2.ee.bank_image(bank))
+        good = t and t['crc_ok'] and s2.frames and not s2.faults and not s.faults
+        if good and bank == 1 and s2.ee.bank_image(1) != new_bank:
+            good = False
+        if not good:
+            bad += 1
+            print('  run %d: %s -> booted bank %d, trailer %s, %d frames, faults %d/%d'
+                  % (i, cut, bank, t, len(s2.frames), len(s.faults), len(s2.faults)))
+        elif i % 10 == 0:
+            print('  run %d: %s -> bank %d seq %d ok' % (i, cut, bank, t['seq']))
+    print('power-cut fuzz: %d/%d runs booted a verified bank' % (runs - bad, runs))
+    return bad == 0
+
+
+def cmd_ram():
+    """the same build on the stock 8 K RAM and on a 62256: store size, fill to the top, dump"""
+    rom, syms = assemble(HERE.parent / 'src' / 'patched')
+    checks = []
+    def check(name, cond):
+        checks.append(bool(cond)); print('  %s %s' % ('ok  ' if cond else 'FAIL', name))
+
+    def reply(s, payload, wait_ms=3000):
+        s.tx_edges.clear()
+        s.send_frame(payload, addr=1, flag=0x80); s.rx_wait(); s.run_ms(wait_ms)
+        tx = s.tx_bytes()
+        return tx[1:] if tx[:1] == b'\x06' else tx
+
+    for ram8k, want_total in ((True, 7086), (False, 15278)):
+        name = '8 K' if ram8k else '16 K'
+        s = Sign(rom, syms, fresh_ram=True, ram8k=ram8k)
+        s.run_ms(2500)
+        r = reply(s, b'\xb4\x31')
+        total, free = int(r[3:8]), int(r[8:13])
+        check('%s: B4 1 total %d free %d' % (name, total, free), total == want_total and free == total - 301)
+        text = bytes(0x41 + i % 26 for i in range(250))
+        sent = chan = 0                     # one 250-byte chunk per channel (B3 append drops bytes: B11)
+        while free >= 250:
+            s.send_frame(b'\x09' + b'%02d' % chan + b'\x0e' + text, addr=1, flag=0x80); s.rx_wait(); s.run_ms(1200)
+            sent += 250; free -= 250; chan += 1
+        r = reply(s, b'\xb4\x31')
+        check('%s: %d bytes in %d channels, free now %d' % (name, sent, chan, int(r[8:13])), int(r[8:13]) == free)
+        s.send_frame(b'\x09' + b'%02d' % chan + b'\x0e' + text, addr=1, flag=0x80); s.rx_wait(); s.run_ms(1200)   # overfills: the tail is dropped
+        r = reply(s, b'\xb4\x31')
+        check('%s: overfill leaves free %d (the byte under the terminator is never used)' % (name, int(r[8:13])), int(r[8:13]) <= 1)
+        r = reply(s, b'\xb4\x33', wait_ms=int((total + 20) * 12 / 300 * 1000) + 3000)   # ~2.3 stop bits per byte
+        n = int(r[2:7]); data = r[7:7 + n]
+        got = b''.join(data[i:i + 250] for i in range(len(data)) if data[i:i + 250] == text)   # every full chunk found verbatim
+        check('%s: dump says %d bytes, got %d, checksum %s, %d chunks intact' % (name, n, len(data), 'ok' if len(r) > 7 + n and sum(data) & 0xFF == r[7 + n] else 'BAD', len(got) // 250),
+              n == total - 1 and len(data) == n and sum(data) & 0xFF == r[7 + n] and len(got) // 250 == chan)
+        check('%s: no faults, stack ok (depth %d)' % (name, s.depth()), not s.faults and s.depth() < 100)
+    print('RAM sizes: %d/%d checks pass' % (sum(checks), len(checks)))
+    return all(checks)
+
+
+def cmd_eeprom():
+    """exercise the chip model against the AT28C256 datasheet rules"""
+    us = lambda n: int(n * US)
+    faults = []
+    ee = Eeprom(b'\xff' * (2 * BANK_SIZE), sdp=False, faults=faults)
+    checks = []
+    def check(name, cond):
+        checks.append(cond); print('  %s %s' % ('ok  ' if cond else 'FAIL', name))
+
+    # unprotected chip: a plain page write lands after the load window + write cycle
+    for i in range(64):
+        ee.write(0x1000 + i, i, us(2 * i))
+    check('page open while loading', ee.busy(us(200)))
+    check('still busy just before tWC ends', ee.busy(us(126 + 150 + 10_000 - 1)))
+    check('status: /D7 of last byte', ee.status() & 0x80 == 0x80)   # last byte 63 -> bit 7 clear -> status set
+    check('status: D6 toggles', (ee.status() ^ ee.status()) & 0x40)
+    ee.write(0x2000, 0x11, us(5000))
+    check('write during the cycle is a fault', faults and faults[-1][1] == 'write during write cycle')
+    check('idle after tWC', not ee.busy(us(126 + 150 + 10_000 + 1)))
+    check('page programmed', ee.bank_image(0)[0x1000:0x1040] == bytes(range(64)))
+    check('ignored write did not land', ee.bank_image(0)[0x2000] == 0xFF)
+
+    # a byte outside the open page is refused
+    t = us(20_000)
+    ee.write(0x0040, 0xAA, t); ee.write(0x0080, 0xBB, t + us(1))
+    check('byte outside the page is a fault', faults[-1][1] == 'byte outside the open page')
+    ee.update(us(40_000))
+
+    # SDP: the enable preamble protects the chip from then on
+    t = us(50_000)
+    for i, (a, v) in enumerate(Eeprom.SDP_ON):
+        ee.write(a, v, t + us(i))
+    ee.write(0x4000 + 0x0C0, 0x42, t + us(5))       # bank 1 offset 0C0
+    ee.update(us(80_000))
+    check('preamble + data lands in bank 1', ee.bank_image(1)[0xC0] == 0x42)
+    check('SDP now armed', ee.sdp)
+    n = len(faults)
+    ee.write(0x3000, 0x99, us(90_000))
+    check('unprotected write is blocked', len(faults) == n + 1 and faults[-1][1] == 'write blocked by SDP')
+    check('and opens no cycle', not ee.busy(us(90_001)))
+    t = us(100_000)
+    for i, (a, v) in enumerate(Eeprom.SDP_OFF):
+        ee.write(a, v, t + us(i))
+    check('disable sequence starts a cycle', ee.busy(t + us(200)))
+    ee.update(us(130_000))
+    check('SDP disarmed', not ee.sdp)
+    ee.write(0x3000, 0x99, us(140_000)); ee.update(us(160_000))
+    check('plain write works again', ee.bank_image(0)[0x3000] == 0x99)
+    print('EEPROM model: %d/%d checks pass' % (sum(1 for c in checks if c), len(checks)))
+    return all(checks)
 
 
 def session(rom, syms):
@@ -385,8 +968,20 @@ def cmd_compare(dir_a, dir_b):
 
 if __name__ == '__main__':
     args = sys.argv[1:]
-    if not args or args[0] not in ('stack', 'compare'):
+    if not args or args[0] not in ('stack', 'compare', 'eeprom', 'ota', 'update', 'push', 'fuzz', 'ram'):
         sys.exit(__doc__)
+    if args[0] == 'ram':
+        sys.exit(0 if cmd_ram() else 1)
+    if args[0] == 'push':
+        sys.exit(0 if cmd_push() else 1)
+    if args[0] == 'fuzz':
+        sys.exit(0 if cmd_fuzz(int(args[1]) if len(args) > 1 else 100) else 1)
+    if args[0] == 'eeprom':
+        sys.exit(0 if cmd_eeprom() else 1)
+    if args[0] == 'ota':
+        sys.exit(0 if cmd_ota() else 1)
+    if args[0] == 'update':
+        sys.exit(0 if cmd_update() else 1)
     if args[0] == 'stack':
         cmd_stack(args[1] if len(args) > 1 else 'patched')
     else:
