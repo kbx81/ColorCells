@@ -137,6 +137,13 @@ bytes of the bank are free.
     message from `B5 'B'` to the reboot through the factory test mode.
 15. **APPEND seats like DELETE_TEXT** (fixes B11): the extra step back onto an empty
     channel's marker is gone.
+20. **Clock digits next to the store.** The stub copies its 322-byte library
+    to `4000` at every boot, which runs 130 bytes into the variable block
+    (`RAM_VARS+00..81`). The clock digits sat at `+62..67`, so every power
+    cycle read "0=:39 PM". They now live at `+1F2..1F7`, swapped with six
+    scratch bytes; `CLK_RUN` stays, since the init image rewrites it on every
+    boot. An `ASSERT` keeps the library below `STORE_END`, and `ram` in the
+    emulator checks that a set clock survives a reset.
 19. **RAINBOW starts on a random colour.** `BC` set the cycle index to 1 and
     the per-character step advances before it looks up, so every rainbow
     began on orange. The index now starts at 1–5 from a running 8-bit
@@ -207,6 +214,7 @@ bytes of the bank are free.
 - **Patches 10–11** — OTA pushes over the ESPHome bridge: identical image,
   one-page, ~100-page and interrupted-then-resumed updates, all booted and
   confirmed; the store survives every reboot.
+- **Patch 20** — the clock set from the PC survives a power cycle.
 - **Patch 19** — a RAINBOW message starts on a different colour each cycle.
 - **Patch 18** — a `--trial` push boots the new bank as TRIED and leaves it
   unconfirmed; a power cycle then comes back on the GOOD bank with the trial

@@ -28,13 +28,11 @@ STAGE_PTR            equ RAM_VARS+0x05b   ; next free column in TXBUF while an e
 STAGE_OFFSET         equ RAM_VARS+0x05d   ; centring offset of the staged text (free columns / 2)
 ROW_PORT             equ RAM_VARS+0x05f   ; port group for the row data: 40 first pass, 48 second
 BEEP_TICKS           equ RAM_VARS+0x060   ; beeper on while non-zero (port bit 5); beep_start = 0x96
-CLK_H10              equ RAM_VARS+0x062
-CLK_H1               equ RAM_VARS+0x063
-CLK_M10              equ RAM_VARS+0x064
-CLK_M1               equ RAM_VARS+0x065
-CLK_SEC              equ RAM_VARS+0x066
-CLK_PM               equ RAM_VARS+0x067
-CLK_RUN              equ RAM_VARS+0x068
+GLYPH_PTR_ORIG       equ RAM_VARS+0x062   ; glyph address before bold/italic/big copies
+ASK_CHAN_RESULT      equ RAM_VARS+0x064   ; menu_ask_chan return value
+ASK_CHAN_PROMPT      equ RAM_VARS+0x065   ; menu_ask_chan prompt string
+THIN_MODE            equ RAM_VARS+0x067   ; non-zero after THIN (B9): no bold in effects
+CLK_RUN              equ RAM_VARS+0x068   ; set on every boot by the init image copy
 GLYPH_WIDTH          equ RAM_VARS+0x069
 GLYPH_PTR            equ RAM_VARS+0x06a
 MENU_MSG_PTR         equ RAM_VARS+0x06c   ; message the editor is showing (set with MENU_MSG_FLAG)
@@ -156,10 +154,14 @@ MY_ADDRESS_INV       equ RAM_VARS+0x1ee
 SCROLL_SPEED         equ RAM_VARS+0x1ef   ; 0..7 from F0-F7; blank ticks inserted after every frame
 BLANK_TIMER          equ RAM_VARS+0x1f0
 SPEED_PENDING        equ RAM_VARS+0x1f1   ; editor: SPEED key pressed, next key is the digit
-GLYPH_PTR_ORIG       equ RAM_VARS+0x1f2   ; glyph address before bold/italic/big copies
-ASK_CHAN_RESULT      equ RAM_VARS+0x1f4   ; menu_ask_chan return value
-ASK_CHAN_PROMPT      equ RAM_VARS+0x1f5   ; menu_ask_chan prompt string
-THIN_MODE            equ RAM_VARS+0x1f7   ; non-zero after THIN (B9): no bold in effects
+; P20: the clock digits must survive a power cycle, so they live up here next
+; to the store, out of reach of the stub's library copy (RAM_VARS+00..81).
+CLK_H10              equ RAM_VARS+0x1f2
+CLK_H1               equ RAM_VARS+0x1f3
+CLK_M10              equ RAM_VARS+0x1f4
+CLK_M1               equ RAM_VARS+0x1f5
+CLK_SEC              equ RAM_VARS+0x1f6
+CLK_PM               equ RAM_VARS+0x1f7
 KEY_ECHO_TX          equ RAM_VARS+0x1f8   ; non-zero = echo accepted keys on serial TX
 STORE_LIMIT          equ RAM_VARS+0x1f9
 STORE_SIZE           equ RAM_VARS+0x1fb
@@ -585,6 +587,9 @@ boot_go:
 
         ENT
 stub_lib_end:
+        ; the boot copy overwrites RAM_VARS from the start: keep it below the
+        ; first variable that must survive a reset
+        ASSERT STUB_RAM+STUB_LIB_SIZE <= STORE_END
 
         ds STUB_END-$,0xff
 

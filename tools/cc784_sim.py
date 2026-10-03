@@ -867,6 +867,16 @@ def cmd_ram():
         check('%s: dump says %d bytes, got %d, checksum %s, %d chunks intact' % (name, n, len(data), 'ok' if len(r) > 7 + n and sum(data) & 0xFF == r[7 + n] else 'BAD', len(got) // 250),
               n == total - 1 and len(data) == n and sum(data) & 0xFF == r[7 + n] and len(got) // 250 == chan)
         check('%s: no faults, stack ok (depth %d)' % (name, s.depth()), not s.faults and s.depth() < 100)
+        # P20: the clock survives a reset with RAM kept (the stub's library copy lands on RAM_VARS)
+        reply(s, b'\x17' + b'1045' + b'P', wait_ms=1500)
+        s.run_ms(2500)
+        before = s.ram('CLK_H10', 6)
+        s2 = Sign(rom, syms, fresh_ram=True, ram8k=ram8k)
+        s2.m.set_memory_block(0x4000, bytes(s.m.memory[0x4000:0x8000]))
+        s2.run_ms(2500)
+        after = s2.ram('CLK_H10', 6)
+        check('%s: clock %s kept across a reset (%s), running' % (name, before.hex(), after.hex()),
+              before[:2] == bytes([1, 0]) and after[:4] == before[:4] and after[5] == before[5] and s2.ram('CLK_RUN')[0])
     print('RAM sizes: %d/%d checks pass' % (sum(checks), len(checks)))
     return all(checks)
 

@@ -62,7 +62,10 @@ application changes never alter its bytes. A stub change needs the T48.
 (`NMI_SEEN`, set by every mains NMI since reset), which the stock 6264
 mirrors from `5Fxx`. The page writer and the bank-touching
 routines run from `FRAMEBUF` (`4000`), which is idle while a packet is
-processed. No message-store space is used.
+processed. The boot copy of the whole library is longer than `FRAMEBUF`
+and overwrites `RAM_VARS+00..81`, so nothing that must survive a reset may
+live there; an `ASSERT` in the source holds the line at `STORE_END`. No
+message-store space is used.
 
 ## 3. Boot
 
@@ -200,8 +203,10 @@ The `OTA: emulator regression` task runs the five fast ones.
 - **Never load `I` with `C0` or above, never read `C000–FFFF`.** Refresh
   cycles and reads clock the bank register with whatever is on the bus. The
   emulator reports both as faults.
-- **The RAM library must fit `FRAMEBUF`** (192 bytes). The application
-  copies only `STUB_LIB_APP_SIZE` bytes; the variables start right after.
+- **The RAM library overruns `FRAMEBUF`** (192 bytes) at boot. The
+  application copies only `STUB_LIB_APP_SIZE` bytes; the stub copies all of
+  it, over the first 130 bytes of variables. The clock digits once lived
+  there and reset on every power cycle (patch 20).
 - **Binary replies exposed two stock serial bugs**, both fixed in the
   patched build: a `00` byte offered to a busy transmitter was dropped
   (B10), and a `20` byte inside a packet counted as the SPACE key and
