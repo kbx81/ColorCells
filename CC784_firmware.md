@@ -392,8 +392,8 @@ serial RX FIFO *or* the IR decoder and **echoes the previous key on serial TX**,
 so the menu (ADDRESS?, TIME?, PROG MSG?, SEQ MSG? … in `MENU_STRINGS`) can be
 driven from a terminal. `editor_key_to_attr` (`2675`) maps function keys
 `10–1F` to message bytes. `keypad_scan` (`196A`) walks an 8×8 matrix via the
-latch upper nibble and the input mux, but nothing calls it: leftover from the
-models with a wired keypad on a 10-pin IDC header.
+latch upper nibble and the input port, but nothing calls it: the CC784NET
+firmware (§13) uses it for the keypad on the DB9.
 
 ### Editor keys [H — from `editor_dispatch`; remote labels from the owner]
 
@@ -618,3 +618,38 @@ writable in circuit is wired per `AT28C256.md`.
 - The IR carrier frequency (module part number not yet read; 38 or 40 kHz).
 - Full menu/editor semantics (only structurally read), though the label tables
   now give every function key its name.
+
+## 13. The CC784NET firmware [H — from a ROM dump, `78409n1401920145`]
+
+Same code base, built 14-01-92, 13 months before the NIR's. Read from a
+CC784NET (keypad/PC model, no IR hardware, same `CC784-4` board).
+
+| | NET | NIR |
+|---|---|---|
+| ROM ID (`0048`) | `78409n1401920145` | `78409O1702930205` |
+| Code end | `398E` | `3C20` |
+| IR decoder | none | `ir_*` |
+| `keypad_scan` | called from `tick6` and the editor | unreferenced |
+| Input mode | chosen at boot (below) | always serial |
+| Timer ISR | runs the serial bit engines and the row scan every interrupt, at 1302 Hz (4 MHz crystal, hardware notes §3) | 7812.5 Hz tick, ÷6 for the same work |
+| Packet commands and `B4` queries `0`–`3` | same | same |
+| Demo message | "CC700 SERIES MULTI COLOR DISPLAY ... NETWORKABLE FROM YOUR PC" | "ULTIMATE INFRARED REMOTE CONTROL ..." |
+
+**Boot-time mode test** (`13CB`, called from the store/serial init at
+`1376`): sync to a tick
+with `HALT`, interrupts off, then 16 clocks of a `55 55` pattern out on
+`CTRL_LATCH` bits 6 (data, DB9 pin 7) and 5 (clock, DB9 pin 4), sampling
+`PORT_IN` bit 0 (DB9 pin 2) after each clock. If the last 8 samples are all 0
+the flag at `4223` is set: serial mode, the RX/TX bit engines run from the
+timer ISR and `rx_consume` feeds the packet parser. Otherwise keypad mode:
+`tick6` calls `keypad_scan` instead, code `35` (STOP/START) enters the editor,
+and the serial engines never run. The factory cable's pin 2–5 short is what
+makes the test pass; a plain crossover leaves a NET sign deaf.
+
+**Editor keys** are the raw key codes (`00`–`3F`, see hardware notes §6):
+`19` toggles SHIFT, and the charsets are indexed by the code directly, with
+no `IR_KEY_TABLE`.
+
+The timer ISR starts with a check that `(IX)=AA` and `(IY)=55`, the sentinel
+the mode test sets so that its `HALT` returns without running the tick
+machinery. The NIR dropped the check.

@@ -96,6 +96,15 @@ instance for the whole of `pkt_process`. It is why the OTA bank register is a
 separate chip (`CC784_ota.md` §1). The Z80 runs at the full 8 MHz: the
 firmware's per-tick work does not fit 4 MHz (firmware notes §2).
 
+**As designed (the CC784NET board):** 4 MHz crystal, and U10 NANDs Q11 with
+Q12 (pin 1, the trace the NIR cuts), so `/INT` asserts 3072 clocks = 768 µs
+after the acknowledge: 1302 Hz, the rate the NET firmware runs its serial
+engines and row scan at directly. The NIR's 8 MHz crystal and the Q11-only
+bodge give the 7812.5 Hz tick its IR decoder needs; its firmware divides by 6
+to get the same 1302 Hz for everything else. A NET board therefore needs
+both the crystal and the bodge (and an 8 MHz-grade Z80) before it can run the
+NIR firmware.
+
 NMI: 60 Hz from the AC input via a zero-cross detector (`NMI_PER_SEC = 60`).
 With a DC supply the clock would not run; the supplied PSU is AC, so it does.
 
@@ -108,11 +117,11 @@ which had RX on pin 2):
 |---|---|---|---|
 | 3 | U12 pin 18 (1Y1) ← `CTRL_LATCH` bit 4 | sign → PC | **TX** (ACK/NAK, query replies) |
 | 8 | R30 270 Ω → D8/D9 clamp → R7 3.3 k pull-up → U12 → `PORT_IN` bit 3 | PC → sign | **RX** — the only real RS-232 receiver on the board |
-| 4 | U12 pin 16 (1Y2) ← latch bit 5 | sign → PC | never driven by the firmware |
-| 7 | U12 pin 14 (1Y3) ← latch bit 6 | sign → PC | never driven by the firmware |
-| 1 | R8 pull-up → U12 → `PORT_IN` bit 1 | PC → sign | shares the net with the IR receiver output (factory bodge) |
-| 2 | R9 pull-up → U12 → `PORT_IN` bit 0 | PC → sign | not read; the factory cable ties it to pin 5 |
-| 6 | R6 pull-up → U12 → `PORT_IN` bit 2 | PC → sign | not read |
+| 4 | U12 pin 16 (1Y2) ← latch bit 5 | sign → PC | keypad row select bit 1; NIR firmware never drives it |
+| 7 | U12 pin 14 (1Y3) ← latch bit 6 | sign → PC | keypad row select bit 2; NIR firmware never drives it |
+| 1 | R8 pull-up → U12 → `PORT_IN` bit 1 | PC → sign | keypad column code bit 1; shares the net with the IR receiver output (factory bodge) |
+| 2 | R9 pull-up → U12 → `PORT_IN` bit 0 | PC → sign | keypad column code bit 0; the factory cable ties it to pin 5, which is how the NET firmware detects a PC (§6) |
+| 6 | R6 pull-up → U12 → `PORT_IN` bit 2 | PC → sign | keypad column code bit 2; not read by the NIR firmware |
 | 9 | R31 10 Ω from +5 V | sign → PC | +5 V out |
 | 5 | — | — | GND |
 
@@ -168,10 +177,28 @@ data/serial, column clock from port `40`, strobe/latch from port `80`);
 Verified by capture: module output idles high, bursts low, and lengthens each
 burst by ~250 µs relative to the transmitted half-bit (512 µs → ~780 µs).
 
-**10-pin IDC keypad header**: present on an *earlier* model instead of the DB9;
-not on this board. Explains the `keypad_scan` code in the stock ROM (8×8
-matrix through the latch upper nibble and the LS151 muxes), which nothing
-calls; the patched build drops it.
+**Keypad**: plugs into the DB9. The same `CC784-4` board ships as the
+CC784NET (keypad or PC, no IR), and that firmware scans a keypad over the
+seven DB9 signals [H — from the NET ROM, see firmware notes §13]:
+
+| Signal | DB9 | Firmware side |
+|---|---|---|
+| row select, 3 bits (decoded to 8 rows in the keypad) | 3, 4, 7 | `CTRL_LATCH` bits 4–6 |
+| column code, 3 bits (encoded from 8 columns in the keypad) | 2, 1, 6 | `PORT_IN` bits 0–2 |
+| key pressed, active low | 8 | `PORT_IN` bit 3 |
+
+Key code = row × 8 + column (`keypad_scan`, identical in both ROMs; key 0
+is reported as `1E`, which is why the charsets hold `K` at both `00` and
+`1E`). The code indexes the `CHARSET_*` tables directly; the NIR's
+`IR_KEY_TABLE` converts a remote key number into this code, so the remote
+and the keypad share one editor. STOP/START is code `35`, SHIFT is `19`.
+The keypad's decoder and encoder ICs are inferred from the code, not seen.
+
+**PC or keypad?** The NET firmware decides at boot: it clocks a pattern out
+on pins 4 and 7 and samples pin 2; pin 2 low (the factory cable's 2–5 short)
+means serial, anything else means keypad, and in keypad mode the serial
+engines never run. The NIR firmware skips the test and never calls
+`keypad_scan`; the patched build drops it.
 
 ## 7. Power / battery
 
