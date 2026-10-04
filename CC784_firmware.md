@@ -353,7 +353,8 @@ Movement effects are state machines in `fx_*` driven from `main_loop` via
 ## 8. IR remote decoder (`ir_*`, `1482–1571`) [H — verified against a capture of the sign's own receiver]
 
 Runs every tick (128 µs) on `PORT_IN` bit 1 (1 = burst present; the receiver
-module is active-low and the HC14 inverts it). State machine:
+module is active-low and the HC14 inverts it). The remote is a Motorola
+MC14497 PCM transmitter (hardware notes §9). State machine:
 
 1. idle: line quiet for 130 ticks;
 2. leader burst seen, then its end;
@@ -619,7 +620,6 @@ writable in circuit is wired per `AT28C256.md`.
 - Background codes `94–9F` draw no background at all; only `90–93` (black,
   red, green, yellow) do, and a hold (WAIT, HALT) drops the background along
   with the text colour [H — owner].
-- The IR carrier frequency (module part number not yet read; 38 or 40 kHz).
 - Full menu/editor semantics (only structurally read), though the label tables
   now give every function key its name.
 

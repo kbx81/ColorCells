@@ -14,24 +14,25 @@ decoder over every code and sampling phase.
 FRAME (times as TRANSMITTED, i.e. carrier on/off; the sign's receiver stretches every
 burst by ~250 us and the firmware timing is built around that):
 
-    burst 600us                        leader
-    gap   until t = 3140us             (measured from leader start)
-    burst 512 / gap 512                start cell
-    6 x data cell (1024us):            bit 1 = burst 512 then gap 512
-                                       bit 0 = gap 512 then burst 512
+    burst 510us (16 carrier cycles)    leader
+    gap   until t = 3060us             (measured from leader start)
+    burst 510 / gap 510                start cell
+    6 x data cell (1020us):            bit 1 = burst 510 then gap 510
+                                       bit 0 = gap 510 then burst 510
     code = 0x80 | key_index (0..61); 0xBE = key released
 
     Holding a key repeats the frame every ~90 ms. The firmware registers a key on
     its SECOND frame (debounce), auto-repeats after ~1 s at ~4/s (STOP/START never
     repeats), and clears on the release frame. So one keystroke = key frame,
     90 ms, key frame, 90 ms, release frame.
-    Carrier: the sign's module is a 38/40 kHz type; part number not yet read.
+    Carrier: 31.25 kHz nominal (Motorola MC14497 transmitter, 500 kHz resonator / 16),
+    31.4 kHz measured at the remote's driver output, 29 % duty.
 """
 import sys
 
-HALF = 512
-LEADER = 600
-START_AT = 3140
+HALF = 510
+LEADER = 510
+START_AT = 3060
 REPEAT_MS = 90
 RELEASE = 0x3E
 
@@ -133,7 +134,7 @@ def main():
     elif cmd == 'yaml':
         for n in names:
             i = key_index(n)
-            print('- remote_transmitter.transmit_raw:\n    carrier_frequency: 38kHz   # try 40kHz if unresponsive\n    code: [%s]'
+            print('- remote_transmitter.transmit_raw:\n    carrier_frequency: 31400Hz\n    code: [%s]'
                   % ', '.join(('+%d' if x > 0 else '%d') % x for x in keystroke(i)))
     else:
         raise SystemExit('commands: map | raw KEY... | yaml KEY...')

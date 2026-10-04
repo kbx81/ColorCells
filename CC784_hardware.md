@@ -37,7 +37,7 @@ Confidence key as in the firmware notes: **[H]** verified, **[M]** inferred,
 | SK2 | 24-pin connector | display panel (§6) |
 | J | DB9 male | serial (§4) |
 | — | "NICAD BATTERY" footprint | RAM backup; **was fitted, removed (leaking)** |
-| — | 3-pin header (right edge, glued) | IR receiver module (38/40 kHz type, 5 V) |
+| — | 3-pin header (right edge, glued) | IR receiver module (5 V; the remote's carrier is 31.4 kHz, §9) |
 | — | barrel jack | 9 V **AC** in (supplied PSU: 9 V AC, 4.2 A transformer) |
 | — | piezo/speaker near SK2 | beeper (`07` command) |
 
@@ -238,9 +238,15 @@ double row write (§5).
 
 Still open:
 
-- **The IR carrier frequency** — read the receiver module's part number
-  (38 vs 40 kHz); a TSOP38238 chopped the bursts, so the remote may not be
-  38 kHz.
+- **The IR carrier is 31.25 kHz nominal, 31.4 measured.** The remote is a
+  Motorola MC14497P PCM transmitter on a 500 kHz ceramic resonator (board
+  BP0300346B, 62 keys, two IR LEDs); the chip's carrier is the oscillator
+  divided by 16 and its bit cell is 512 oscillator cycles, 1024 µs. Logic
+  analyzer on its driver output: 31.88 µs period, 29 % duty, every burst 16
+  cycles = 510 µs, start burst 3.06 ms after the leader, frames every
+  89.8 ms. A 30 kHz receiver (TSOP4830/TSOP38230 class) is the closest
+  replacement, 33 kHz the next; a 38 kHz part is 17 % off and chops the
+  bursts.
 - **The panel side of SK2:** what takes the serial column data (more
   HC164s? driver ICs?) and how the 86th column is handled.
 - Background codes `94–9F` draw no background (watched on the sign); the
