@@ -145,6 +145,12 @@ bytes of the bank are free.
     scratch bytes; `CLK_RUN` stays, since the init image rewrites it on every
     boot. An `ASSERT` keeps the library below `STORE_END`, and `ram` in the
     emulator checks that a set clock survives a reset.
+25. **Restarts stop scanning at the store's end.** `store_repair` runs on
+    every restart and made three passes over the store's whole capacity,
+    15 K on a 62256, about a second with the panel dark. The passes now stop
+    at the first `DA`; a store that has lost its `DA` still gets the full
+    scan and the repair. Boot is now the CRC pass alone, and a restart after
+    an edit of the playing channel is back on the panel in milliseconds.
 24. **Text without a channel goes to channel 0.** The insertion point is
     derived from the renderer's cursor; while the demo plays that cursor is
     in ROM and the demo channel's lock (`CHAN_LOCK`) makes every insert a

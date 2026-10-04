@@ -1305,6 +1305,23 @@ chan_error:
 ; ---- store_repair: every boot: bad bytes -> ?, stray 03 -> space, then re-sequence
 ;      the 100 channel markers and re-terminate (recovers a corrupted store)
 store_repair:
+        ; P25: the three whole-store passes stop at the first DA, the store's
+        ; end; a store that has lost its DA still gets the full scan
+        LD HL,MSG_STORE
+        LD BC,(STORE_SIZE)
+        LD A,0xda
+        CPIR
+        LD DE,MSG_STORE
+        JR nz,repair_full
+        OR A
+        SBC HL,DE               ; bytes up to and including the DA
+        JR repair_bound
+
+repair_full:
+        LD HL,(STORE_SIZE)
+
+repair_bound:
+        LD (STORE_TMP),HL
         CALL store_fix_bad_bytes
         CALL store_strip_ends
         LD HL,MSG_STORE
@@ -1395,7 +1412,7 @@ repair_terminate:
 
 store_fix_bad_bytes:
         LD HL,MSG_STORE
-        LD BC,(STORE_SIZE)
+        LD BC,(STORE_TMP)
         LD D,0
 
 fixbad_loop:
@@ -1416,7 +1433,7 @@ fixbad_next:
 
 store_strip_ends:
         LD HL,MSG_STORE
-        LD BC,(STORE_SIZE)
+        LD BC,(STORE_TMP)
 
 strip_loop:
         LD A,(HL)
@@ -1434,7 +1451,7 @@ strip_next:
 
 store_add_ends:
         LD IX,MSG_STORE+2
-        LD BC,(STORE_SIZE)
+        LD BC,(STORE_TMP)
         DEC BC
         DEC BC
 

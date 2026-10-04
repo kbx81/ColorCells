@@ -880,6 +880,16 @@ def cmd_ram():
         after = s2.ram('CLK_H10', 6)
         check('%s: clock %s kept across a reset (%s), running' % (name, before.hex(), after.hex()),
               before[:2] == bytes([1, 0]) and after[:4] == before[:4] and after[5] == before[5] and s2.ram('CLK_RUN')[0])
+        # P25: the repair passes stop at the DA; a store that lost it still gets repaired
+        end = int.from_bytes(s2.ram('STORE_END', 2), 'little')
+        s2.m.memory[end] = 0x58
+        s3 = Sign(rom, syms, fresh_ram=True, ram8k=ram8k)
+        s3.m.set_memory_block(0x4000, bytes(s2.m.memory[0x4000:0x8000]))
+        s3.run_ms(3000)
+        r = reply(s3, b'\xb4\x31')
+        end3 = int.from_bytes(s3.ram('STORE_END', 2), 'little')
+        check('%s: store without its DA repaired at reset (B4 1 %s, DA back at %04x)' % (name, r[3:13], end3),
+              len(r) >= 13 and r[3:13].isdigit() and s3.m.memory[end3] == 0xDA and not s3.faults)
     print('RAM sizes: %d/%d checks pass' % (sum(checks), len(checks)))
     return all(checks)
 
@@ -943,8 +953,11 @@ def cmd_quiet():
     d = dump(s)
     check('dump has the loaded channels (%d bytes)' % len(d), text1 in d and b'THIRD ' * 40 in d)
     # the playing channel is edited: that restarts, and the new text is what plays
-    tx = send(s, b'\x09\x30\x30\x0e' + b'REPLACED ' * 10)
-    check('edit of the playing channel restarts (%02x), ACK+DONE %s' % (s.ram('PKT_RESTART')[0], tx.hex()), s.ram('PKT_RESTART')[0] == 0xFF and tx == b'\x06\x04')
+    s.tx_edges.clear()
+    s.send_frame(b'\x09\x30\x30\x0e' + b'REPLACED ' * 10, addr=1, flag=0x81); s.rx_wait()
+    s.frames.clear(); s.run_ms(150); quick = len(s.frames); s.run_ms(2850); tx = s.tx_bytes()
+    check('edit of the playing channel restarts (%02x), ACK+DONE %s, text back on the panel within 150 ms (%d frames, P25)'
+          % (s.ram('PKT_RESTART')[0], tx.hex(), quick), s.ram('PKT_RESTART')[0] == 0xFF and tx == b'\x06\x04' and quick >= 3)
     # a lower channel changes size while a higher one plays: the renderer is shifted, not restarted
     send(s, b'\x04\x30\x31', wait_ms=500)           # sequence = channel 1 only, from the next channel on
     for _ in range(60):                             # wait until channel 1 is the one playing
