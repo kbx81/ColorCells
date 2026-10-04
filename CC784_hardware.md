@@ -102,8 +102,8 @@ after the acknowledge: 1302 Hz, the rate the NET firmware runs its serial
 engines and row scan at directly. The NIR's 8 MHz crystal and the Q11-only
 bodge give the 7812.5 Hz tick its IR decoder needs; its firmware divides by 6
 to get the same 1302 Hz for everything else. A NET board therefore needs
-both the crystal and the bodge (and an 8 MHz-grade Z80) before it can run the
-NIR firmware.
+both the crystal and the bodge before it can run the NIR firmware; done on
+2026-10-03, and its Z8400A (4 MHz grade) runs the patched firmware at 8 MHz.
 
 NMI: 60 Hz from the AC input via a zero-cross detector (`NMI_PER_SEC = 60`).
 With a DC supply the clock would not run; the supplied PSU is AC, so it does.
@@ -218,6 +218,8 @@ Without a battery the sign boots with address 0 and an empty store.
 
 - Z80 pin 4 (A14) → ROM socket pin 27 (A14): the layout was cut for a
   27128; a 27C256 needed a real A14.
+- The RAM footprint is a 24-pin socket. The 6264's pins 1, 2, 27 and 28
+  hang outside it, with the wires below soldered straight to the legs.
 - Z80 pin 22 (`/WR`) → RAM pin 27 (`/WE`).
 - U13 pin 8 (CS2) → RAM pin 26.
 - U18 pin 11 → J2 pin 11 (the panel column clock), cut from its original
