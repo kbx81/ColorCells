@@ -161,20 +161,41 @@ would probably work through the 220 Ω but is unverified.
   ANDed with U5 Q7 in U10 to blank flashing columns on the off phase. U9 Q7
   is latched from **A5**, not the data bus, and drives the beeper through
   Q8: `OUT (68+row)` beeps.
-- The panel is 7 rows × 84 columns (CC**784**); the firmware carries 86
-  columns per row and clocks 85 zeros to clear the chain.
+- **The panel** [H — owner]: two PCBs of 7 × 42, red and green LEDs
+  alternating per column (right-most green, left-most red), common anode per
+  row from TR1–TR7 at +9 V, cathodes per column into ULN2003As (six per
+  PCB) driven by 74LS164s (six per PCB) in one daisy chain. Each PCB's last
+  '164 uses two outputs and passes the second on to the next PCB, so the
+  six unused outputs are off the data path and the chain is exactly 84
+  stages with no latch. The firmware's 86 bits per row are 84 columns plus
+  two that fall off the far end (`FRAMEBUF` is 86 wide), and its 85 zeros
+  flush the chain; the row is blanked while shifting and selected after.
+  Single-colour text therefore lights every other column; yellow lights
+  both.
+- **Background codes** `94–9F` draw no background (watched on the sign); the
+  two hardware background bits make only `90–93` useful.
 
 ## 6. Connectors
 
 **SK2 (24-pin, to the LED panel)**, counted from the board's bottom corner
 (user's tracing): pins 1–7 LED rows (from TR1–TR7); 8–9 V+ (rectified 9 V AC,
-unregulated); 10–12 column data, column clock (port `40`) and strobe (port
-`80`), per the schematic; 13–14 GND. Remaining pins not yet noted.
+unregulated); 10 column data, 11 column clock (port `40`); 12 is the port
+`80` strobe but is not connected on the panel; 13–14 GND.
 
 **IR header**: 3 pins — 5 V, GND, signal — glued near U18. Signal → HC14 →
 `PORT_IN` bit 1 (one inversion; active-low module output becomes 1 = burst).
 Verified by capture: module output idles high, bursts low, and lengthens each
 burst by ~250 µs relative to the transmitted half-bit (512 µs → ~780 µs).
+
+**The IR carrier is 31.25 kHz nominal, 31.4 measured.** The remote is a
+Motorola MC14497P PCM transmitter on a 500 kHz ceramic resonator (board
+BP0300346B, 62 keys, two IR LEDs); the chip's carrier is the oscillator
+divided by 16 and its bit cell is 512 oscillator cycles, 1024 µs. Logic
+analyzer on its driver output: 31.88 µs period, 29 % duty, every burst 16
+cycles = 510 µs, start burst 3.06 ms after the leader, frames every
+89.8 ms. A 30 kHz receiver (TSOP4830/TSOP38230 class) is the closest
+replacement, 33 kHz the next; a 38 kHz part is 17 % off and chops the
+bursts.
 
 **Keypad**: plugs into the DB9. The same `CC784-4` board ships as the
 CC784NET (keypad or PC, no IR), and that firmware scans a keypad over the
@@ -236,21 +257,13 @@ input port (§4, the '244, not a mux), SK2 pins 10–12 (data, clock, strobe),
 the bodge wires (§8), the battery path (§7), the `OUT (40)` role and the
 double row write (§5).
 
+Answered on the bench (2026-10): the IR carrier and the remote's chip (§6),
+the panel's construction (§5), the background codes (§5).
+
 Still open:
 
-- **The IR carrier is 31.25 kHz nominal, 31.4 measured.** The remote is a
-  Motorola MC14497P PCM transmitter on a 500 kHz ceramic resonator (board
-  BP0300346B, 62 keys, two IR LEDs); the chip's carrier is the oscillator
-  divided by 16 and its bit cell is 512 oscillator cycles, 1024 µs. Logic
-  analyzer on its driver output: 31.88 µs period, 29 % duty, every burst 16
-  cycles = 510 µs, start burst 3.06 ms after the leader, frames every
-  89.8 ms. A 30 kHz receiver (TSOP4830/TSOP38230 class) is the closest
-  replacement, 33 kHz the next; a 38 kHz part is 17 % off and chops the
-  bursts.
-- **The panel side of SK2:** what takes the serial column data (more
-  HC164s? driver ICs?) and how the 86th column is handled.
-- Background codes `94–9F` draw no background (watched on the sign); the
-  two hardware background bits make only `90–93` useful.
+- **Direct 3.3 V TTL serial** without a MAX3232 (§4): probable, unverified.
+- **SK2 pins 15–24:** which are used on the panel side.
 
 ## 10. Verified-on-hardware summary
 
