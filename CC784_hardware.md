@@ -34,7 +34,7 @@ Confidence key as in the firmware notes: **[H]** verified, **[M]** inferred,
 | Q8, Q9 | BC548 | beeper driver; power-fail detector for CS2 (§7) |
 | C1, C2 | 4700 µF 16 V | bulk filter |
 | R4, D3 | 220 Ω, diode | battery charge/discharge path and the `+5VP` rail (§7) |
-| SK2 | 24-pin connector | display panel (§6) |
+| SK2 | 14-pin connector | display panel (§6) |
 | J | DB9 male | serial (§4) |
 | — | "NICAD BATTERY" footprint | RAM backup; **was fitted, removed (leaking)** |
 | — | 3-pin header (right edge, glued) | IR receiver module (5 V; the remote's carrier is 31.4 kHz, §9) |
@@ -180,7 +180,7 @@ would probably work through the 220 Ω but is unverified.
 
 ## 6. Connectors
 
-**SK2 (24-pin, to the LED panel)**, counted from the board's bottom corner
+**SK2 (14-pin, to the LED panel)**, counted from the board's bottom corner
 (user's tracing): pins 1–7 LED rows (from TR1–TR7); 8–9 V+ (rectified 9 V AC,
 unregulated); 10 column data, 11 column clock (port `40`); 12 is the port
 `80` strobe but is not connected on the panel; 13–14 GND.
@@ -266,7 +266,6 @@ the panel's construction (§5), the background codes (§5).
 Still open:
 
 - **Direct 3.3 V TTL serial** without a MAX3232 (§4): probable, unverified.
-- **SK2 pins 15–24:** which are used on the panel side.
 
 ## 10. Verified-on-hardware summary
 
