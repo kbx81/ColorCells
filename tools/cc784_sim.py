@@ -911,6 +911,11 @@ def cmd_quiet():
 
     s = Sign(rom, syms, fresh_ram=True)
     s.run_ms(2500)
+    send(s, b'BARE TEXT', wait_ms=2000)             # no CHANNEL command while the demo plays
+    restarted = s.ram('PKT_RESTART')[0]
+    d = dump(s)
+    check('bare text while the demo plays lands in channel 0 (P24): restart %02x, ROM writes %d' % (restarted, s.rom_writes),
+          b'BARE TEXT' in d and d.index(b'BARE TEXT') == 2 and s.rom_writes == 0 and restarted == 0xFF)
     send(s, FX_PLAIN, wait_ms=4000)                 # channel 0 replaces the demo: a restart
     check('first message while the demo plays restarts the display (%02x)' % s.ram('PKT_RESTART')[0], s.ram('PKT_RESTART')[0] == 0xFF)
     before = word(s, 'STORE_CURSOR')

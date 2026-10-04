@@ -145,6 +145,11 @@ bytes of the bank are free.
     scratch bytes; `CLK_RUN` stays, since the init image rewrites it on every
     boot. An `ASSERT` keeps the library below `STORE_END`, and `ram` in the
     emulator checks that a set clock survives a reset.
+24. **Text without a channel goes to channel 0.** The insertion point is
+    derived from the renderer's cursor; while the demo plays that cursor is
+    in ROM and the demo channel's lock (`CHAN_LOCK`) makes every insert a
+    no-op, so the text was ACKed and dropped. A cursor below `MSG_STORE` now
+    clears the lock and seats on channel 0 as `09 30 30 0E` would.
 23. **Set-time starts the minute at :00.** `17 hhmm a` carries no seconds
     and left `CLK_SEC` and the mains-tick count as they were, so the clock
     came up anywhere inside the minute. Both are zeroed now, and the host

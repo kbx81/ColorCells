@@ -6952,6 +6952,16 @@ pkt_entry_nodone:
         LD HL,0xffff
         LD (PKT_LOW_EDIT),HL
         LD HL,(STORE_CURSOR)
+        LD DE,MSG_STORE
+        OR A
+        SBC HL,DE
+        JR nc,pkt_cursor_in_store
+        CALL clear_chan_lock    ; P24: the renderer is in ROM (demo) or the test
+        LD HL,MSG_STORE+1       ; buffer, and the demo channel's lock is on: take
+        JP pkt_set_ins          ; channel 0, seated as 09 30 30 0E leaves it
+
+pkt_cursor_in_store:
+        LD HL,(STORE_CURSOR)
         LD A,(HL)
         CP 0xd0
         JP c,pkt_find_marker

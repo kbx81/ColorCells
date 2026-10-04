@@ -612,10 +612,10 @@ writable in circuit is wired per `AT28C256.md`.
   reset every frame-buffer colour byte to it and effects force the row lead
   colour to it, so HALT and WAIT turn the held text yellow [H — owner].
 - Text sent without a CHANNEL command while the sign is playing the ROM demo
-  (after a bare CLEAR_ALL, or on an empty sign) is ACKed and lost: the
-  insertion point is derived from the renderer's cursor, which is in ROM,
-  and the EEPROM's write protection swallows the bytes [H — watched: a
-  dump afterwards shows an empty store]. NETCC always sends CHANNEL first.
+  (after a bare CLEAR_ALL, or on an empty sign) is ACKed and dropped: the
+  demo channel carries `CHAN_LOCK`, which turns every insert into a no-op
+  [H — watched: a dump afterwards shows an empty store]. NETCC always
+  sends CHANNEL first. Fixed by patch 24.
 - Background codes `94–9F` draw no background at all; only `90–93` (black,
   red, green, yellow) do, and a hold (WAIT, HALT) drops the background along
   with the text colour [H — owner].
