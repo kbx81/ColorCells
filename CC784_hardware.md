@@ -168,9 +168,8 @@ would probably work through the 220 Ω but is unverified.
 
 **SK2 (24-pin, to the LED panel)**, counted from the board's bottom corner
 (user's tracing): pins 1–7 LED rows (from TR1–TR7); 8–9 V+ (rectified 9 V AC,
-unregulated); 10–12 three data lines (**to be identified** — expect column
-data/serial, column clock from port `40`, strobe/latch from port `80`);
-13–14 GND. Remaining pins not yet noted.
+unregulated); 10–12 column data, column clock (port `40`) and strobe (port
+`80`), per the schematic; 13–14 GND. Remaining pins not yet noted.
 
 **IR header**: 3 pins — 5 V, GND, signal — glued near U18. Signal → HC14 →
 `PORT_IN` bit 1 (one inversion; active-low module output becomes 1 = burst).
@@ -244,10 +243,8 @@ Still open:
   38 kHz.
 - **The panel side of SK2:** what takes the serial column data (more
   HC164s? driver ICs?) and how the 86th column is handled.
-- **Background colour codes `94–9F`:** only two background bits exist in
-  hardware, so they should alias `90–93`; not watched for on the sign.
-- **Effects `BB`/`BD`/`BE`** and HALT/WAIT turning the held text yellow:
-  traced in the firmware, not yet watched for.
+- Background codes `94–9F` draw no background (watched on the sign); the
+  two hardware background bits make only `90–93` useful.
 
 ## 10. Verified-on-hardware summary
 

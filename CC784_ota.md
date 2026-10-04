@@ -188,7 +188,7 @@ The `OTA: emulator regression` task runs the six fast ones.
 ## 7. Not built
 
 - **Layout pinning** (`ALIGN 64` slack between modules, fixed `ORG`s for the
-  tables) so that small code edits stay small pushes. There are ~320 bytes
+  tables) so that small code edits stay small pushes. There are ~600 bytes
   of bank free, not enough yet.
 
 ## 8. Gotchas

@@ -601,20 +601,24 @@ writable in circuit is wired per `AT28C256.md`.
 
 ## 12. What is still unknown in the firmware
 
-- `BB`/`BD`/`B9`/`1D` are traced (§7 engine internals) but not yet watched
-  for on hardware.
+- `BB` HOLD blanks the display and wipes the held text in from right to
+  left [H — owner]; `18` LEFT is the plain scroll, the effect to name after a
+  PAUSE, HOLD, UP, DOWN or RIGHT section to get scrolling text back. `BD`
+  MAGIC OFF ends MAGIC's automatic colouring and fonts; `B9`
+  THIN goes with PAUSE, UP, DOWN, LEFT or RIGHT to keep text that stops on
+  the display in the normal font, since held text is otherwise drawn bold
+  [H — owner].
 - `8F` is **YELLOW** [H — owner], the default text colour. `fx_halt` and WAIT
   reset every frame-buffer colour byte to it and effects force the row lead
-  colour to it, so HALT/WAIT should turn the held text yellow. Not yet
-  watched for on the sign.
-- A bare CLEAR_ALL packet leaves `chan_select` fed with a garbage channel (A is
-  `store_finalize`'s leftover `B|C`) and the error return unchecked, so the
-  cursor lands near channel 99's marker. NETCC always follows CLEAR_ALL with
-  CHANNEL and DELETE_TEXT, which re-seat it, so this is a trap only for
-  hand-built packets.
-- Background codes `94–9F`. `COLOUR_NAME_TABLE` shows only four distinct
-  background names (B-BLK, B-RED, B-YEL, B-GRE) repeated four times across the
-  16 slots, so `94–9F` may simply alias `90–93`. Untested on hardware.
+  colour to it, so HALT and WAIT turn the held text yellow [H — owner].
+- Text sent without a CHANNEL command while the sign is playing the ROM demo
+  (after a bare CLEAR_ALL, or on an empty sign) is ACKed and lost: the
+  insertion point is derived from the renderer's cursor, which is in ROM,
+  and the EEPROM's write protection swallows the bytes [H — watched: a
+  dump afterwards shows an empty store]. NETCC always sends CHANNEL first.
+- Background codes `94–9F` draw no background at all; only `90–93` (black,
+  red, green, yellow) do, and a hold (WAIT, HALT) drops the background along
+  with the text colour [H — owner].
 - The IR carrier frequency (module part number not yet read; 38 or 40 kHz).
 - Full menu/editor semantics (only structurally read), though the label tables
   now give every function key its name.
