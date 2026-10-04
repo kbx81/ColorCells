@@ -265,6 +265,8 @@ bytes of the bank are free.
 - **Patches 10–11** — OTA pushes over the ESPHome bridge: identical image,
   one-page, ~100-page and interrupted-then-resumed updates, all booted and
   confirmed; the store survives every reboot.
+- **Patch 25** — replacing the playing channel restarts the display
+  visibly faster than before; the dark second is gone.
 - **Patch 24** — after a bare CLEAR_ALL, text sent with no CHANNEL command
   lands in channel 0 and plays; the dump shows it there.
 - **Patch 23** — `time` from the PC: the sign's minute changes within a
