@@ -55,7 +55,7 @@ LATCH_BIT7           equ RAM_VARS+0x080   ; 00/80 toggled every 13 frames, OR-ed
 COLOR_PENDING        equ RAM_VARS+0x081   ; editor: COLOR key pressed, next key is the colour digit
 GRAPH_PENDING        equ RAM_VARS+0x082   ; editor: GRAPH key pressed, next key selects A0-AF
 ROW_COLOUR           equ RAM_VARS+0x083   ; colour byte sent ahead of each row
-QUERIES_ENABLED      equ RAM_VARS+0x084   ; FF after boot; gates query_dispatch
+QUERIES_ENABLED      equ RAM_VARS+0x084   ; unused since P22 (gated the editor's typed queries)
 MENU_MSG_FLAG        equ RAM_VARS+0x085   ; FF = editor has a message to display
 EDIT_KEY             equ RAM_VARS+0x086   ; key/character the editor is processing (0 = none)
 RX_BYTE              equ RAM_VARS+0x087
@@ -3737,7 +3737,6 @@ clr_seq_loop:
 ;      0x43DC = free text bytes, the scan bound used by store_repair at 0x0481.
 store_init:
         LD A,0xff
-        LD (QUERIES_ENABLED),A
         ; P13: which chip? An 8 K RAM mirrors 6000 onto 4000. FRAMEBUF is
         ; scratch at this point (the stub's library copy, cleared by init_render).
         LD A,0x55
@@ -4399,166 +4398,6 @@ txf_data_loop:
         DJNZ txf_data_loop
         LD A,E
         CALL tx_send_byte
-        POP IY
-        POP IX
-        POP HL
-        POP DE
-        POP BC
-        POP AF
-        RET
-
-; ---- editor_query_hook: serve B4 queries typed into the editor; when one is
-;      consumed, drop the caller and fetch the next key
-editor_query_hook:
-        CALL query_dispatch
-        LD A,(EDIT_KEY)
-        AND A
-        RET nz
-        POP HL
-        POP HL
-        JP editor_next_key
-
-; ---- query_dispatch: 0xB4 + '0'..'3' query handlers
-query_dispatch:
-        LD A,(QUERIES_ENABLED)
-        AND A
-        RET z
-        LD A,(EDIT_KEY)
-        CP CMD_QUERY
-        RET nz
-        CALL menu_getchar
-        CP QUERY_ROMID
-        JP z,query_0_romid
-        CP QUERY_MEMORY
-        JP z,query_1_memory
-        CP QUERY_NOP
-        JP z,query_2_nop
-        CP QUERY_DUMP
-        JP z,query_3_dump
-        RET
-
-; ---- query_2_nop: B4 '2' does nothing
-query_2_nop:
-        RET
-
-; ---- query_0_romid: B4 '0': reply with 16-byte ROM ID string
-query_0_romid:
-        PUSH AF
-        PUSH BC
-        PUSH DE
-        PUSH HL
-        PUSH IX
-        PUSH IY
-        LD HL,TXBUF
-        LD (HL),0x10
-        INC HL
-        LD DE,ROM_ID            ; stock: the raw 0048 in four pieces
-        LD BC,3
-        EX DE,HL
-        LDIR
-        LD HL,ROM_ID+3
-        LD BC,3
-        LDIR
-        LD HL,ROM_ID+6
-        LD BC,6
-        LDIR
-        LD HL,ROM_ID+12
-        LD BC,4
-        LDIR
-        LD HL,TXBUF
-        CALL tx_send_frame
-        XOR A
-        LD (EDIT_KEY),A
-        POP IY
-        POP IX
-        POP HL
-        POP DE
-        POP BC
-        POP AF
-        RET
-
-; ---- query_1_memory: B4 '1': reply with two 5-digit ASCII numbers (STORE_SIZE, free bytes)
-query_1_memory:
-        PUSH AF
-        PUSH BC
-        PUSH DE
-        PUSH HL
-        PUSH IX
-        PUSH IY
-        CALL store_finalize
-        LD HL,TXBUF
-        LD (HL),10
-        INC HL
-        PUSH HL
-        POP IX
-        LD HL,(STORE_SIZE)
-        CALL bin_to_dec5
-        PUSH IX
-        LD HL,(STORE_LIMIT)
-        LD DE,(STORE_END)
-        OR A
-        SBC HL,DE
-        POP IX
-        CALL bin_to_dec5
-        LD HL,TXBUF
-        CALL tx_send_frame
-        XOR A
-        LD (EDIT_KEY),A
-        POP IY
-        POP IX
-        POP HL
-        POP DE
-        POP BC
-        POP AF
-        RET
-
-; ---- query_3_dump: B4 '3': reply B1 addr <5-digit len> <MSG_STORE up to 0xDA> <cksum of data>
-query_3_dump:
-        PUSH AF
-        PUSH BC
-        PUSH DE
-        PUSH HL
-        PUSH IX
-        PUSH IY
-        LD A,0xb1
-        CALL tx_send_byte
-        LD A,(MY_ADDRESS)
-        CALL tx_send_byte
-        LD HL,(STORE_END)
-        INC HL
-        LD DE,MSG_STORE
-        OR A
-        SBC HL,DE
-        LD IX,TXBUF
-        CALL bin_to_dec5
-        LD HL,TXBUF
-        LD B,5
-
-dump_len_loop:
-        LD A,(HL)
-        CALL tx_send_byte
-        INC HL
-        DJNZ dump_len_loop
-        LD HL,MSG_STORE
-        LD E,0
-
-dump_data_loop:
-        LD A,(HL)
-        ADD A,E
-        LD E,A
-        LD A,(HL)
-        CALL tx_send_byte
-        LD A,(HL)
-        CP 0xda
-        JP z,dump_cksum
-        INC HL
-        JP dump_data_loop
-
-dump_cksum:
-        LD A,E
-        CALL tx_send_byte
-        XOR A
-        LD (EDIT_KEY),A
         POP IY
         POP IX
         POP HL
@@ -6472,7 +6311,6 @@ editor_translate_key:
         CALL apply_colour_prefix
         CALL apply_speed_prefix
         CALL editor_key_to_attr
-        CALL editor_query_hook
         RET
 
 ; ---- apply_graph_prefix: GRAPH n -> A0|n
@@ -7461,7 +7299,7 @@ cmd_0E_delete_text:
 cmd_B4_query:
         ; P21: the reply is handed to the background transmitter and the
         ; display keeps running. The query ends the packet: the frame is built
-        ; over PKT_BUF. (The editor's typed queries still use query_dispatch.)
+        ; over PKT_BUF.
         CALL pkt_next_byte
         CP QUERY_ROMID
         JR z,pq_romid

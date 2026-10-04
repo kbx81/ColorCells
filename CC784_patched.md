@@ -145,6 +145,11 @@ bytes of the bank are free.
     scratch bytes; `CLK_RUN` stays, since the init image rewrites it on every
     boot. An `ASSERT` keeps the library below `STORE_END`, and `ram` in the
     emulator checks that a set clock survives a reset.
+22. **Typed queries removed** (−270 bytes). The editor hooked `B4` plus a
+    digit typed as keys and answered with its own copies of the three query
+    replies on the serial line, which only a terminal driving the menus
+    could ever see. `editor_query_hook`, `query_dispatch` and the three
+    handlers are gone; packets keep theirs. `QUERIES_ENABLED` is now unused.
 21. **Packets are processed by the render loop.** Nothing in the interrupt
     context reads the message store, so `pkt_process` now runs as a
     subroutine of the render loop (`pkt_poll`, called at every render step
