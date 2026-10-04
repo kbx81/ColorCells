@@ -8543,9 +8543,8 @@ CHARSET_EURO:
 ;      sales pitch (~700 bytes) down to a line that still exercises the fonts
 ;      and colours; the room went to the render-loop packet processing.
 DEMO_MESSAGE:
-        db 0x12,"COLOR CELLS ",0x11,0x8c,"CC784 ",0xbc,"MULTI-COLOR DISPLAY ",0x8f
-        db 0x10,"LARGE ",0x13,"ITALIC ",0x11,0x14,"FLASH ",0x11,0xbe,"TINY ",0x11
-        db 0x83,"READY FOR A MESSAGE",0x03,0xdb
+        db 0x12,"COLOR CELLS ",0x13,0x8c,"CC784 ",0x11,0xbc,0x14,"MULTI-COLOR DISPLAY"
+        db 0xbe,"TINY PRICE",0x10,"LARGE IMPACT",0x03,0xdb
 
 ; ---- TEST_MESSAGE: built-in test pattern (test_mode_enter). Sits inside the demo
 ;      text block but is a separate message with its own 0x03 terminator.

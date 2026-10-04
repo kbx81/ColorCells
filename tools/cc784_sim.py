@@ -612,7 +612,7 @@ def cmd_update():
         checks.append(bool(cond)); print('  %s %s' % ('ok  ' if cond else 'FAIL', name))
 
     # the "new firmware": the same app with one demo-message byte changed
-    new_app = app.replace(b'READY FOR A MESSAGE', b'READY FOR AN UPDATE')
+    new_app = app.replace(b'LARGE IMPACT', b'LARGE UPDATE')
     assert new_app != app
     b1, b0 = cc784_ota.pack(app, 1), cc784_ota.pack(app, 0)
     new_bank = cc784_ota.pack(new_app, 2)
@@ -760,7 +760,7 @@ def cmd_push():
     import cc784, cc784_ota
     rom, syms = assemble(HERE.parent / 'src' / 'patched')
     app = rom[:BANK_SIZE]
-    new_app = app.replace(b'READY FOR A MESSAGE', b'READY FOR AN UPDATE')
+    new_app = app.replace(b'LARGE IMPACT', b'LARGE UPDATE')
     new_bank = cc784_ota.pack(new_app, 7)
     s = Sign(cc784_ota.pack(app, 1) + cc784_ota.pack(app, 0), syms, fresh_ram=True, sdp=False)
     s.run_ms(2500)
@@ -781,7 +781,7 @@ def cmd_fuzz(runs=100, seed=1):
     import cc784_ota
     rom, syms = assemble(HERE.parent / 'src' / 'patched')
     app = rom[:BANK_SIZE]
-    new_app = app.replace(b'READY FOR A MESSAGE', b'READY FOR AN UPDATE')
+    new_app = app.replace(b'LARGE IMPACT', b'LARGE UPDATE')
     old_bank, new_bank = cc784_ota.pack(app, 1), cc784_ota.pack(new_app, 2)
     base = cc784_ota.pack(app, 0)
     pages = [p for p in cc784_ota.changed_pages(base, new_bank) if p != 255] + [0x40, 0x41, 0x42]
