@@ -167,9 +167,12 @@ would probably work through the 220 Ω but is unverified.
   PCB) driven by 74LS164s (six per PCB) in one daisy chain. Each PCB's last
   '164 uses two outputs and passes the second on to the next PCB, so the
   six unused outputs are off the data path and the chain is exactly 84
-  stages with no latch. The firmware's 86 bits per row are 84 columns plus
-  two that fall off the far end (`FRAMEBUF` is 86 wide), and its 85 zeros
-  flush the chain; the row is blanked while shifting and selected after.
+  stages with no latch. SK2 lands on the right-hand PCB and the data shifts
+  right to left, so of the firmware's 86 bits per row the first two sent
+  fall off the left edge, the third is the left-most (red) column and the
+  last is the right-most (green): `FRAMEBUF` reads left to right with a
+  two-column margin at its start. The 85 zeros of `shift_chain_clear` flush
+  the chain; the row is blanked while shifting and selected after.
   Single-colour text therefore lights every other column; yellow lights
   both.
 - **Background codes** `94–9F` draw no background (watched on the sign); the
