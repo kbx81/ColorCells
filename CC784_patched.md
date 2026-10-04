@@ -254,6 +254,8 @@ bytes of the bank are free.
 - **Patches 10–11** — OTA pushes over the ESPHome bridge: identical image,
   one-page, ~100-page and interrupted-then-resumed updates, all booted and
   confirmed; the store survives every reboot.
+- **Patch 23** — `time` from the PC: the sign's minute changes within a
+  second of the PC's.
 - **Patch 21** — messages loaded into other channels, queries and a store
   dump mid-scroll: the text keeps scrolling, with a pause of a few frames
   while the packet is processed; no blank, no restart. A DONE follows each
