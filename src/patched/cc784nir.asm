@@ -7777,6 +7777,9 @@ settime_digits:
 
 settime_store_pm:
         LD (CLK_PM),A
+        XOR A                   ; P23: the new minute starts at :00, like the
+        LD (CLK_SEC),A          ; host tool times the frame to land
+        LD (NMI_COUNT),A
         LD A,0xff
         LD (CLK_RUN),A
         JP pkt_next

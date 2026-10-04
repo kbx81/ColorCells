@@ -342,10 +342,17 @@ def run(link, a, ap):
     elif c == 'seq':
         s.send_frame(b'\x04' + b''.join(chan(int(x)) for x in args))
     elif c == 'time':
+        # the protocol carries no seconds, and the sign starts the new minute at
+        # :00 (patch 23), so the frame is timed to be processed on the minute:
+        # 7 bytes on the wire take 0.23 s
         now = datetime.datetime.now()
-        h = now.hour % 12 or 12
-        s.send_frame(b'\x17' + b'%02d%02d' % (h, now.minute) + (b'Y' if now.hour < 12 else b'N'))
-        print("  set to %02d:%02d %s" % (h, now.minute, 'AM' if now.hour < 12 else 'PM'))
+        target = (now + datetime.timedelta(minutes=1)).replace(second=0, microsecond=0)
+        wait = (target - now).total_seconds() - 0.3
+        if wait > 0:
+            print("  waiting %.0f s for the top of the minute" % wait); time.sleep(wait)
+        h = target.hour % 12 or 12
+        s.send_frame(b'\x17' + b'%02d%02d' % (h, target.minute) + (b'Y' if target.hour < 12 else b'N'))
+        print("  set to %02d:%02d %s" % (h, target.minute, 'AM' if target.hour < 12 else 'PM'))
     elif c == 'raw':
         s.send_frame(bytes(int(x, 16) for x in args))
         r = s.read_reply(1.5)

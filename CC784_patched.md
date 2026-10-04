@@ -145,6 +145,11 @@ bytes of the bank are free.
     scratch bytes; `CLK_RUN` stays, since the init image rewrites it on every
     boot. An `ASSERT` keeps the library below `STORE_END`, and `ram` in the
     emulator checks that a set clock survives a reset.
+23. **Set-time starts the minute at :00.** `17 hhmm a` carries no seconds
+    and left `CLK_SEC` and the mains-tick count as they were, so the clock
+    came up anywhere inside the minute. Both are zeroed now, and the host
+    tool's `time` command waits for the top of the PC's minute and sends the
+    frame 0.3 s early, which is its wire time.
 22. **Typed queries removed** (−270 bytes). The editor hooked `B4` plus a
     digit typed as keys and answered with its own copies of the three query
     replies on the serial line, which only a terminal driving the menus

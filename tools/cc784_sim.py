@@ -921,9 +921,11 @@ def cmd_quiet():
           tx == b'\x06\x04' and s.ram('PKT_RESTART')[0] == 0 and s.wdog_clears == 0 and after != before)
     tx = send(s, b'\xb4\x31')
     check("B4 '1' mid-scroll: reply %s, no restart" % tx[4:14], tx[:4] == b'\x06\xb1\x01\x0a' and tx[4:9] == b'15246' and s.ram('PKT_RESTART')[0] == 0)
-    tx = send(s, b'\x17' + b'1045' + b'P', wait_ms=1500)
-    check('set time mid-scroll: clock %s, no restart, no watchdog clear' % s.ram('CLK_H10', 4).hex(),
-          s.ram('CLK_H10', 4) == bytes([1, 0, 4, 5]) and s.ram('PKT_RESTART')[0] == 0 and s.wdog_clears == 0)
+    tx = send(s, b'\x17' + b'1045' + b'P', wait_ms=300)
+    check('set time mid-scroll: clock %s, seconds %d and ticks %d zeroed (P23), no restart, no watchdog clear'
+          % (s.ram('CLK_H10', 4).hex(), s.ram('CLK_SEC')[0], s.ram('NMI_COUNT')[0]),
+          s.ram('CLK_H10', 4) == bytes([1, 0, 4, 5]) and s.ram('CLK_SEC')[0] == 0 and s.ram('NMI_COUNT')[0] < 25
+          and s.ram('PKT_RESTART')[0] == 0 and s.wdog_clears == 0)
     # a frame that arrives while the previous one is still being handled is dropped whole
     s.tx_edges.clear()
     s.send_frame(b'\x09\x30\x32\x0e' + b'THIRD ' * 40, addr=1, flag=0x81); s.rx_wait(); s.run_ms(20)
