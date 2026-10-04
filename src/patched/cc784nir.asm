@@ -209,7 +209,26 @@ STACK_TOP            equ PKT_READY   ; first PUSH lands two below
 ; is the blink clock. Change here to retune, nothing else references it.
 FLASH_HALF_PERIOD    equ 13
 STACK_SIZE           equ 128         ; measured high-water 70 bytes, worst-case chain ~108
-STORE_TOP            equ STACK_TOP-STACK_SIZE-1   ; with a 32 K chip (16 K usable)
+; P21: packet processing runs in the render loop and replies go out in the
+; background, so their state cannot share renderer scratch. 32 bytes below the
+; stack, carved off the store.
+STREAM_AREA          equ STACK_TOP-STACK_SIZE-32
+TX_SEG0              equ STREAM_AREA+0     ; segment being sent: ptr, count, flags (bit 0 = append the sum)
+TX_SEG1              equ STREAM_AREA+5     ; next segment, same layout
+TX_SUM               equ STREAM_AREA+10    ; running 8-bit sum of TX_SEG0's bytes
+TX_DONE_PENDING      equ STREAM_AREA+11    ; FF = send DONE_BYTE once the segments are out
+TX_ACTIVE            equ STREAM_AREA+12    ; FF = pkt_process_done handed its reply to the engine
+PKT_BUSY             equ STREAM_AREA+13    ; FF from pkt_process entry until the reply and DONE are sent
+PKT_RESTART          equ STREAM_AREA+14    ; FF = restart the display when the packet is done
+PKT_LOW_EDIT         equ STREAM_AREA+15    ; lowest store address edited by this packet (FFFF = none)
+PKT_SAVE_CURSOR      equ STREAM_AREA+17    ; the renderer's STORE_CURSOR, INS_PTR, STORE_END and
+PKT_SAVE_INS         equ STREAM_AREA+19    ;   channel marker at entry
+PKT_SAVE_END         equ STREAM_AREA+21
+PKT_SAVE_MARK        equ STREAM_AREA+23
+PKT_DISCARD          equ STREAM_AREA+25    ; FF = the frame being parsed arrived while busy: parse it, keep nothing
+PKT_DONE_WANT        equ STREAM_AREA+26    ; the DONE decision, latched at pkt_process entry
+STREAM_AREA_SIZE     equ 27
+STORE_TOP            equ STREAM_AREA-1    ; with a 32 K chip (16 K usable)
 STORE_TOP_8K         equ STORE_TOP-0x2000         ; with the stock 8 K chip
 ; store_init derives the warning level, the text allowance (301 = framing) and
 ; the B4 '1' size from whichever ceiling the RAM test picks.
@@ -662,20 +681,16 @@ int_tick1_store:
         EI
         RETI
 
-; ---- main_loop: Main loop: if PKT_READY process packet, else init/render/effect step, then loop.
-;      The PKT_READY test runs ONCE on entry - render_loop below never falls back
-;      to 0x009A. Re-entry only happens via fx_end_of_channel (0x0F5E) at the
-;      end of a display cycle, or the BA wait-for-key spin at 0x0A49. That is
-;      why NETCC sets PKT_FLAG=0x80: deferred packets wait for the current
-;      channel to finish, which can be many seconds.
+; ---- main_loop: open the next channel, then render it a character at a time.
+;      P21: pkt_poll runs here, at every render step and in every frame wait,
+;      so a packet is processed within one step of its arrival.
 main_loop:
-        LD A,(PKT_READY)
-        AND A
-        JP nz,pkt_process
+        CALL pkt_poll
         CALL init_render
         CALL seq_next_channel
 
 render_loop:
+        CALL pkt_poll
         CALL render_next_char
         CALL effect_step
         ; LD A,(nn) sets no flags, so this JR tests effect_step's exit flags,
@@ -688,6 +703,27 @@ render_loop:
         LD (EFFECT_ID),A
         LD (EFFECT_VECTOR),HL
         JR render_loop
+
+; ---- pkt_poll (P21): process a pending packet here, between two render
+;      steps. pkt_process returns unless the display has to restart.
+pkt_poll:
+        LD A,(PKT_READY)
+        AND A
+        RET z
+        PUSH AF                 ; the spins that poll keep registers live
+        PUSH BC
+        PUSH DE
+        PUSH HL
+        PUSH IX
+        PUSH IY
+        CALL pkt_process
+        POP IY
+        POP IX
+        POP HL
+        POP DE
+        POP BC
+        POP AF
+        RET
 
 ; ---- tick6_service: Runs every 6 timer ticks: serial RX/TX bit engines, countdowns, display column refresh & flashing, then the RX byte consumer.
 tick6_service:
@@ -977,12 +1013,26 @@ rx_have_byte:
         JP tick6_exit
 
 rx_idle_byte:
-        LD A,(RX_BYTE)
+        ; P21: while a packet waits, is processed or is being answered, a new
+        ; frame is parsed but kept nowhere and never answered, so its bytes
+        ; cannot leak into the editor as keys once the sign is free again.
+        LD A,(PKT_READY)
+        LD HL,PKT_BUSY
+        OR (HL)
+        LD (PKT_DISCARD),A
+        LD HL,RX_BYTE
+        JR z,rx_idle_free
+        LD A,(HL)
+        CP FRAME_START
+        JP nz,tick6_exit
+        JR rx_frame_start
+
+rx_idle_free:
+        LD A,(HL)
         CP FRAME_START
         JR nz,rx_not_start
-        LD A,(PKT_READY)
-        AND A
-        JR nz,tick6_exit
+
+rx_frame_start:
         LD A,0xff
         LD (PKT_STATE),A
         LD HL,pkt_st_addr
@@ -1449,6 +1499,13 @@ init_clear_addrbuf:
         LD (SCROLL_SPEED),A
         LD (BLANK_TIMER),A
         LD (TICK6_COUNT),A
+        LD HL,STREAM_AREA       ; P21: no reply in flight, no packet busy
+        LD B,STREAM_AREA_SIZE
+
+init_clear_stream:
+        LD (HL),A
+        INC HL
+        DJNZ init_clear_stream
         LD A,0xff
         LD (NEXT_CHAN),A
         LD A,0x20
@@ -2125,9 +2182,7 @@ wait_poll:
         JP render_next_char
 
 wait_check_pkt:
-        LD A,(PKT_READY)
-        AND A
-        JP nz,pkt_process
+        CALL pkt_poll
         JP wait_poll
 
 ; ---- attr_thin_check: B9 THIN
@@ -2761,11 +2816,13 @@ fbadd_ret:
 
 ; ---- effect_step: Called from main loop: jump to EFFECT_VECTOR (current movement effect handler)
 effect_step:
+        CALL pkt_poll
         LD A,(FRAME_DELAY)
         AND A
         JR nz,effect_step
 
 fx_wait_scroll:
+        CALL pkt_poll
         LD A,(SCROLLING)
         AND A
         JR nz,fx_wait_scroll
@@ -3058,6 +3115,7 @@ fx_halt:
         JR nz,halt_hold
 
 halt_wait_frames:
+        CALL pkt_poll
         LD A,(FRAME_DELAY)
         AND A
         JR nz,halt_wait_frames
@@ -3473,6 +3531,7 @@ right_wait_row:
         LD (FRAME_DELAY),A
 
 right_wait_frame:
+        CALL pkt_poll
         LD A,(FRAME_DELAY)
         AND A
         JR nz,right_wait_frame
@@ -3528,6 +3587,7 @@ hold_wait_row:
         LD (FRAME_DELAY),A
 
 hold_wait_frame:
+        CALL pkt_poll
         LD A,(FRAME_DELAY)
         AND A
         JR nz,hold_wait_frame
@@ -3604,6 +3664,7 @@ wipev_store:
         LD (FRAME_DELAY),A
 
 wipev_wait_frame:
+        CALL pkt_poll
         LD A,(FRAME_DELAY)
         AND A
         JR nz,wipev_wait_frame
@@ -3929,7 +3990,9 @@ tx_bit_engine:
         BIT 0,(HL)
         JR nz,tx_bit_tick
         BIT 1,(HL)
-        RET z
+        JR z,tx_stream_next     ; P21: nothing queued, feed the background reply
+
+tx_start_byte:
         LD A,(TX_PENDING)
         LD (TX_SHIFT),A
         LD (HL),1
@@ -3993,6 +4056,72 @@ tx_stop_bit:
 tx_idle:
         LD HL,TX_STATUS
         RES 0,(HL)
+        RET
+
+; ---- tx_stream_next (P21): the background transmitter. Sends TX_SEG0, then
+;      its sum if flagged, then TX_SEG1 the same way, then DONE if pending;
+;      when all of that is out, the packet is no longer busy.
+tx_stream_next:
+        LD HL,(TX_SEG0+2)
+        LD A,H
+        OR L
+        JR z,tx_stream_end
+        DEC HL
+        LD (TX_SEG0+2),HL
+        LD HL,(TX_SEG0)
+        LD C,(HL)
+        INC HL
+        LD (TX_SEG0),HL
+        LD A,(TX_SUM)
+        ADD A,C
+        LD (TX_SUM),A
+        LD A,C
+
+tx_stream_queue:
+        LD (TX_PENDING),A
+        LD HL,TX_STATUS
+        SET 1,(HL)
+        JP tx_start_byte
+
+tx_stream_end:
+        LD HL,TX_SEG0+4
+        BIT 0,(HL)
+        JR z,tx_stream_shift
+        RES 0,(HL)
+        LD A,(TX_SUM)
+        JR tx_stream_queue
+
+tx_stream_shift:
+        LD HL,(TX_SEG1+2)
+        LD A,H
+        OR L
+        JR z,tx_stream_done
+        LD HL,TX_SEG1
+        LD DE,TX_SEG0
+        LD BC,5
+        LDIR
+        XOR A
+        LD (TX_SUM),A
+        LD (TX_SEG1+2),A
+        LD (TX_SEG1+3),A
+        JR tx_stream_next
+
+tx_stream_done:
+        LD HL,TX_DONE_PENDING
+        LD A,(HL)
+        OR A
+        JR z,tx_stream_idle
+        LD (HL),0
+        LD A,DONE_BYTE
+        JR tx_stream_queue
+
+tx_stream_idle:
+        LD A,(TX_ACTIVE)
+        OR A
+        RET z
+        XOR A
+        LD (TX_ACTIVE),A
+        LD (PKT_BUSY),A
         RET
 
 ; ---- rx_bit_engine: Called every 6 ticks: bit-banged receiver state machine on PORT_IN bit 3 (1 = space). Uses RX_TIMING table; assembled bytes go to RX_FIFO (8 deep, RX_COUNT)
@@ -4171,10 +4300,16 @@ pkt_len_setup:
 
 ; ---- pkt_st_data: store payload byte, PKT_CKSUM += byte
 pkt_st_data:
+        LD C,A
+        LD A,(PKT_DISCARD)
+        OR A
         LD HL,(PKT_PTR)
-        LD (HL),A
+        JR nz,pkt_data_sum      ; P21: a frame that arrived while busy is not stored
+        LD (HL),C
+
+pkt_data_sum:
         LD A,(PKT_CKSUM)
-        ADD A,(HL)
+        ADD A,C
         LD (PKT_CKSUM),A
         LD A,(PKT_REMAIN)
         DEC A
@@ -4192,6 +4327,9 @@ pkt_data_last:
 ; ---- pkt_st_cksum: E = computed - received. Broadcast (0x2A): no reply. Own address: send ACK 06 / NAK 15. If OK and len>0 set PKT_READY (PKT_FLAG==0x80 -> process immediately)
 pkt_st_cksum:
         LD E,A
+        LD A,(PKT_DISCARD)
+        OR A
+        JR nz,pkt_discard_frame ; P21: arrived while busy: no reply, nothing kept
         LD A,(PKT_CKSUM)
         SUB E
         LD E,A
@@ -4219,17 +4357,17 @@ pkt_check_ok:
         AND A
         JR z,pkt_discard
         LD A,0xff
-        LD (PKT_READY),A
+        LD (PKT_READY),A        ; P21: the render loop picks it up at its next step
         XOR A
         LD (PKT_STATE),A
-        LD A,(PKT_FLAG)
-        BIT 7,A                 ; P16: 80 or 81 is immediate (stock: exactly 80)
-        JP nz,pkt_process
         RET
 
 pkt_discard:
         XOR A
         LD (PKT_READY),A
+
+pkt_discard_frame:
+        XOR A
         LD (PKT_STATE),A
         RET
 
@@ -5064,6 +5202,7 @@ time_wait:
         LD (FRAME_DELAY),A
 
 time_wait_loop:
+        CALL pkt_poll
         LD A,(FRAME_DELAY)
         AND A
         JR nz,time_wait_loop
@@ -6851,6 +6990,7 @@ hold_wait_row2:
         LD (FRAME_DELAY),A
 
 hold_wait_frames:
+        CALL pkt_poll
         LD A,(FRAME_DELAY)
         AND A
         JR nz,hold_wait_frames
@@ -6939,17 +7079,40 @@ nibble_to_hex:
         ADD A,7
         RET
 
-; ---- pkt_process: Process a received packet: wait for TX idle, DI, walk PKT_BUF byte by byte. Bytes in IGNORE_TABLE are skipped; command bytes dispatch (02 speed,03 clear all,04 sequence,09 channel,0D end,0E delete channel text,15 fg idx,16 bg idx,17 time,1E A0-colour,B3 append,B4 query); anything else is inserted as message text
+; ---- pkt_process: Process a received packet: walk PKT_BUF byte by byte. Bytes in IGNORE_TABLE are skipped; command bytes dispatch (02 speed,03 clear all,04 sequence,09 channel,0D end,0E delete channel text,15 fg idx,16 bg idx,17 time,1E A0-colour,B3 append,B4 query,B5 OTA); anything else is inserted as message text
 pkt_process:
-        LD A,(TX_STATUS)
-        AND 3
-        JR nz,pkt_process
-        DI
-        LD SP,STACK_TOP
-        LD A,(CTRL_LATCH_SHADOW)
-        OR 15
-        LD (CTRL_LATCH_SHADOW),A
-        LD (CTRL_LATCH),A
+        ; P21: called from the render loop with interrupts on. The renderer is
+        ; suspended until this returns, and nothing in the tick service reads
+        ; the store, so the edits below need no DI. Its pointers are saved and
+        ; put back (shifted if a lower channel changed size) unless the text
+        ; under it changed, which restarts the display as before.
+        XOR A
+        LD (PKT_READY),A
+        LD (PKT_RESTART),A
+        LD (PKT_DONE_WANT),A
+        DEC A
+        LD (PKT_BUSY),A
+        ; P16: flag bit 0 asks for a DONE byte once the packet has been
+        ; processed and its reply sent. Never for broadcast frames. Decided
+        ; now: a frame parsed meanwhile overwrites PKT_FLAG and PKT_ADDR.
+        LD A,(PKT_FLAG)
+        BIT 0,A
+        JR z,pkt_entry_nodone
+        LD A,(PKT_ADDR)
+        CP ADDR_BROADCAST
+        JR z,pkt_entry_nodone
+        LD A,0xff
+        LD (PKT_DONE_WANT),A
+
+pkt_entry_nodone:
+        LD HL,(STORE_CURSOR)
+        LD (PKT_SAVE_CURSOR),HL
+        LD HL,(INS_PTR)
+        LD (PKT_SAVE_INS),HL
+        LD HL,(STORE_END)
+        LD (PKT_SAVE_END),HL
+        LD HL,0xffff
+        LD (PKT_LOW_EDIT),HL
         LD HL,(STORE_CURSOR)
         LD A,(HL)
         CP 0xd0
@@ -6987,6 +7150,7 @@ pkt_marker_back:
 
 pkt_set_ins:
         LD (STORE_CURSOR),HL
+        LD (PKT_SAVE_MARK),HL   ; the marker of the channel being played
         INC HL
         LD (INS_PTR),HL
         CALL store_finalize
@@ -7013,7 +7177,7 @@ pkt_byte_loop:
         CP CMD_CHANNEL
         JP z,cmd_09_channel
         CP CMD_END
-        JP z,pkt_process_done
+        JP z,pkt_done_pop
         CP CMD_DELETE_TEXT
         JP z,cmd_0E_delete_text
         CP CMD_FORE_IDX
@@ -7031,47 +7195,127 @@ pkt_byte_loop:
         CP CMD_OTA
         JP z,cmd_B5_ota
 
-; ---- pkt_insert_text: Insert CUR_CHAR at STORE_CURSOR (shifts the store up; refuses when CHAN_LOCK or memory full)
+; ---- pkt_insert_text: insert the plain text at the payload position into the
+;      store after STORE_CURSOR. P21: the run of plain bytes that starts here
+;      goes in with one move of the store's tail instead of one per byte.
+;      Refuses under CHAN_LOCK; a full store takes what fits.
 pkt_insert_text:
+        POP BC                  ; B = payload bytes left, HL = payload position
+        POP HL
+        PUSH HL
+        PUSH BC
+        PUSH HL
+        LD C,1
+
+pkt_run_scan:
+        DEC B
+        JR z,pkt_run_end
+        INC HL
+        LD A,(HL)
+        CALL is_plain_byte
+        JR nz,pkt_run_end
+        INC C
+        JR pkt_run_scan
+
+pkt_run_end:
+        POP HL
+        LD B,0
+        JR pkt_insert_run
+
+; ---- pkt_insert_one: insert CUR_CHAR (the colour and speed commands)
+pkt_insert_one:
+        LD HL,CUR_CHAR
+        LD BC,1
+
+; ---- pkt_insert_run: BC bytes at HL go in after STORE_CURSOR, which then
+;      points at the last of them. The payload position advances past them.
+pkt_insert_run:
         LD A,(CHAN_LOCK)
         OR A
         JP nz,pkt_next
+        PUSH BC                 ; the whole run: the payload skips it even if
+        PUSH HL                 ; the store takes less (a full store refuses)
         LD HL,(STORE_CURSOR)
         LD A,(HL)
         CP 3
-        JR nz,pkt_ins_check_full
+        JR nz,pkt_ins_room
         DEC HL
         LD (STORE_CURSOR),HL
 
-pkt_ins_check_full:
-        LD HL,(STORE_END)
-        INC HL
-        LD (STORE_TMP),HL
-        LD DE,(STORE_LIMIT)
+pkt_ins_room:
+        LD HL,(STORE_LIMIT)     ; free = LIMIT - END - 1; clamp the run to it
+        LD DE,(STORE_END)
         OR A
         SBC HL,DE
-        LD A,H
-        OR L
-        JR z,pkt_next
-        LD HL,(STORE_TMP)
-        LD (STORE_END),HL
-        CALL store_make_room
-        LD HL,(STORE_END)
-        LD (MOVE_DST),HL
         DEC HL
-        LD (MOVE_SRC),HL
-        LD DE,(STORE_CURSOR)
         OR A
-        SBC HL,DE
+        SBC HL,BC
+        JR nc,pkt_ins_fits
+        ADD HL,BC
         LD B,H
         LD C,L
-        LD HL,(MOVE_SRC)
-        LD DE,(MOVE_DST)
-        INC BC
-        LDDR
+
+pkt_ins_fits:
+        LD A,B
+        OR C
+        JR z,pkt_ins_none
+        PUSH BC                 ; count
         LD HL,(STORE_CURSOR)
-        LD A,(CUR_CHAR)
-        LD (HL),A
+        INC HL
+        CALL pkt_note_edit
+        LD HL,(STORE_END)
+        LD DE,(STORE_CURSOR)
+        OR A
+        SBC HL,DE               ; bytes to move: cursor+1 .. END
+        PUSH HL
+        LD HL,(STORE_END)
+        LD D,H
+        LD E,L
+        ADD HL,BC
+        LD (STORE_END),HL
+        EX DE,HL                ; HL = old END, DE = new END
+        POP BC
+        LDDR
+        POP BC                  ; count
+        POP HL                  ; source
+        LD DE,(STORE_CURSOR)
+        INC DE
+        LDIR
+        DEC DE
+        LD (STORE_CURSOR),DE    ; the last byte put in
+        JR pkt_ins_advance
+
+pkt_ins_none:
+        POP HL                  ; source
+
+pkt_ins_advance:
+        POP BC                  ; the whole run
+        DEC BC                  ; the loop steps over the first byte itself
+        POP DE                  ; payload bytes left (D)
+        POP HL                  ; payload position
+        ADD HL,BC
+        LD A,D
+        SUB C
+        LD D,A
+        PUSH HL
+        PUSH DE
+        JP pkt_next
+
+; ---- pkt_note_edit: HL = store address this packet edits; PKT_LOW_EDIT keeps
+;      the lowest, which decides whether the renderer can carry on
+pkt_note_edit:
+        PUSH BC
+        PUSH HL
+        LD DE,(PKT_LOW_EDIT)
+        OR A
+        SBC HL,DE
+        POP HL
+        JR nc,note_edit_ret
+        LD (PKT_LOW_EDIT),HL
+
+note_edit_ret:
+        POP BC
+        RET
 
 pkt_next:
         POP BC
@@ -7079,35 +7323,76 @@ pkt_next:
         INC HL
         DEC B
         JP nz,pkt_byte_loop
+        JR pkt_process_done
 
-; ---- pkt_process_done: clear PKT_READY/PKT_STATE, re-init and return to main loop
+; ---- pkt_done_pop: the exit for a handler that still holds the loop's HL/BC
+pkt_done_pop:
+        POP BC
+        POP HL
+
+; ---- pkt_process_done: hand the reply (if any) and DONE to the background
+;      transmitter, then either carry on where the renderer was or restart
 pkt_process_done:
-        LD SP,STACK_TOP
-        XOR A
-        LD (PKT_READY),A
-        LD (PKT_STATE),A
-        LD (MENU_ACTIVE),A
+        XOR A                   ; P21: PKT_STATE is the parser's; a frame may be
+        LD (MENU_ACTIVE),A      ; in flight, being parsed and discarded
         LD (FORCE_BOLD),A
-        LD HL,SEQ_LIST
-        LD (SEQ_PTR),HL
         ; B2: cmd_17_set_time clears CLK_RUN before fetching its five argument
         ; bytes; a short packet exits here through pkt_next_byte and the clock
         ; never restarts. Restoring it on the way out covers every early exit.
         LD A,0xff
         LD (CLK_RUN),A
-        ; P16: flag bit 0 asks for a DONE byte once the packet has been
-        ; processed. TX is idle here, and the byte leaves on restart_display's
-        ; EI, the moment the sign can hear again. Never for broadcast frames.
-        LD A,(PKT_FLAG)
-        BIT 0,A
-        JR z,pkt_done_no_ack
-        LD A,(PKT_ADDR)
-        CP ADDR_BROADCAST
-        JR z,pkt_done_no_ack
-        LD A,DONE_BYTE
-        CALL tx_try_queue
+        LD A,(PKT_DONE_WANT)
+        LD (TX_DONE_PENDING),A
 
-pkt_done_no_ack:
+pkt_done_handoff:
+        LD A,0xff
+        LD (TX_ACTIVE),A
+        LD A,(PKT_RESTART)
+        OR A
+        JR nz,pkt_done_restart
+        LD HL,(PKT_LOW_EDIT)
+        LD DE,(PKT_SAVE_CURSOR)
+        OR A
+        SBC HL,DE
+        JR nc,pkt_done_continue ; nothing moved under the renderer
+        LD HL,(PKT_LOW_EDIT)
+        LD DE,(PKT_SAVE_MARK)
+        OR A
+        SBC HL,DE
+        JR nc,pkt_done_restart  ; the text being played changed
+        LD HL,(STORE_END)       ; a lower channel changed size: shift the
+        LD DE,(PKT_SAVE_END)    ; renderer's pointers by the same amount
+        OR A
+        SBC HL,DE
+        EX DE,HL
+        LD HL,(PKT_SAVE_CURSOR)
+        ADD HL,DE
+        LD (PKT_SAVE_CURSOR),HL
+        LD HL,(PKT_SAVE_INS)
+        ADD HL,DE
+        LD (PKT_SAVE_INS),HL
+
+pkt_done_continue:
+        LD HL,(PKT_SAVE_CURSOR)
+        LD (STORE_CURSOR),HL
+        LD HL,(PKT_SAVE_INS)
+        LD (INS_PTR),HL
+        LD HL,(STORE_END)
+        LD DE,(PKT_SAVE_END)
+        OR A
+        SBC HL,DE
+        RET z                   ; the store did not change size
+        LD A,(SEQ_ALL_EMPTY)
+        OR A
+        JR nz,pkt_done_restart  ; the demo was playing: show the new text now
+        JP init_sequence        ; else just recount the empty channels
+
+pkt_done_restart:
+        LD SP,STACK_TOP
+        LD A,0xff
+        LD (PKT_RESTART),A      ; left set: the emulator reads which exit was taken
+        LD HL,SEQ_LIST
+        LD (SEQ_PTR),HL
         CALL shift_chain_clear
         JP restart_display
 
@@ -7124,6 +7409,8 @@ chainclr_loop:
 
 ; ---- cmd_03_clear_all
 cmd_03_clear_all:
+        LD A,0xff
+        LD (PKT_RESTART),A
         CALL store_clear_all
         CALL store_finalize
         JP select_chan_common
@@ -7134,6 +7421,7 @@ cmd_0E_delete_text:
         OR A
         JP nz,pkt_next
         LD HL,(INS_PTR)
+        CALL pkt_note_edit
         DEC HL
         LD (STORE_CURSOR),HL
         INC HL
@@ -7153,8 +7441,9 @@ cmd_0E_delete_text:
         JP z,pkt_next
         DEC HL
         LD (MOVE_SRC),HL
-        LD DE,(STORE_LIMIT)
         EX DE,HL
+        LD HL,(STORE_END)       ; P21: move the store up to its DA, not the
+        INC HL                  ; whole RAM to STORE_LIMIT (15 K, 40 ms)
         OR A
         SBC HL,DE
         LD B,H
@@ -7167,30 +7456,77 @@ cmd_0E_delete_text:
         JP pkt_next
 
 ; ---- cmd_B4_query: B4 n: '0' rom id, '1' memory, '2' nop, '3' dump
-;      B1: the EI below plus the query -> tx_send_frame -> tx_send_byte ->
-;      tx_try_queue chain (~40 bytes deep) leaves too little of the stock
-;      64-byte stack for an interrupt frame + tick6_service + rx_consume.
-;      Fixed by the relocated stack below; nothing here changes.
+;      (B1, the stock stack overflow in the reply chain, is covered by the
+;      relocated stack.)
 cmd_B4_query:
-        CALL clear_framebuf
-        CALL shift_chain_clear
-        EI
+        ; P21: the reply is handed to the background transmitter and the
+        ; display keeps running. The query ends the packet: the frame is built
+        ; over PKT_BUF. (The editor's typed queries still use query_dispatch.)
         CALL pkt_next_byte
         CP QUERY_ROMID
-        CALL z,query_0_romid
+        JR z,pq_romid
         CP QUERY_MEMORY
-        CALL z,query_1_memory
-        CP QUERY_NOP
-        CALL z,query_2_nop
+        JR z,pq_memory
         CP QUERY_DUMP
-        CALL z,query_3_dump
+        JR z,pq_dump
+        JP pkt_done_pop
 
-query_wait_tx:
-        LD A,(TX_STATUS)
-        AND 3
-        JR nz,query_wait_tx
-        DI
-        JP z,pkt_next
+pq_romid:
+        LD HL,ROM_ID
+        LD BC,16
+        JR pq_reply
+
+pq_memory:
+        CALL store_finalize
+        LD IX,PKT_BUF+3
+        LD HL,(STORE_SIZE)
+        CALL bin_to_dec5
+        LD HL,(STORE_LIMIT)
+        LD DE,(STORE_END)
+        OR A
+        SBC HL,DE
+        CALL bin_to_dec5
+        LD HL,PKT_BUF+3
+        LD BC,10
+
+pq_reply:
+        LD A,C
+        LD (PKT_BUF+2),A
+        LD E,3
+        JR pq_stream
+
+pq_dump:
+        LD HL,(STORE_END)
+        INC HL
+        LD DE,MSG_STORE
+        OR A
+        SBC HL,DE               ; up to and including the DA
+        PUSH HL
+        LD IX,PKT_BUF+2
+        CALL bin_to_dec5
+        POP BC
+        LD HL,MSG_STORE
+        LD E,7
+
+; ---- pq_stream: E header bytes at PKT_BUF (B1 addr ...), then BC bytes at HL
+;      with their sum appended
+pq_stream:
+        LD (TX_SEG1),HL
+        LD (TX_SEG1+2),BC
+        LD A,1
+        LD (TX_SEG1+4),A
+        LD A,FRAME_START
+        LD (PKT_BUF),A
+        LD A,(MY_ADDRESS)
+        LD (PKT_BUF+1),A
+        LD HL,PKT_BUF
+        LD (TX_SEG0),HL
+        LD D,0
+        LD (TX_SEG0+2),DE
+        XOR A
+        LD (TX_SEG0+4),A
+        LD (TX_SUM),A
+        JP pkt_done_pop
 
 ; ---- cmd_B5_ota: OTA commands (CC784_ota.md §6). B5 must be the first payload
 ;      byte and the frame ends with the command. Runs under pkt_process's DI;
@@ -7205,6 +7541,10 @@ query_wait_tx:
 ;        B5 'K' state seq       -> rewrite the running bank's trailer (confirm, or roll back)
 ;        B5 'R'                 -> reset (no reply)
 cmd_B5_ota:
+        LD A,(TX_STATUS)        ; P21: pkt_process runs with interrupts on; let
+        AND 3                   ; the ACK finish before the page writer's DI
+        JR nz,cmd_B5_ota
+        DI
         LD HL,stub_lib
         LD DE,STUB_RAM
         LD BC,STUB_LIB_APP_SIZE ; fits FRAMEBUF; the full lib would run into the variables
@@ -7256,6 +7596,8 @@ ota_wait_tx:
         AND 3
         JR nz,ota_wait_tx
         DI
+        LD A,0xff               ; the library sits in FRAMEBUF: restart the display
+        LD (PKT_RESTART),A
         JP pkt_process_done
 
 ; ---- ota_info: ROM_BANK, then the first 10 trailer bytes of bank 0 and bank 1
@@ -7544,7 +7886,7 @@ cmd_1E_colour_A0:
         AND 15
         OR 0xa0
         LD (CUR_CHAR),A
-        JP pkt_insert_text
+        JP pkt_insert_one
 
 ; ---- cmd_15_fore_idx: 15 n -> insert FG_IDX_TABLE[n]
 cmd_15_fore_idx:
@@ -7555,7 +7897,7 @@ cmd_15_fore_idx:
         ADD HL,BC
         LD A,(HL)
         LD (CUR_CHAR),A
-        JP pkt_insert_text
+        JP pkt_insert_one
 
 ; ---- cmd_16_back_idx: 16 n -> insert BG_IDX_TABLE[n]
 cmd_16_back_idx:
@@ -7566,7 +7908,7 @@ cmd_16_back_idx:
         ADD HL,BC
         LD A,(HL)
         LD (CUR_CHAR),A
-        JP pkt_insert_text
+        JP pkt_insert_one
 
 ; ---- cmd_17_set_time: 17 h h m m a: 4 ASCII digits -> CLK_H10..CLK_M1, a=Y/y -> AM else PM.
 ;      B2: CLK_RUN is cleared here but restored only at 0x2C59, and every
@@ -7621,7 +7963,7 @@ cmd_02_speed:
         AND 7
         OR 0xf0
         LD (CUR_CHAR),A
-        JP pkt_insert_text
+        JP pkt_insert_one
 
 ; ---- cmd_B3_append: B3: move STORE_CURSOR to end of current channel.
 ;      B11: stock stepped back a second time when the byte before the 03 was a
@@ -7754,6 +8096,36 @@ is_ignored_byte:
 ; ---- data 2d57-2d60: payload bytes silently ignored by the parser
 IGNORE_TABLE:
         db 0x00,0x01,0x05,0x08,0x0a,0x0b,0x0c,0x1c,0x1d,0x7f
+; ---- COMMAND_TABLE: the bytes pkt_byte_loop dispatches; follows IGNORE_TABLE
+;      so one CPIR covers both
+COMMAND_TABLE:
+        db CMD_SPEED,CMD_CLEAR_ALL,CMD_SEQUENCE,CMD_CHANNEL,CMD_END,CMD_DELETE_TEXT
+        db CMD_FORE_IDX,CMD_BACK_IDX,CMD_SET_TIME,CMD_COLOUR_A0,CMD_APPEND,CMD_QUERY,CMD_OTA
+COMMAND_TABLE_END:
+
+; ---- is_plain_byte: Z if A is message text (neither ignored nor a command)
+is_plain_byte:
+        CP 0x20
+        JR c,plain_lookup
+        CP 0x7f
+        RET c                   ; printable ASCII: never a command or ignored (Z from CP)
+
+plain_lookup:
+        PUSH BC
+        PUSH HL
+        LD HL,IGNORE_TABLE
+        LD BC,COMMAND_TABLE_END-IGNORE_TABLE
+        CPIR
+        POP HL
+        POP BC
+        JR z,plain_no
+        XOR A
+        RET
+
+plain_no:
+        LD A,1
+        OR A
+        RET
 
 ; ---- data 2d61-2ff2: 16-bit pointers/data for big glyphs & graphics (0x2E00-0x2FF0)
 ; ============================================================================
@@ -8316,21 +8688,13 @@ CHARSET_EURO:
         db 0xda,0xda                                  ; 40-41  DA DA
 
 
-; ---- data 396f-3c20: built-in demonstration message (contains control codes 10,11,12,13,14,BC,BE,8x colours,A2-AB graphics)
+; ---- DEMO_MESSAGE: shown while every channel is empty. P21 cut the factory
+;      sales pitch (~700 bytes) down to a line that still exercises the fonts
+;      and colours; the room went to the render-loop packet processing.
 DEMO_MESSAGE:
-        db "THE ",0x12,0x14,"ULTIMATE ",0x11,0x8c,"INFRARED ",0xbc,"REMOTE CONTROL MULTI-"
-        db "COLOR DISPLAY..... ",0x10,"** MAGIC ** ",0x11,"AUTOMATIC COLOR CHANGING....."
-        db "PLUS.....",0xbc,0x14,"RAINBOW ",0x11,"PROGRAMMING IN ",0x10,"10 ",0x11,"VIBRANT"
-        db " COLORS ",0x8c,"llllllllll ",0x83,"llllllllll ",0x8f,"llllllllll ",0x8d,"llllll"
-        db "llll ",0x87,"llllllllll ",0xbc,">>>>> NETWORKABLE <<<<< INCLUDES PC FLOPPY DISK"
-        db " & CABLE .....",0x12,"8K ",0x11,"MEMORY .....",0x83,0x12,"100 ",0x11,0xbc,"MEMORY"
-        db " BANKS ..... ",0x10,"14 ",0x11,"CHARACTERS OR ",0xbe,"28 TINY CHARACTERS ",0xbc
-        db "..... PROGRAMS ",0x10,"47 ",0x13,"EUROPEAN ",0x11,"CHARACTERS ..... ",0x12
-        db "8 ",0x11,"SPEEDS ....UPPER & lower FONTS ..... ",0x10,"36 SPECIAL FUNCTIONS "
-        db 0x11,".....INCLUDING...... CLOCK _",0x14,"  FLASH ",0x11,".....BEEP ",0x07,0x07
-        db " ",0x07,"..... ",0x12,"BOLD ...... ",0x13,"ITALIC ",0x11,".....",0x14,"AND ...."
-        db ". CUSTOM GRAPHICS ",0xa2,0xa3,0xa5,0xaa,0xab,"..... OR YOUR OWN LOGO..... "
-        db 0xbe,"TINY PRICE          ",0x10,"LARGE  IMPACT!!",0x03,0xdb
+        db 0x12,"COLOR CELLS ",0x11,0x8c,"CC784 ",0xbc,"MULTI-COLOR DISPLAY ",0x8f
+        db 0x10,"LARGE ",0x13,"ITALIC ",0x11,0x14,"FLASH ",0x11,0xbe,"TINY ",0x11
+        db 0x83,"READY FOR A MESSAGE",0x03,0xdb
 
 ; ---- TEST_MESSAGE: built-in test pattern (test_mode_enter). Sits inside the demo
 ;      text block but is a separate message with its own 0x03 terminator.

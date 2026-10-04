@@ -287,7 +287,7 @@ def parse_reply(raw: bytes, kind: str):
             print("  total %s bytes, free %s bytes" % (data[:5].decode(), data[5:].decode()))
 
 def add_common_args(ap):
-    ap.add_argument('-a', '--addr', default='*', help="sign address 0-255 or '*' (broadcast)")
+    ap.add_argument('-a', '--addr', default='*', help="sign address 0-255 or '*' (broadcast; a broadcast frame gets no ACK and no DONE)")
     ap.add_argument('-g', '--gap', type=float, default=0.0, help='gap between bytes (s)')
     ap.add_argument('-t', '--timeout', type=float, default=3.0, help='reply timeout (s)')
     ap.add_argument('-v', '--verbose', action='store_true')

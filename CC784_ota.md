@@ -21,7 +21,7 @@ must be on its AC supply: page writes are timed off the mains interrupt.
 | EEPROM pin 22 (`/OE`) | lifted, to Z80 `/RD` | the socket ties `/OE` to `/CE`, which inhibits writes |
 | EEPROM pin 1 (A14) | lifted, to the bank register's Q0 | bank select |
 | Bank register | a second '273 piggybacked on U5; clock from LS139 U4 pin 9 (`C000–FFFF`), `/MR` from Z80 `/RESET` | an 8-bit write-only register at `C000`; bit 0 = A14, bits 1–2 reserved for A15/A16 of a larger chip, the rest spare |
-| RAM (optional) | AS6C62256 with pin 26 → A13 and pin 1 → A14 | 15278-byte message store instead of 7086; the firmware detects which chip is fitted |
+| RAM (optional) | AS6C62256 with pin 26 → A13 and pin 1 → A14 | 15246-byte message store instead of 7054; the firmware detects which chip is fitted |
 
 The register is separate from U5 because U5 is cleared by the board's
 watchdog whenever interrupts stop for 512 µs, which happens during every
@@ -86,12 +86,14 @@ message-store space is used.
 ## 4. The OTA command
 
 Sent inside the normal packet frame (`B1 addr 81 len payload cksum`),
-addressed, immediate mode; the OTA command byte (`B5`, `CMD_OTA`) must be
-the first payload byte and the command ends the packet. Replies are reply frames (`B1 addr len data cksum`)
-and go out after the work. With flag `81` a `04` DONE byte follows the reply
-once the sign can receive again (the display restarts with interrupts off
-after every packet); the host waits for it, with a 1 s pause as the fallback
-for firmware that doesn't send one.
+addressed; the OTA command byte (`B5`, `CMD_OTA`) must be the first payload
+byte and the command ends the packet. Replies are reply frames (`B1 addr
+len data cksum`) and go out after the work. With flag `81` a `04` DONE byte
+follows the reply; until then the sign parses any new frame but keeps
+nothing of it and never answers it, so the host waits for DONE, with a 1 s
+pause as the fallback for firmware that doesn't send one. OTA commands are
+the one kind of packet that still parks the display and restarts it
+afterwards: the page writer needs interrupts off.
 
 | Payload | Reply |
 |---|---|
@@ -177,10 +179,11 @@ page timing, SDP and the watchdog). Before pushing a firmware change, run:
 | `uv run tools/cc784_sim.py ota` | the stub's bank choice in every trailer scenario, and the page writer |
 | `uv run tools/cc784_sim.py update` | a whole OTA update over the fake serial line, including refusals |
 | `uv run tools/cc784_sim.py push` | the real `push()` against the emulator |
-| `uv run tools/cc784_sim.py ram` | the build on the 6264 and on a 62256: sizes, fill, dump |
+| `uv run tools/cc784_sim.py ram` | the build on the 6264 and on a 62256: sizes, fill, dump; a set clock survives a reset |
+| `uv run tools/cc784_sim.py quiet` | packets arriving mid-scroll: no restart, no watchdog clear, replies and DONE in the background, early frames dropped whole, cursor fix-up |
 | `uv run tools/cc784_sim.py fuzz [N]` | N power cuts at random instants of an update; every reboot must land in a verified bank (1000/1000 when last run) |
 
-The `OTA: emulator regression` task runs the five fast ones.
+The `OTA: emulator regression` task runs the six fast ones.
 
 ## 7. Not built
 
@@ -211,10 +214,10 @@ The `OTA: emulator regression` task runs the five fast ones.
   patched build: a `00` byte offered to a busy transmitter was dropped
   (B10), and a `20` byte inside a packet counted as the SPACE key and
   released a WAIT (B12).
-- **A reply is not "ready for the next frame".** The sign restarts its
-  display after every packet with interrupts off (B4). Use flag `81` and wait
-  for the `04` DONE byte; without it, send the next frame no sooner than 1 s
-  after a reply.
+- **A reply is not "ready for the next frame".** Replies and DONE leave in
+  the background while the display runs, and a frame that arrives before
+  DONE is parsed and thrown away unanswered. Use flag `81` and wait for the
+  `04`; without it, allow the reply's wire time plus 1 s.
 - **The sign's RX is DB9 pin 8**, not pin 2; the factory cable crosses
   3→2, 8→3 and ties 2 to 5.
 - **Both banks identical hides bank-register faults.** A register that is

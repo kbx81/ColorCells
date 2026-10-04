@@ -220,6 +220,7 @@ class Sign:
         self.last_inta = 0
         self.min_stack, self.min_stack_pc = self.stack_top, None
         self.rom_writes = 0
+        self.wdog_clears = 0                # times the watchdog blanked the control latch
         self.latch = 0
         self.tx_edges = []
         self.rx_events, self.ir_events = [], []
@@ -350,7 +351,7 @@ class Sign:
                     self.next_nmi += NMI_T
             # watchdog: Q13 of the free-running HC4020 clears CTRL_LATCH while high
             if ((self.t - self.last_inta) // WDOG_T) & 1 and self.latch:
-                self._set_latch(0)
+                self._set_latch(0); self.wdog_clears += 1
             if self.ee_marked:
                 self._ee_sync()
             m.ticks_to_stop = SLICE
@@ -404,6 +405,8 @@ class Sign:
             t0, lvl = edges[i]
             if lvl != 1:
                 i += 1; continue
+            if t0 + int(9.5 * BIT_T) > self.t:
+                break                           # still on the wire: a real host has not seen it yet
             val = 0
             for n in range(8):
                 if not level_at(t0 + int((n + 1.5) * BIT_T)):
@@ -609,7 +612,7 @@ def cmd_update():
         checks.append(bool(cond)); print('  %s %s' % ('ok  ' if cond else 'FAIL', name))
 
     # the "new firmware": the same app with one demo-message byte changed
-    new_app = app.replace(b'LARGE  IMPACT', b'LARGE  UPDATE')
+    new_app = app.replace(b'READY FOR A MESSAGE', b'READY FOR AN UPDATE')
     assert new_app != app
     b1, b0 = cc784_ota.pack(app, 1), cc784_ota.pack(app, 0)
     new_bank = cc784_ota.pack(new_app, 2)
@@ -757,7 +760,7 @@ def cmd_push():
     import cc784, cc784_ota
     rom, syms = assemble(HERE.parent / 'src' / 'patched')
     app = rom[:BANK_SIZE]
-    new_app = app.replace(b'LARGE  IMPACT', b'LARGE  UPDATE')
+    new_app = app.replace(b'READY FOR A MESSAGE', b'READY FOR AN UPDATE')
     new_bank = cc784_ota.pack(new_app, 7)
     s = Sign(cc784_ota.pack(app, 1) + cc784_ota.pack(app, 0), syms, fresh_ram=True, sdp=False)
     s.run_ms(2500)
@@ -778,7 +781,7 @@ def cmd_fuzz(runs=100, seed=1):
     import cc784_ota
     rom, syms = assemble(HERE.parent / 'src' / 'patched')
     app = rom[:BANK_SIZE]
-    new_app = app.replace(b'LARGE  IMPACT', b'LARGE  UPDATE')
+    new_app = app.replace(b'READY FOR A MESSAGE', b'READY FOR AN UPDATE')
     old_bank, new_bank = cc784_ota.pack(app, 1), cc784_ota.pack(new_app, 2)
     base = cc784_ota.pack(app, 0)
     pages = [p for p in cc784_ota.changed_pages(base, new_bank) if p != 255] + [0x40, 0x41, 0x42]
@@ -844,7 +847,7 @@ def cmd_ram():
         tx = s.tx_bytes()
         return tx[1:] if tx[:1] == b'\x06' else tx
 
-    for ram8k, want_total in ((True, 7086), (False, 15278)):
+    for ram8k, want_total in ((True, 7054), (False, 15246)):     # P21 took 32 bytes for the reply stream
         name = '8 K' if ram8k else '16 K'
         s = Sign(rom, syms, fresh_ram=True, ram8k=ram8k)
         s.run_ms(2500)
@@ -878,6 +881,77 @@ def cmd_ram():
         check('%s: clock %s kept across a reset (%s), running' % (name, before.hex(), after.hex()),
               before[:2] == bytes([1, 0]) and after[:4] == before[:4] and after[5] == before[5] and s2.ram('CLK_RUN')[0])
     print('RAM sizes: %d/%d checks pass' % (sum(checks), len(checks)))
+    return all(checks)
+
+
+def cmd_quiet():
+    """P21: packets are processed by the render loop. The display keeps running, the
+    watchdog never fires, the sign keeps listening, and only an edit of the text
+    being played restarts the display."""
+    rom, syms = assemble(HERE.parent / 'src' / 'patched')
+    checks = []
+    def check(name, cond):
+        checks.append(bool(cond)); print('  %s %s' % ('ok  ' if cond else 'FAIL', name))
+    def word(s, name):
+        return int.from_bytes(s.ram(name, 2), 'little')
+    def send(s, payload, wait_ms=3000, flag=0x81):
+        s.tx_edges.clear(); s.wdog_clears = 0
+        s.send_frame(payload, addr=1, flag=flag); s.rx_wait(); s.run_ms(wait_ms)
+        return s.tx_bytes()
+    def dump(s):
+        r = send(s, b'\xb4\x33', wait_ms=500)           # 06 B1 addr nnnnn data... sum 04
+        for _ in range(600):                            # the reply streams in the background
+            if r.endswith(b'\x04'): break
+            s.run_ms(200); r = s.tx_bytes()
+        n = int(r[3:8]); return r[8:8 + n]
+    def marker(s, chan):
+        store = bytes(s.m.memory[syms['MSG_STORE']:word(s, 'STORE_END')])
+        return syms['MSG_STORE'] + store.index(bytes([0xD0 + chan // 10, 0xD0 + chan % 10]))
+    text1 = b'SECOND CHANNEL ' * 8
+
+    s = Sign(rom, syms, fresh_ram=True)
+    s.run_ms(2500)
+    send(s, FX_PLAIN, wait_ms=4000)                 # channel 0 replaces the demo: a restart
+    check('first message while the demo plays restarts the display (%02x)' % s.ram('PKT_RESTART')[0], s.ram('PKT_RESTART')[0] == 0xFF)
+    before = word(s, 'STORE_CURSOR')
+    tx = send(s, b'\x09\x30\x31\x0e' + text1)
+    after = word(s, 'STORE_CURSOR')
+    check('load into channel 1 while 0 plays: ACK+DONE %s, no restart (%02x), no watchdog clear (%d), renderer moved on (%04x -> %04x)'
+          % (tx.hex(), s.ram('PKT_RESTART')[0], s.wdog_clears, before, after),
+          tx == b'\x06\x04' and s.ram('PKT_RESTART')[0] == 0 and s.wdog_clears == 0 and after != before)
+    tx = send(s, b'\xb4\x31')
+    check("B4 '1' mid-scroll: reply %s, no restart" % tx[4:14], tx[:4] == b'\x06\xb1\x01\x0a' and tx[4:9] == b'15246' and s.ram('PKT_RESTART')[0] == 0)
+    tx = send(s, b'\x17' + b'1045' + b'P', wait_ms=1500)
+    check('set time mid-scroll: clock %s, no restart, no watchdog clear' % s.ram('CLK_H10', 4).hex(),
+          s.ram('CLK_H10', 4) == bytes([1, 0, 4, 5]) and s.ram('PKT_RESTART')[0] == 0 and s.wdog_clears == 0)
+    # a frame that arrives while the previous one is still being handled is dropped whole
+    s.tx_edges.clear()
+    s.send_frame(b'\x09\x30\x32\x0e' + b'THIRD ' * 40, addr=1, flag=0x81); s.rx_wait(); s.run_ms(20)
+    s.send_frame(b'\x01\x01\x01', addr=1, flag=0x81); s.rx_wait(); s.run_ms(3000)
+    tx = s.tx_bytes()
+    check('a second frame during processing gets no ACK and its 01 bytes do not open the editor (tx %s, MENU_ACTIVE %02x)'
+          % (tx.hex(), s.ram('MENU_ACTIVE')[0]), tx == b'\x06\x04' and s.ram('MENU_ACTIVE')[0] == 0)
+    tx = send(s, b'\xb4\x31')
+    check('the frame after DONE is accepted (%s)' % tx[:4].hex(), tx[:4] == b'\x06\xb1\x01\x0a')
+    d = dump(s)
+    check('dump has the loaded channels (%d bytes)' % len(d), text1 in d and b'THIRD ' * 40 in d)
+    # the playing channel is edited: that restarts, and the new text is what plays
+    tx = send(s, b'\x09\x30\x30\x0e' + b'REPLACED ' * 10)
+    check('edit of the playing channel restarts (%02x), ACK+DONE %s' % (s.ram('PKT_RESTART')[0], tx.hex()), s.ram('PKT_RESTART')[0] == 0xFF and tx == b'\x06\x04')
+    # a lower channel changes size while a higher one plays: the renderer is shifted, not restarted
+    send(s, b'\x04\x30\x31', wait_ms=500)           # sequence = channel 1 only, from the next channel on
+    for _ in range(60):                             # wait until channel 1 is the one playing
+        s.run_ms(500)
+        if marker(s, 1) < word(s, 'STORE_CURSOR') < marker(s, 2): break
+    playing1 = marker(s, 1) < word(s, 'STORE_CURSOR') < marker(s, 2)
+    before = word(s, 'STORE_CURSOR'); m1 = marker(s, 1)
+    tx = send(s, b'\x09\x30\x30\x0e' + b'LONGER TEXT IN CHANNEL ZERO ' * 6)
+    delta = marker(s, 1) - m1
+    check('channel 0 grows by %d under a playing channel 1: no restart (%02x), cursor shifted (%04x -> %04x), still in channel 1'
+          % (delta, s.ram('PKT_RESTART')[0], before, word(s, 'STORE_CURSOR')),
+          playing1 and s.ram('PKT_RESTART')[0] == 0 and delta > 0 and marker(s, 1) < word(s, 'STORE_CURSOR') < marker(s, 2) and s.wdog_clears == 0)
+    check('no faults, stack high-water %d' % s.depth(), not s.faults and s.depth() < 100)
+    print('quiet processing: %d/%d checks pass' % (sum(checks), len(checks)))
     return all(checks)
 
 
@@ -1029,10 +1103,12 @@ def cmd_compare(dir_a, dir_b):
 
 if __name__ == '__main__':
     args = sys.argv[1:]
-    if not args or args[0] not in ('stack', 'compare', 'eeprom', 'ota', 'update', 'push', 'fuzz', 'ram'):
+    if not args or args[0] not in ('stack', 'compare', 'eeprom', 'ota', 'update', 'push', 'fuzz', 'ram', 'quiet'):
         sys.exit(__doc__)
     if args[0] == 'ram':
         sys.exit(0 if cmd_ram() else 1)
+    if args[0] == 'quiet':
+        sys.exit(0 if cmd_quiet() else 1)
     if args[0] == 'push':
         sys.exit(0 if cmd_push() else 1)
     if args[0] == 'fuzz':

@@ -21,7 +21,8 @@ RAM, with the chip-size detection of patch 13:
 |---|---|
 | `4000–40BF` | `FRAMEBUF` — 192-byte column ring (stock: 344 from `4040`); also where the OTA RAM library runs |
 | `40C0–42C1` | pointers, `TXBUF`, variables — stock order, 72 dead bytes removed |
-| `42C2–7E6F` | `MSG_STORE`, **15278 bytes** with a 62256; `42C2–5E6F`, **7086**, with the stock 6264 |
+| `42C2–7E4F` | `MSG_STORE`, **15246 bytes** with a 62256; `42C2–5E4F`, **7054**, with the stock 6264 |
+| `7E50–7E6F` | reply stream and packet state (patch 21) |
 | `7E70–7EEF` | **stack**, 128 bytes (`STACK_SIZE`); `5E70` on the 6264, which mirrors `6000–7FFF` onto `4000–5FFF` |
 | `7EF0–7FFB` | packet flag, buffer and parser state |
 | `7FF0` | `NMI_SEEN`: FF once a mains NMI has fired since reset |
@@ -128,7 +129,7 @@ bytes of the bank are free.
     Everything at a fixed address (stack, packet buffers, the stub's bytes)
     sits under `RAM_TOP` = `8000`, which the 6264 aliases to `5Exx/5Fxx`
     for free, and `store_init` writes a marker through the mirror to pick
-    `STORE_TOP` (15278 bytes) or `STORE_TOP_8K` (7086). One build for both
+    `STORE_TOP` (15246 bytes) or `STORE_TOP_8K` (7054). One build for both
     chips; a 62256 is two wires (`AT28C256.md`).
 
 14. **Payload bytes are not keys** (fixes B12): `rx_consume` clears `RX_BYTE`
@@ -144,6 +145,34 @@ bytes of the bank are free.
     scratch bytes; `CLK_RUN` stays, since the init image rewrites it on every
     boot. An `ASSERT` keeps the library below `STORE_END`, and `ram` in the
     emulator checks that a set clock survives a reset.
+21. **Packets are processed by the render loop.** Nothing in the interrupt
+    context reads the message store, so `pkt_process` now runs as a
+    subroutine of the render loop (`pkt_poll`, called at every render step
+    and inside every frame wait) with interrupts on: no `DI`, no stack
+    reset, no restart unless the text being played changed. Its effects:
+    - The display keeps scrolling through text loads into other channels,
+      sequence changes, time setting and queries. A restart happens only
+      for an edit of the playing channel, a clear-all, or the first text
+      into an empty sign (the demo stops). The renderer's cursor is saved
+      at entry and put back, shifted by the size change when a lower
+      channel grew or shrank.
+    - The sign never goes deaf: the receiver keeps running. A frame that
+      arrives before DONE is parsed in discard mode (`PKT_DISCARD`) and
+      never answered, so its bytes cannot reach the editor as keys.
+    - Replies and DONE leave through a background transmitter: two
+      segments with an optional appended sum (`TX_SEG0/1`, fed by
+      `tx_bit_engine`), so a store dump no longer stalls anything. The
+      `B4` query frames are built over `PKT_BUF`; a query ends its packet.
+    - Text goes into the store in one move per run of plain bytes instead
+      of one per byte (`pkt_insert_run`), and DELETE_TEXT moves the store up
+      to its end instead of up to the RAM ceiling: a 240-byte load into a
+      small store is now ~20 ms of processing instead of ~130.
+    - `cmd_B5_ota` waits for TX idle and does its own `DI`; OTA packets
+      still park and restart the display.
+    The state lives in 32 bytes carved off the store top (`STREAM_AREA`):
+    the store is 15246/7054 bytes. The demo message shrank to one line to
+    pay for the code; ~330 bytes of the bank remain. Gate: `quiet` in the
+    emulator; `compare` differs from earlier trees by design.
 19. **RAINBOW starts on a random colour.** `BC` set the cycle index to 1 and
     the per-character step advances before it looks up, so every rainbow
     began on orange. The index now starts at 1–5 from a running 8-bit
@@ -177,7 +206,8 @@ bytes of the bank are free.
 
 ## 3. Rejected
 
-- **Always defer processing** (proposed for B3) — *regression*. `main_loop`
+- **Always defer processing** (proposed for B3) — *regression at the time*,
+  superseded by patch 21, which polls from the render loop. `main_loop`
   tests `PKT_READY` only on entry at `009A`; the `render_loop` render loop never
   falls back to it. Re-entry happens only via `fx_end_of_channel` (`0F5E`) or
   the `BA` wait-for-key spin (`0A49`), so a deferred packet waits for the
@@ -210,10 +240,14 @@ bytes of the bank are free.
 - **Patch 7** — a message alternating BOLD, TINY (45 characters), NORMAL,
   TINY, ITALIC, BIG and TINY (30 characters) renders cleanly; TINY's frame in
   `TXBUF` and its line buffer in the 192-byte ring hold up on the panel.
-- **Patch 13** — `B4 '1'` reports 15278 on a 62256.
+- **Patch 13** — `B4 '1'` reports 15246 on a 62256 (15278 before patch 21).
 - **Patches 10–11** — OTA pushes over the ESPHome bridge: identical image,
   one-page, ~100-page and interrupted-then-resumed updates, all booted and
   confirmed; the store survives every reboot.
+- **Patch 21** — messages loaded into other channels, queries and a store
+  dump mid-scroll: the text keeps scrolling, with a pause of a few frames
+  while the packet is processed; no blank, no restart. A DONE follows each
+  addressed frame's reply.
 - **Patch 20** — the clock set from the PC survives a power cycle.
 - **Patch 19** — a RAINBOW message starts on a different colour each cycle.
 - **Patch 18** — a `--trial` push boots the new bank as TRIED and leaves it

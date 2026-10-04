@@ -50,7 +50,7 @@ Every transmission to the sign is one frame:
 |---|---|
 | `0xB1` | Start of frame (constant) |
 | `addr` | Sign address as a **binary byte** (whatever is set on the sign's address switch/menu). `0x2A` (`*`) is used as the broadcast "all signs" address; the program does not wait for an ACK when using it. |
-| `0x80` | Flag. Stock firmware processes the packet immediately if it is exactly `0x80`, else defers it to the main loop (see §8). The patched firmware treats bit 7 as "immediate" and bit 0 as "send DONE": with `0x81` the sign sends a `0x04` byte once the packet has been processed, i.e. the moment it can receive again. |
+| `0x80` | Flag. Stock firmware processes the packet immediately if it is exactly `0x80`, else defers it to the main loop (see §8). The patched firmware processes every packet at its next render step whatever bit 7 says, and bit 0 asks for DONE: with `0x81` the sign sends a `0x04` byte once the packet has been processed and its reply sent, i.e. the moment it will accept a new frame; a frame sent before that is parsed and ignored. |
 | `len` | Number of payload bytes that follow (does **not** include the checksum) |
 | payload | 1–254 bytes, see §4 |
 | `cksum` | **8-bit additive checksum: sum of all payload bytes, modulo 256.** The 4 header bytes are excluded. No inversion, no two's-complement. |
