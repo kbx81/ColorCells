@@ -209,8 +209,8 @@ STACK_TOP            equ PKT_READY   ; first PUSH lands two below
 ; is the blink clock. Change here to retune, nothing else references it.
 FLASH_HALF_PERIOD    equ 13
 FRAME_COLS           equ 86          ; columns sent per row: the panel's 84 plus two that fall off the chain
-HOLD_FRAMES          equ 0x50        ; frames a PAUSE, HOLD, wipe or clock holds the panel (~1.3 s)
-BEEP_LEN             equ 0x96        ; beeper on for this many tick6 periods (~115 ms)
+HOLD_FRAMES          equ 80          ; frames a PAUSE, HOLD, wipe or clock holds the panel (~1.3 s)
+BEEP_LEN             equ 150         ; beeper on for this many tick6 periods (~115 ms)
 IR_REPEAT_DELAY      equ 0x0514      ; tick6 periods a held remote key waits before repeating (~1 s)
 IR_REPEAT_TICKS      equ 0x012c      ; ... and between repeats (~0.23 s)
 STACK_SIZE           equ 128         ; measured high-water 70 bytes, worst-case chain ~108
