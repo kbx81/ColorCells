@@ -226,6 +226,9 @@ IR_REPEAT_TICKS      equ 300         ; ... and between repeats (~0.23 s)
 MARK_LO              equ 0xd0        ; channel markers are two bytes D0+tens, D0+units
 MARK_HI              equ 0xda        ; the last marker byte value; alone, DA ends the store
 TEXT_END             equ 0x03        ; ends a channel's text
+CHANNELS             equ 100         ; message channels 0-99
+CHAN_DEMO            equ 100         ; the pseudo-channel that plays DEMO_MESSAGE
+SEQ_LIST_LEN         equ 104         ; SEQ_LIST: up to 100 entries plus FF terminators
 
 ; ---- Message attribute bytes (the sign's own names, CC784_firmware.md §7) --------
 ATTR_BIG             equ 0x10
@@ -247,6 +250,9 @@ ATTR_TIME            equ 0x5f
 ATTR_REM             equ 0xb0        ; remark: skipped up to the next B0
 KEY_EURO             equ 0xb6
 KEY_FUNC             equ 0xb7
+KEY_DEL              equ 0x7f
+IR_CODE_STOP         equ 0xa4        ; 0x80 | remote key 36, STOP/START
+IR_CODE_SPACE        equ 0xa5        ; 0x80 | remote key 37, SPACE
 ATTR_DRAW            equ 0xb8
 ATTR_THIN            equ 0xb9
 ATTR_WAIT            equ 0xba
@@ -589,7 +595,7 @@ frame_latch_colour:
         LD A,(WINDOW_COLOUR)
         JR z,frame_set_window
         AND COLOUR_FLASH
-        OR 0x8f
+        OR COLOUR_DEFAULT
 
 frame_set_window:
         LD (ROW_COLOUR),A
@@ -646,11 +652,11 @@ rx_consume:
         CALL rx_fifo_get
         JP nc,rx_have_byte
         LD A,(IR_CODE)
-        CP 0xa4
+        CP IR_CODE_STOP
         JP z,rx_ir_stop_key
-        CP 0xa5
+        CP IR_CODE_SPACE
         JP nz,tick6_exit
-        LD A,0x20
+        LD A,' '
         LD (RX_BYTE),A
         JP tick6_exit
 
@@ -711,14 +717,14 @@ tick6_restore:
 init_sequence:
         XOR A
         LD (SEQ_ALL_EMPTY),A
-        LD B,0x68
+        LD B,SEQ_LIST_LEN
         LD HL,SEQ_LIST
         LD A,(HL)
         CP 0xff
         JR z,seq_reset_default
 
 seq_scan:
-        CP 0x65
+        CP CHAN_DEMO+1
         JR nc,seq_scan_end
         INC HL
         LD A,(HL)
@@ -734,7 +740,7 @@ seq_scan_end:
 seq_reset_default:
         LD HL,SEQ_LIST
         LD A,0
-        LD B,0x64
+        LD B,CHANNELS
 
 seq_fill:
         LD (HL),A
@@ -781,7 +787,7 @@ seq_next_channel:
         INC A
         JP z,seq_test_message
         LD A,(NEXT_CHAN)
-        CP 0x64
+        CP CHAN_DEMO
         JP nc,seq_from_list
         LD E,A
         LD A,0xff
@@ -793,7 +799,7 @@ seq_from_list:
         LD A,(SEQ_ALL_EMPTY)
         LD E,A
         CP 10
-        LD A,0x64
+        LD A,CHAN_DEMO
         JR z,seq_open_channel
         LD HL,(SEQ_PTR)
         LD A,(HL)
@@ -804,10 +810,10 @@ seq_from_list:
         JP seq_next_channel
 
 seq_clamp_entry:
-        CP 0x65
+        CP CHAN_DEMO+1
         JR c,seq_advance
-        LD A,0x64
-        LD (HL),0x64
+        LD A,CHAN_DEMO
+        LD (HL),CHAN_DEMO
 
 seq_advance:
         LD E,A
@@ -855,7 +861,7 @@ seq_set_cursor:
         CALL clear_chan_lock
         POP DE
         LD A,E
-        CP 0x64
+        CP CHAN_DEMO
         JR nz,seq_ret
         LD (CHAN_LOCK),A
 
@@ -872,7 +878,7 @@ seq_chan_empty:
         OR A
         SBC HL,DE
         JP nz,seq_next_channel
-        LD A,0x64
+        LD A,CHAN_DEMO
         JP seq_open_channel
 
 seq_test_message:
@@ -895,7 +901,7 @@ clr_lock_loop:
 
 ; ---- chan_select: Select channel E: find/create its slot in MSG_STORE, set INS_PTR/STORE_CURSOR
 chan_select:
-        CP 0x64
+        CP CHAN_DEMO
         JR nz,chan_marker
         LD HL,DEMO_MESSAGE
         JP chan_ok
@@ -985,7 +991,7 @@ repair_check_units:
 repair_fix_pair:
         DEC HL
         DEC HL
-        LD (HL),0x20
+        LD (HL),' '
         INC HL
         INC HL
         INC HL
@@ -994,7 +1000,7 @@ repair_fix_pair:
         JP c,repair_next
         CP MARK_HI+1
         JP nc,repair_next
-        LD (HL),0x20
+        LD (HL),' '
 
 repair_next:
         INC HL
@@ -1057,7 +1063,7 @@ fixbad_loop:
         ADD IX,DE
         BIT 0,(IX+0)
         JR z,fixbad_next
-        LD (HL),0x3f
+        LD (HL),'?'
         INC (IY+0)
 
 fixbad_next:
@@ -1076,7 +1082,7 @@ strip_loop:
         LD A,(HL)
         CP TEXT_END
         JR nz,strip_next
-        LD (HL),0x20
+        LD (HL),' '
 
 strip_next:
         INC HL
@@ -1155,7 +1161,7 @@ init_clear_addrbuf:
         LD (TICK6_COUNT),A
         LD A,0xff
         LD (NEXT_CHAN),A
-        LD A,0x20
+        LD A,' '
         LD (MAGIC_LAST_CHAR),A
         LD A,(NMI_COUNT)
         LD (RND_SEED),A
@@ -1381,7 +1387,7 @@ init_render:
 ;      at the next space; two spaces in a row clear the background colour
 track_flash_space:
         LD A,(CUR_CHAR)
-        CP 0x20
+        CP ' '
         JR z,space_seen
         XOR A
         LD (PREV_SPACE),A
@@ -1555,7 +1561,7 @@ glyph_blit:
         AND A
         JR z,blit_setup
         LD A,(CUR_CHAR)
-        CP 0x20
+        CP ' '
         JR nz,blit_setup
         LD DE,WIDE_SPACE_GLYPH
         LD (GLYPH_PTR),DE
@@ -1595,7 +1601,7 @@ blit_set_c:
 blit_colour:
         PUSH BC
         LD A,(CUR_CHAR)
-        CP 0x20
+        CP ' '
         LD C,0xf0
         JR z,blit_write_colour
         LD C,0xff
@@ -1647,7 +1653,7 @@ glyph_stage:
         JP nc,fx_flush_stage
         LD DE,(STAGE_PTR)
         LD A,(FLASH_BIT)
-        OR 0x8f
+        OR COLOUR_DEFAULT
         LD (DE),A
         LD A,(DRAW_NO_GAP)
         AND A
@@ -1839,7 +1845,7 @@ wait_for_key:
 
 wait_poll:
         LD A,(RX_BYTE)
-        CP 0x20
+        CP ' '
         JR nz,wait_check_pkt
         POP HL
         JP render_next_char
@@ -1920,7 +1926,7 @@ draw_finish:
         JP nz,draw_set_width
         XOR A
         LD (DRAW_NO_GAP),A
-        LD A,0x20
+        LD A,' '
         LD (CUR_CHAR),A
         RET
 
@@ -1946,15 +1952,15 @@ draw_bad_hex:
         CALL unfetch_char
 
 draw_abort:
-        LD A,0x2a
+        LD A,'*'
         LD (CUR_CHAR),A
         JP draw_finish
 
 ; ---- hex_digit_value: A = value of ASCII hex digit, FF if not one
 hex_digit_value:
-        CP 0x30
+        CP '0'
         JP c,hexval_bad
-        CP 0x3a
+        CP '9'+1
         JP c,hexval_ok
         AND 0xdf
         CP 0x41
@@ -1985,14 +1991,14 @@ magic_preprocess:
         AND A
         JR z,magic_char
         LD A,(CUR_CHAR)
-        CP 0x20
+        CP ' '
         RET nz
         POP HL
         JP fx_flush_stage
 
 magic_char:
         LD A,(CUR_CHAR)
-        CP 0x20
+        CP ' '
         JR nz,magic_attr
         LD HL,MAGIC_WORD_COUNT
         INC (HL)
@@ -2001,15 +2007,15 @@ magic_char:
         LD A,(MAGIC_LAST_CHAR)
         CP 0x2e
         JP z,magic_reseed
-        CP 0x21
+        CP '!'
         JP z,magic_reseed
-        CP 0x3f
+        CP '?'
         JP z,magic_reseed
-        CP 0x3a
+        CP '9'+1
         JP z,magic_reseed
         CP 0x2c
         JP z,magic_reseed
-        LD A,0x20
+        LD A,' '
         LD (MAGIC_LAST_CHAR),A
         JP magic_ret
 
@@ -2041,7 +2047,7 @@ magic_effect_attr:
 
 magic_push_off:
         PUSH BC
-        LD A,0x20
+        LD A,' '
         LD (CUR_CHAR),A
         XOR A
         LD (EFFECT_ID),A
@@ -2726,7 +2732,7 @@ fx_magic:
         LD (MAGIC_FX_PREV),A
         LD A,0xff
         LD (MAGIC_MODE),A
-        LD A,0x20
+        LD A,' '
         LD (MAGIC_LAST_CHAR),A
         LD A,1
         LD (MAGIC_WORD_COUNT),A
@@ -2808,7 +2814,7 @@ fbcol_loop:
         JR z,fbcol_next
         LD A,(HL)
         AND COLOUR_FLASH
-        OR 0x8f
+        OR COLOUR_DEFAULT
         LD (HL),A
 
 fbcol_next:
@@ -2819,7 +2825,7 @@ fbcol_next:
         JR nz,fbcol_loop
         LD A,(WINDOW_COLOUR)
         AND COLOUR_FLASH
-        OR 0x8f
+        OR COLOUR_DEFAULT
         LD (WINDOW_COLOUR),A
         LD (ROW_COLOUR),A
         LD E,A
@@ -2958,7 +2964,7 @@ tinyoff_next:
 
 tinyoff_loop:
         PUSH BC
-        LD A,0x20
+        LD A,' '
         LD (CUR_CHAR),A
         XOR A
         LD (EFFECT_ID),A
@@ -3083,7 +3089,7 @@ tiny_scroll_out:
 
 tinyout_loop:
         PUSH BC
-        LD A,0x20
+        LD A,' '
         LD (CUR_CHAR),A
         LD A,5
         LD (GLYPH_WIDTH),A
@@ -3372,7 +3378,7 @@ store_clear_all:
         LD A,MARK_LO
         LD C,0xd0
         LD HL,MSG_STORE
-        LD B,0x64
+        LD B,CHANNELS
 
 clr_chan_loop:
         LD (HL),A
@@ -3396,7 +3402,7 @@ clr_chan_next:
         LD (HL),A
         LD HL,SEQ_LIST
         LD (HL),MARK_HI
-        LD B,0x67
+        LD B,SEQ_LIST_LEN-1
 
 clr_seq_loop:
         INC HL
@@ -4255,7 +4261,7 @@ scroll_off_text:
         LD (FONT_MODE),A
 
 scrolloff_loop:
-        LD A,0x20
+        LD A,' '
         LD (CUR_CHAR),A
         PUSH BC
         CALL render_cur_char
@@ -4371,7 +4377,7 @@ menu_enter:
         LD HL,MY_ADDRESS
         CP (HL)
         JR z,editor_start
-        CP 0x2a
+        CP '*'
         JR z,editor_start
         JP RESET
 
@@ -4389,7 +4395,7 @@ editor_start:
         EI
         CALL init_render
         LD A,(IR_CODE)
-        CP 0xa4
+        CP IR_CODE_STOP
         JR nz,editor_init
         CALL beep_start
 
@@ -4401,7 +4407,7 @@ editor_stop_wait:
 
 editor_stop_poll:
         LD A,(IR_CODE)
-        CP 0xa4
+        CP IR_CODE_STOP
         JR z,editor_stop_wait
         CP 0xfe
         JR nz,editor_init
@@ -4529,7 +4535,7 @@ editor_dispatch:
         JP z,menu_clear_all
         CP 5
         JP z,show_top_of_msg
-        CP 0x7f
+        CP KEY_DEL
         JP z,editor_delete
         CP KEY_SHIFT
         JP z,editor_key_shift
@@ -4625,7 +4631,7 @@ newmsg_skip_next:
 newmsg_next_chan:
         LD A,E
         INC A
-        CP 0x64
+        CP CHAN_DEMO
         JR nz,newmsg_try_chan
         CALL init_render
         LD HL,(FB_COL)
@@ -4634,7 +4640,7 @@ newmsg_next_chan:
 newmsg_ask_full:
         LD HL,MENU_STR_MSG_FULL
         CALL menu_ask_chan
-        CP 0x64
+        CP CHAN_DEMO
         JP nc,newmsg_ask_full
 
 newmsg_select:
@@ -4663,7 +4669,7 @@ newmsg_set_seq:
         CALL clear_chan_lock
         POP DE
         LD A,E
-        CP 0x64
+        CP CHAN_DEMO
         JR nz,newmsg_seq_fill
         LD (CHAN_LOCK),A
 
@@ -4671,7 +4677,7 @@ newmsg_seq_fill:
         LD HL,SEQ_LIST
         LD (HL),E
         INC HL
-        LD B,0x67
+        LD B,SEQ_LIST_LEN-1
 
 newmsg_seq_loop:
         LD (HL),0xff
@@ -4718,7 +4724,7 @@ exit_wait_release:
         LD A,(IR_CODE)
         CP ATTR_TINY
         JR z,exit_add_to_seq
-        CP 0xa4
+        CP IR_CODE_STOP
         JR z,exit_key_held
         CP 0xaf
         JR nz,exit_wait_release
@@ -4731,7 +4737,7 @@ exit_key_held:
 
 exit_held_poll:
         LD A,(IR_CODE)
-        CP 0xa4
+        CP IR_CODE_STOP
         JR z,exit_key_held
         CP 0xaf
         JR z,exit_key_held
@@ -4757,14 +4763,14 @@ exit_add_to_seq:
         LD HL,SEQ_LIST
         CP (HL)
         JP z,exit_to_display
-        LD A,0x64
+        LD A,CHAN_DEMO
         CP (HL)
         JP nz,exit_seq_search
         LD A,E
         JP exit_seq_first
 
 exit_seq_search:
-        LD B,0x68
+        LD B,SEQ_LIST_LEN
 
 exit_seq_loop:
         LD A,(HL)
@@ -4821,9 +4827,9 @@ time_digit_loop:
 time_get_digit:
         CALL menu_getchar
         LD (CUR_CHAR),A
-        CP 0x3a
+        CP '9'+1
         JR nc,time_get_digit
-        CP 0x30
+        CP '0'
         JR c,time_get_digit
         PUSH AF
         CALL glyph_lookup
@@ -4914,14 +4920,14 @@ clock_next_step:
         LD (CLK_RENDER_STEP),A
         CP 3
         JR nz,clock_not_colon
-        LD A,0x3a
+        LD A,':'
         LD (CUR_CHAR),A
         JP clock_emit
 
 clock_not_colon:
         CP 6
         JR nz,clock_not_space
-        LD A,0x20
+        LD A,' '
         LD (CUR_CHAR),A
         JP clock_emit
 
@@ -4948,7 +4954,7 @@ clock_not_ampm:
 clock_digit:
         LD A,(HL)
         AND 15
-        OR 0x30
+        OR '0'
         LD (CUR_CHAR),A
         INC HL
         LD A,(CLK_RENDER_STEP)
@@ -4958,7 +4964,7 @@ clock_emit:
         CALL unfetch_char
         LD A,(CUR_CHAR)
         JP glyph_lookup
-        LD A,0x20
+        LD A,' '
         LD (CUR_CHAR),A
 
 clock_emit_last:
@@ -5001,7 +5007,7 @@ askchan_prefill:
 
 askchan_units_digit:
         AND 15
-        OR 0x30
+        OR '0'
 
 askchan_store_units:
         LD (CHAN_D1),A
@@ -5014,7 +5020,7 @@ askchan_store_units:
 
 askchan_tens_digit:
         AND 15
-        OR 0x30
+        OR '0'
 
 askchan_store_tens:
         LD (CHAN_D10),A
@@ -5055,7 +5061,7 @@ askchan_key:
         JR z,askchan_clear
         CP ATTR_MAGIC
         JP z,askchan_magic_key
-        CP 0x7f
+        CP KEY_DEL
         JR z,askchan_backspace
         CP 'A'
         JR z,askchan_all
@@ -5107,7 +5113,7 @@ askchan_return:
         RET
 
 askchan_clear:
-        LD A,0x20
+        LD A,' '
         LD (CHAN_D10),A
         LD (CHAN_D1),A
         JP askchan_show
@@ -5124,7 +5130,7 @@ askchan_all:
         JR askchan_return
 
 askchan_demo:
-        LD A,0x64
+        LD A,CHAN_DEMO
         JR askchan_return
 
 askchan_seq_key:
@@ -5147,7 +5153,7 @@ menu_address:
         LD A,(MY_ADDRESS)
         CP 0
         JR z,addr_default_1
-        CP 0x2a
+        CP ADDR_BROADCAST
         JR nz,addr_to_ascii
 
 addr_default_1:
@@ -5163,7 +5169,7 @@ addr_to_ascii:
 
 addr_skip_zeros:
         LD A,(HL)
-        CP 0x30
+        CP '0'
         JR nz,addr_show_loop
         LD A,B
         CP 1
@@ -5175,7 +5181,7 @@ addr_show_loop:
         LD A,(HL)
         CALL is_digit
         JP c,addr_show_digit
-        LD A,0x30
+        LD A,'0'
         LD (HL),A
 
 addr_show_digit:
@@ -5236,7 +5242,7 @@ addr_convert:
         LD HL,MENU_ENTRY_BUF
         CALL ascii_dec_to_bin
         JP c,menu_addr_invalid
-        CP 0x2a
+        CP ADDR_BROADCAST
         JP z,menu_addr_invalid
         CP 0
         JP z,menu_addr_invalid
@@ -5289,9 +5295,9 @@ POW10_BYTES:
 
 ; ---- is_digit: C set if A is ASCII 0-9
 is_digit:
-        CP 0x3a
+        CP '9'+1
         JR nc,not_digit
-        CP 0x30
+        CP '0'
         JR c,not_digit
         SCF
         RET
@@ -5366,10 +5372,10 @@ top_digit_loop:
 
 top_digit:
         AND 15
-        OR 0x30
+        OR '0'
         CALL is_digit
         JP c,top_emit
-        LD A,0x30
+        LD A,'0'
         LD (HL),A
 
 top_emit:
@@ -5559,7 +5565,7 @@ editor_key_bgrnd:
         LD A,0xff
         LD (BGRND_PENDING),A
         JP editor_loop
-        CP 0x30
+        CP '0'
         JR nz,digit_dec_wrap
         LD A,0x39
         RET
@@ -5572,7 +5578,7 @@ digit_dec_wrap:
 menu_prog_msg:
         LD HL,MENU_STR_PROG_MSG
         CALL menu_ask_chan_cur
-        CP 0x65
+        CP CHAN_DEMO+1
         JP nc,menu_prog_msg
         LD E,A
 
@@ -5590,7 +5596,7 @@ editor_select_chan:
         CALL clear_chan_lock
         POP DE
         LD A,E
-        CP 0x64
+        CP CHAN_DEMO
         JR nz,editor_select_done
         LD (CHAN_LOCK),A
 
@@ -5602,7 +5608,7 @@ menu_seq_msg:
         LD A,0xff
         LD (SEQ_SET),A
         LD HL,SEQ_LIST
-        LD B,0x68
+        LD B,SEQ_LIST_LEN
         LD A,0xff
 
 seqmenu_clear:
@@ -5612,13 +5618,13 @@ seqmenu_clear:
         LD (SEQ_MENU_ACTIVE),A
         LD HL,SEQ_LIST
         LD (SEQ_PTR),HL
-        LD B,0x67
+        LD B,SEQ_LIST_LEN-1
 
 seqmenu_loop:
         PUSH BC
         LD HL,MENU_STR_SEQ_MSG
         LD A,B
-        CP 0x67
+        CP SEQ_LIST_LEN-1
         JR z,seqmenu_first
         CALL menu_ask_chan
         JR seqmenu_result
@@ -5715,7 +5721,7 @@ test_sum_loop:
 seqmenu_all:
         LD HL,SEQ_LIST
         LD A,0
-        LD B,0x64
+        LD B,CHANNELS
 
 seqmenu_all_fill:
         LD (HL),A
@@ -6208,12 +6214,12 @@ editor_key_to_attr:
         JR z,func_store
         CP 0x8f
         JR z,func_store
-        LD C,0x3f
+        LD C,'?'
         CP 0x51
         JR z,func_store
         CP 0x71
         JR z,func_store
-        LD C,0x21
+        LD C,'!'
         CP 0x58
         JR z,func_store
         CP 0x78
@@ -6341,7 +6347,7 @@ redraw_loop:
         LD A,0xff
         LD (TINY_MODE),A
         LD A,(CUR_CHAR)
-        CP 0x20
+        CP ' '
         JR nz,redraw_classify
         LD A,(REDRAW_MAGIC)
         AND A
@@ -6414,7 +6420,7 @@ redraw_not_norm:
 redraw_not_flash:
         CP ATTR_ITALIC
         JP nz,redraw_not_italic
-        LD A,0x64
+        LD A,CHAN_DEMO
         LD (FONT_MODE),A
         JR redraw_label_check
 
@@ -6593,7 +6599,7 @@ status_not_speed:
 magicmsg_digits:
         LD A,(HL)
         AND 15
-        OR 0x30
+        OR '0'
         LD (CUR_CHAR),A
         PUSH HL
         PUSH BC
@@ -6754,8 +6760,8 @@ hex_byte_loop:
 
 ; ---- nibble_to_hex: A = ASCII hex digit for low nibble
 nibble_to_hex:
-        OR 0x30
-        CP 0x3a
+        OR '0'
+        CP '9'+1
         RET c
         ADD A,7
         RET
@@ -7135,7 +7141,7 @@ select_chan_common:
         CALL clear_chan_lock
         POP DE
         LD A,E
-        CP 0x64
+        CP CHAN_DEMO
         JR nz,select_chan_done
         LD (CHAN_LOCK),A
 
@@ -7146,7 +7152,7 @@ select_chan_done:
 cmd_04_sequence:
         LD HL,SEQ_LIST
         LD A,0
-        LD B,0x64
+        LD B,CHANNELS
 
 seq_default_fill:
         LD (HL),A
@@ -7162,7 +7168,7 @@ seq_default_fill:
         LD (HL),0xff
         LD HL,SEQ_LIST
         LD (SEQ_PTR),HL
-        LD B,0x67
+        LD B,SEQ_LIST_LEN-1
 
 seq_pair_loop:
         CALL pkt_next_byte
@@ -7199,7 +7205,7 @@ seq_pair_loop:
         JR seq_pair_store
 
 seq_pair_demo:
-        LD A,0x64
+        LD A,CHAN_DEMO
 
 seq_pair_store:
         LD (HL),A
