@@ -222,6 +222,47 @@ BEEP_LEN             equ 150         ; beeper on for this many tick6 periods (~1
 IR_REPEAT_DELAY      equ 1300        ; tick6 periods a held remote key waits before repeating (~1 s)
 IR_REPEAT_TICKS      equ 300         ; ... and between repeats (~0.23 s)
 
+; ---- Message store format ------------------------------------------------------
+MARK_LO              equ 0xd0        ; channel markers are two bytes D0+tens, D0+units
+MARK_HI              equ 0xda        ; the last marker byte value; alone, DA ends the store
+TEXT_END             equ 0x03        ; ends a channel's text
+
+; ---- Message attribute bytes (the sign's own names, CC784_firmware.md §7) --------
+ATTR_BIG             equ 0x10
+ATTR_NORM            equ 0x11
+ATTR_BOLD            equ 0x12
+ATTR_ITALIC          equ 0x13
+ATTR_FLASH           equ 0x14
+ATTR_COLOR           equ 0x15        ; as an editor key; the packet command is CMD_FORE_IDX
+ATTR_BGRND           equ 0x16        ; as an editor key; the packet command is CMD_BACK_IDX
+ATTR_LEFT            equ 0x18        ; plain scroll
+ATTR_PAUSE           equ 0x19
+ATTR_UP              equ 0x1a
+ATTR_DOWN            equ 0x1b
+KEY_CASE             equ 0x1c        ; UPPER/LOWER key
+KEY_SHIFT            equ 0x1d
+ATTR_GRAPH           equ 0x1e
+ATTR_MAGIC           equ 0x1f
+ATTR_TIME            equ 0x5f
+ATTR_REM             equ 0xb0        ; remark: skipped up to the next B0
+KEY_EURO             equ 0xb6
+KEY_FUNC             equ 0xb7
+ATTR_DRAW            equ 0xb8
+ATTR_THIN            equ 0xb9
+ATTR_WAIT            equ 0xba
+ATTR_HOLD            equ 0xbb
+ATTR_RAINBOW         equ 0xbc
+ATTR_MAGIC_OFF       equ 0xbd
+ATTR_TINY            equ 0xbe
+COLOUR_BASE          equ 0x80        ; 80-8F foreground: bits 0-1 green, 2-3 red intensity
+COLOUR_DEFAULT       equ 0x8f        ; yellow, full
+COLOUR_FLASH         equ 0x10        ; the FLASH bit in a frame-buffer colour byte
+BGRND_BASE           equ 0x90        ; 90-93 background
+GRAPH_BASE           equ 0xa0        ; A0-AF built-in graphics
+SPEED_BASE           equ 0xf0        ; F0-F7 scroll speed
+LATCH_TX             equ 0x10        ; CTRL_LATCH bit 4: serial TX
+LATCH_BLINK          equ 0x80        ; CTRL_LATCH bit 7: the FLASH blink clock
+
         org 0x0000
 
 ; ---- RESET: cold start: set SP, run init routines, EI, jump to main loop
@@ -547,7 +588,7 @@ frame_latch_colour:
         AND A
         LD A,(WINDOW_COLOUR)
         JR z,frame_set_window
-        AND 0x10
+        AND COLOUR_FLASH
         OR 0x8f
 
 frame_set_window:
@@ -591,7 +632,7 @@ frame_bit7_tick:
         JR frame_done
 
 frame_bit7_set:
-        LD A,0x80
+        LD A,LATCH_BLINK
         LD (LATCH_BIT7),A
 
 frame_done:
@@ -721,7 +762,7 @@ seq_check_loop:
         OR A
         JP nz,pkt_process_end
         LD A,(HL)
-        CP 3
+        CP TEXT_END
         POP HL
         RET nz
         JP seq_check_loop
@@ -781,7 +822,7 @@ seq_open_channel:
         OR A
         JP nz,pkt_process_end
         LD A,(HL)
-        CP 3
+        CP TEXT_END
         JR z,seq_chan_empty
         PUSH HL
         LD B,0
@@ -794,7 +835,7 @@ seq_open_channel:
 seq_skip_attrs:
         INC HL
         LD A,(HL)
-        CP 3
+        CP TEXT_END
         JR nz,seq_skip_attrs_next
         POP HL
         JP seq_chan_empty
@@ -860,17 +901,17 @@ chan_select:
         JP chan_ok
 
 chan_marker:
-        LD DE,0xd0d0
+        LD DE,MARK_LO*256+MARK_LO
         AND A
         JR z,chan_scan
         LD B,A
-        LD A,0xda
+        LD A,MARK_HI
 
 chan_marker_inc:
         INC E
         CP E
         JR nz,chan_marker_next
-        LD E,0xd0
+        LD E,MARK_LO
         INC D
         CP D
         JR z,chan_error
@@ -918,8 +959,8 @@ store_repair:
         CALL store_fix_bad_bytes
         CALL store_strip_ends
         LD HL,MSG_STORE
-        LD A,0xd0
-        LD D,0xd0
+        LD A,MARK_LO
+        LD D,MARK_LO
         LD E,A
         LD BC,(STORE_TEXT_LIMIT)
 
@@ -927,11 +968,11 @@ repair_marker:
         LD (HL),E
         INC HL
         LD (HL),D
-        LD A,0xda
+        LD A,MARK_HI
         INC D
         CP D
         JR nz,repair_check_units
-        LD D,0xd0
+        LD D,MARK_LO
         INC E
         JR repair_fix_pair
 
@@ -949,9 +990,9 @@ repair_fix_pair:
         INC HL
         INC HL
         LD A,(HL)
-        CP 0xd0
+        CP MARK_LO
         JP c,repair_next
-        CP 0xdb
+        CP MARK_HI+1
         JP nc,repair_next
         LD (HL),0x20
 
@@ -960,9 +1001,9 @@ repair_next:
 
 repair_scan:
         LD A,(HL)
-        CP 0xd0
+        CP MARK_LO
         JP c,repair_scan_next
-        CP 0xdb
+        CP MARK_HI+1
         JP nc,repair_scan_next
         JR repair_marker
 
@@ -975,7 +1016,7 @@ repair_scan_next:
         JP repair_scan
 
 repair_append_rest:
-        LD A,0xda
+        LD A,MARK_HI
 
 repair_append_loop:
         LD (HL),E
@@ -984,12 +1025,12 @@ repair_append_loop:
         INC HL
         LD (HL),D
         INC HL
-        LD (HL),3
+        LD (HL),TEXT_END
         INC HL
         INC D
         CP D
         JR nz,repair_append_loop
-        LD D,0xd0
+        LD D,MARK_LO
         INC E
         CP E
         JR nz,repair_append_loop
@@ -999,7 +1040,7 @@ repair_terminate:
         PUSH HL
         CALL store_add_ends
         POP HL
-        LD A,0xda
+        LD A,MARK_HI
         LD (HL),A
         RET
 
@@ -1033,7 +1074,7 @@ store_strip_ends:
 
 strip_loop:
         LD A,(HL)
-        CP 3
+        CP TEXT_END
         JR nz,strip_next
         LD (HL),0x20
 
@@ -1053,11 +1094,11 @@ store_add_ends:
 
 addend_loop:
         LD A,(IX+0)
-        CP 0xd0
+        CP MARK_LO
         JP c,addend_next
-        CP 0xdb
+        CP MARK_HI+1
         JP nc,addend_next
-        LD (IX-1),3
+        LD (IX-1),TEXT_END
         INC IX
         DEC BC
         LD A,C
@@ -1320,7 +1361,7 @@ init_render:
         LD (TINY_MODE),A
         LD (FONT_MODE),A
         LD (THIN_MODE),A
-        LD A,0x8f
+        LD A,COLOUR_DEFAULT
         LD (WINDOW_COLOUR),A
         LD (ROW_COLOUR),A
         LD (CUR_COLOUR),A
@@ -1333,7 +1374,7 @@ init_render:
         CALL clear_txbuf
         CALL clear_glyph_tmp
         LD HL,(STORE_LIMIT)
-        LD (HL),0xda
+        LD (HL),MARK_HI
         RET
 
 ; ---- track_flash_space: FLASH takes effect at the next printable char and ends
@@ -1396,10 +1437,10 @@ render_cur_char:
         CALL attr_wait_check
         CALL attr_remark_check
         CALL attr_hold_check
-        CP 0xbe
+        CP ATTR_TINY
         JP z,attr_tiny
         AND 0xf0
-        CP 0xa0
+        CP GRAPH_BASE
         JR nz,class_not_a0
         LD A,(CUR_CHAR)
         AND 15
@@ -1415,7 +1456,7 @@ class_not_a0:
         AND 0x60
         JP z,attr_control
         LD A,(CUR_CHAR)
-        CP 0x5f
+        CP ATTR_TIME
         JP z,render_clock
         BIT 7,A
         JP z,glyph_lookup
@@ -1423,7 +1464,7 @@ class_not_a0:
 class_high:
         CP 0x94
         JP c,attr_colour_speed
-        CP 0xa0
+        CP GRAPH_BASE
         JR c,glyph_lookup
         AND 0xf0
         CP 0xc0
@@ -1687,7 +1728,7 @@ fetch_store:
 ; ---- attr_hold_check: BB HOLD goes through fx_attr
 attr_hold_check:
         LD A,(CUR_CHAR)
-        CP 0xbb
+        CP ATTR_HOLD
         RET nz
         POP HL
         JP fx_attr
@@ -1695,7 +1736,7 @@ attr_hold_check:
 ; ---- attr_rainbow: BC starts the per-character colour cycle
 attr_rainbow:
         LD A,(CUR_CHAR)
-        CP 0xbc
+        CP ATTR_RAINBOW
         JR nz,rainbow_step
         LD A,(MAGIC_MODE)
         AND A
@@ -1754,7 +1795,7 @@ RAINBOW_COLOURS:
 
 attr_remark_check:
         LD A,(CUR_CHAR)
-        CP 0xb0
+        CP ATTR_REM
         RET nz
 
 remark_skip:
@@ -1763,7 +1804,7 @@ remark_skip:
 
 ; ---- attr_remark: 0xB0: skip text until the next 0xB0 (hidden remark)
 attr_remark:
-        CP 0xb0
+        CP ATTR_REM
         JR z,remark_end
         CP 3
         RET z
@@ -1776,7 +1817,7 @@ remark_end:
 ; ---- attr_wait_check: BA WAIT: flush, then spin until SPACE or a packet
 attr_wait_check:
         LD A,(CUR_CHAR)
-        CP 0xba
+        CP ATTR_WAIT
         RET nz
         LD A,(COL_COUNT)
         AND A
@@ -1786,7 +1827,7 @@ attr_wait_check:
         XOR A
         SBC HL,DE
         JR z,wait_for_key
-        LD A,0x18
+        LD A,ATTR_LEFT
         LD (CUR_CHAR),A
         RET
 
@@ -1812,7 +1853,7 @@ wait_check_pkt:
 ; ---- attr_thin_check: B9 THIN
 attr_thin_check:
         LD A,(CUR_CHAR)
-        CP 0xb9
+        CP ATTR_THIN
         RET nz
         LD (THIN_MODE),A
         POP HL
@@ -1825,7 +1866,7 @@ attr_draw_check:
 
 ; ---- attr_draw: 0xB8: user-drawn graphic follows
 attr_draw:
-        CP 0xb8
+        CP ATTR_DRAW
         JR z,draw_begin
         LD A,0
         LD (DRAW_PREV),A
@@ -1900,7 +1941,7 @@ draw_pop_odd:
 
 draw_bad_hex:
         LD A,(CUR_CHAR)
-        CP 3
+        CP TEXT_END
         JR nz,draw_abort
         CALL unfetch_char
 
@@ -1973,13 +2014,13 @@ magic_char:
         JP magic_ret
 
 magic_attr:
-        CP 0xbb
+        CP ATTR_HOLD
         JR z,magic_effect_attr
         CP 15
         JR z,magic_effect_attr
-        CP 0x19
+        CP ATTR_PAUSE
         JR c,magic_other
-        CP 0x1c
+        CP ATTR_DOWN+1
         JR nc,magic_other
 
 magic_effect_attr:
@@ -2022,14 +2063,14 @@ magic_other:
         XOR A
         LD (MAGIC_FX_PREV),A
         LD A,(CUR_CHAR)
-        CP 0xb8
+        CP ATTR_DRAW
         JP z,magic_printable
         AND 0xf0
-        CP 0xa0
+        CP GRAPH_BASE
         JP z,magic_printable
         CP 0x20
         JP c,magic_ret
-        CP 0x80
+        CP COLOUR_BASE
         JP nc,magic_ret
 
 magic_printable:
@@ -2049,7 +2090,7 @@ magic_word_start:
 
 magic_pick_font:
         AND 0xf0
-        CP 0xa0
+        CP GRAPH_BASE
         JP z,magic_colour_check
         LD A,(MAGIC_FONT_SET)
         AND A
@@ -2170,7 +2211,7 @@ magic_colour_retry:
 
 magic_colour_apply:
         LD A,E
-        AND 0x10
+        AND COLOUR_FLASH
         OR D
         AND 0x1f
         LD (CUR_COLOUR),A
@@ -2470,7 +2511,7 @@ fx_stage_empty:
 fx_done:
         LD HL,(STORE_CURSOR)
         LD A,(HL)
-        CP 0xba
+        CP ATTR_WAIT
         JR nz,fx_done_effect
         XOR A
         LD (FRAME_DELAY),A
@@ -2508,7 +2549,7 @@ attr_control:
 ; ---- attr_dispatch: 11 NORM,12 BOLD,13 ITALIC,14 FLASH,10 BIG,1F MAGIC; the rest go
 ;      through fx_attr: 06 HALT,07 BEEP,03 END,18 LEFT,19 PAUSE,1A UP,1B DOWN,0F RIGHT,BB HOLD
 attr_dispatch:
-        CP 0x11
+        CP ATTR_NORM
         JP nz,attr_not_norm
         XOR A
         LD (FLASH_BIT),A
@@ -2516,26 +2557,26 @@ attr_dispatch:
         JP attr_set_font
 
 attr_not_norm:
-        CP 0x12
+        CP ATTR_BOLD
         JP nz,attr_not_bold
         LD A,2
         JP attr_set_font
 
 attr_not_bold:
-        CP 0x13
+        CP ATTR_ITALIC
         JP nz,attr_not_italic
         LD A,6
         JP attr_set_font
 
 attr_not_italic:
-        CP 0x14
+        CP ATTR_FLASH
         JP nz,attr_not_flash
-        LD A,0x10
+        LD A,COLOUR_FLASH
         LD (FLASH_PENDING),A
         JP render_next_char
 
 attr_not_flash:
-        CP 0x10
+        CP ATTR_BIG
         JR nz,attr_not_big
         LD A,10
 
@@ -2546,7 +2587,7 @@ attr_set_font:
         JP render_next_char
 
 attr_not_big:
-        CP 0x1f
+        CP ATTR_MAGIC
         JP z,fx_magic
 
 fx_attr:
@@ -2575,17 +2616,17 @@ fx_dispatch:
         JP z,fx_beep
         CP 3
         JP z,fx_end_of_channel
-        CP 0x18
+        CP ATTR_LEFT
         JP z,fx_left
-        CP 0x19
+        CP ATTR_PAUSE
         JP z,fx_pause
-        CP 0x1a
+        CP ATTR_UP
         JP z,fx_up
-        CP 0x1b
+        CP ATTR_DOWN
         JP z,fx_down
         CP 15
         JP z,fx_right
-        CP 0xbb
+        CP ATTR_HOLD
         JP z,fx_hold
         JP render_next_char
 
@@ -2725,7 +2766,7 @@ attr_magic_off:
         LD (MAGIC_FONT_SET),A
         LD (MAGIC_COLOUR_SET),A
         LD (FONT_MODE),A
-        LD A,0x8f
+        LD A,COLOUR_DEFAULT
         LD (CUR_COLOUR),A
         JP render_next_char
 
@@ -2748,7 +2789,7 @@ halt_hold:
         CALL fb_colours_default
         LD HL,(STORE_CURSOR)
         LD A,(HL)
-        CP 0x18
+        CP ATTR_LEFT
         JP z,fx_left
         LD A,(EFFECT_ID)
         AND A
@@ -2766,7 +2807,7 @@ fbcol_loop:
         BIT 7,(HL)
         JR z,fbcol_next
         LD A,(HL)
-        AND 0x10
+        AND COLOUR_FLASH
         OR 0x8f
         LD (HL),A
 
@@ -2777,7 +2818,7 @@ fbcol_next:
         OR B
         JR nz,fbcol_loop
         LD A,(WINDOW_COLOUR)
-        AND 0x10
+        AND COLOUR_FLASH
         OR 0x8f
         LD (WINDOW_COLOUR),A
         LD (ROW_COLOUR),A
@@ -2793,14 +2834,14 @@ fbcol_next:
 attr_colour_speed:
         LD A,(CUR_CHAR)
         AND 0xf0
-        CP 0x80
+        CP COLOUR_BASE
         JP z,attr_fore_colour
-        CP 0x90
+        CP BGRND_BASE
         JP z,attr_back_colour
-        CP 0xf0
+        CP SPEED_BASE
         JP z,attr_speed
         LD A,(CUR_CHAR)
-        CP 0xbd
+        CP ATTR_MAGIC_OFF
         JP z,attr_magic_off
         JP render_next_char
 
@@ -2873,7 +2914,7 @@ attr_tiny:
         CALL clear_framebuf
         LD A,0xff
         LD (TINY_RENDER),A
-        LD A,0x8f
+        LD A,COLOUR_DEFAULT
         LD (FRAMEBUF_TINY),A
 
 tiny_loop:
@@ -2939,7 +2980,7 @@ tiny_get_glyph:
         LD A,(HL)
         LD (CUR_CHAR),A
         AND 0xf0
-        CP 0xa0
+        CP GRAPH_BASE
         JR nz,tinyg_check
         LD A,(CUR_CHAR)
         AND 15
@@ -2951,7 +2992,7 @@ tinyg_check:
         AND 0x60
         JP z,tinyg_stop
         LD A,(CUR_CHAR)
-        CP 0x5f
+        CP ATTR_TIME
         JP z,tinyg_stop
         BIT 7,A
         JP z,tinyg_lookup
@@ -2991,7 +3032,7 @@ tiny_put_glyph:
         LD B,0
         LD A,(GLYPH_WIDTH)
         LD C,A
-        LD A,0x8f
+        LD A,COLOUR_DEFAULT
         LD (DE),A
         INC DE
         LDIR
@@ -3084,7 +3125,7 @@ disp_blank_row:
         OR C
         LD C,A
         RES 5,C
-        LD A,0x8f
+        LD A,COLOUR_DEFAULT
         OUT (C),A
         OTIR
         OUT (PORT_STROBE),A
@@ -3188,7 +3229,7 @@ fxv_hold:
         LD BC,FRAMEBUF_SIZE
 
 hold_fill:
-        LD (HL),0x8f
+        LD (HL),COLOUR_DEFAULT
         INC HL
         DEC BC
         LD A,C
@@ -3283,7 +3324,7 @@ wipev_col:
 wipev_colour_byte:
         LD A,C
         CP 0xff
-        LD A,0x8f
+        LD A,COLOUR_DEFAULT
         JR nz,wipev_store
         LD A,(HL)
 
@@ -3328,7 +3369,7 @@ wipev_next_pass:
 
 ; ---- store_clear_all: Reset MSG_STORE: 100 empty channels D0..? then DA
 store_clear_all:
-        LD A,0xd0
+        LD A,MARK_LO
         LD C,0xd0
         LD HL,MSG_STORE
         LD B,0x64
@@ -3338,7 +3379,7 @@ clr_chan_loop:
         INC HL
         LD (HL),C
         INC HL
-        LD (HL),3
+        LD (HL),TEXT_END
         INC HL
         INC C
         LD D,A
@@ -3351,10 +3392,10 @@ clr_chan_loop:
 clr_chan_next:
         LD A,D
         DJNZ clr_chan_loop
-        LD A,0xda
+        LD A,MARK_HI
         LD (HL),A
         LD HL,SEQ_LIST
-        LD (HL),0xda
+        LD (HL),MARK_HI
         LD B,0x67
 
 clr_seq_loop:
@@ -3382,7 +3423,7 @@ store_init:
         LD HL,0x1b0e
         LD (STORE_SIZE),HL
         LD HL,0x5eef
-        LD (HL),0xda
+        LD (HL),MARK_HI
         INC HL
         LD BC,0x0110
 
@@ -3615,7 +3656,7 @@ tx_bit_engine:
         LD HL,TX_TIMING
         LD (TX_TIMING_PTR),HL
         LD A,(CTRL_LATCH_SHADOW)
-        OR 0x10
+        OR LATCH_TX
         LD (CTRL_LATCH_SHADOW),A
         LD (CTRL_LATCH),A
         LD A,(HL)
@@ -3640,11 +3681,11 @@ tx_bit_tick:
         AND E
         LD A,(CTRL_LATCH_SHADOW)
         JR nz,tx_mark
-        OR 0x10
+        OR LATCH_TX
         JR tx_latch_bit
 
 tx_mark:
-        AND 0xef
+        AND ~LATCH_TX&0xff
 
 tx_latch_bit:
         LD (CTRL_LATCH_SHADOW),A
@@ -3658,7 +3699,7 @@ tx_latch_bit:
 
 tx_stop_bit:
         LD A,(CTRL_LATCH_SHADOW)
-        AND 0xef
+        AND ~LATCH_TX&0xff
         LD (CTRL_LATCH_SHADOW),A
         LD (CTRL_LATCH),A
         LD A,10
@@ -3898,7 +3939,7 @@ pkt_check_ok:
         XOR A
         LD (PKT_STATE),A
         LD A,(PKT_FLAG)
-        CP 0x80
+        CP COLOUR_BASE
         JP z,pkt_process
         RET
 
@@ -4390,16 +4431,16 @@ editor_init:
 editor_find_marker:
         LD HL,(STORE_CURSOR)
         LD A,(HL)
-        CP 0xd0
+        CP MARK_LO
         JP c,editor_scan_back
-        CP 0xdb
+        CP MARK_HI+1
         JP nc,editor_scan_back
         DEC HL
         DEC HL
         LD A,(HL)
-        CP 0xd0
+        CP MARK_LO
         JP c,editor_cursor_set
-        CP 0xdb
+        CP MARK_HI+1
         JP nc,editor_cursor_set
         DEC HL
         LD (STORE_CURSOR),HL
@@ -4420,9 +4461,9 @@ editor_scan_back:
 
 editor_scan_loop:
         LD A,(HL)
-        CP 0xd0
+        CP MARK_LO
         JP c,editor_scan_next
-        CP 0xdb
+        CP MARK_HI+1
         JP nc,editor_scan_next
         JR editor_set_ins
 
@@ -4461,7 +4502,7 @@ editor_next_key:
         CALL editor_translate_key
         LD A,(EDIT_KEY)
         LD (CUR_CHAR),A
-        CP 0x1d
+        CP KEY_SHIFT
         LD A,0
         JR z,editor_dispatch
         LD (COLOR_PENDING),A
@@ -4477,7 +4518,7 @@ editor_dispatch:
         BIT 7,A
         JP nz,menu_seq_msg
         LD A,(EDIT_KEY)
-        CP 0x1f
+        CP ATTR_MAGIC
         CALL z,magic_new_message
         XOR A
         LD (EDITOR_FIRST_KEY),A
@@ -4490,7 +4531,7 @@ editor_dispatch:
         JP z,show_top_of_msg
         CP 0x7f
         JP z,editor_delete
-        CP 0x1d
+        CP KEY_SHIFT
         JP z,editor_key_shift
         CP 10
         JP z,cursor_right
@@ -4502,17 +4543,17 @@ editor_dispatch:
         JP z,cursor_left_8
         CP 14
         JP z,editor_clear_msg
-        CP 0xb6
+        CP KEY_EURO
         JP z,editor_toggle_euro
         CP 0x5e
         JP z,menu_address
-        CP 0x1c
+        CP KEY_CASE
         JP z,editor_toggle_caps
-        CP 0x1e
+        CP ATTR_GRAPH
         JP z,editor_key_graph
-        CP 0x15
+        CP ATTR_COLOR
         JP z,editor_key_color
-        CP 0x16
+        CP ATTR_BGRND
         JP z,editor_key_bgrnd
         CP 0x17
         JP z,menu_time
@@ -4520,7 +4561,7 @@ editor_dispatch:
         JP z,editor_key_speed
         CP 0xb3
         JP z,editor_goto_end
-        CP 0xb7
+        CP KEY_FUNC
         JP z,editor_key_func
         CP 9
         JP z,menu_prog_msg
@@ -4555,7 +4596,7 @@ newmsg_try_chan:
         AND A
         JP nz,pkt_process_end
         LD A,(HL)
-        CP 3
+        CP TEXT_END
         JR z,newmsg_empty_found
         LD B,0
         LD C,A
@@ -4567,7 +4608,7 @@ newmsg_try_chan:
 newmsg_skip_attrs:
         INC HL
         LD A,(HL)
-        CP 3
+        CP TEXT_END
         JR nz,newmsg_skip_next
         LD A,E
         JP newmsg_select
@@ -4642,7 +4683,7 @@ newmsg_seq_loop:
 
 ; ---- store_finalize: Fix up MSG_STORE terminators after an edit
 store_finalize:
-        LD A,0xda
+        LD A,MARK_HI
         LD HL,MSG_STORE
         LD BC,(STORE_SIZE)
         INC BC
@@ -4675,7 +4716,7 @@ editor_exit:
 
 exit_wait_release:
         LD A,(IR_CODE)
-        CP 0xbe
+        CP ATTR_TINY
         JR z,exit_add_to_seq
         CP 0xa4
         JR z,exit_key_held
@@ -5012,7 +5053,7 @@ askchan_key:
         JR z,askchan_enter
         CP 14
         JR z,askchan_clear
-        CP 0x1f
+        CP ATTR_MAGIC
         JP z,askchan_magic_key
         CP 0x7f
         JR z,askchan_backspace
@@ -5274,7 +5315,7 @@ editor_goto_end:
 
 gotoend_loop:
         LD A,(HL)
-        CP 3
+        CP TEXT_END
         JR z,gotoend_back
         INC HL
         JR gotoend_loop
@@ -5284,9 +5325,9 @@ gotoend_back:
         LD (STORE_CURSOR),HL
         LD HL,(STORE_CURSOR)
         LD A,(HL)
-        CP 0xd0
+        CP MARK_LO
         JP c,editor_loop
-        CP 0xdb
+        CP MARK_HI+1
         JP nc,editor_loop
         DEC HL
         LD (STORE_CURSOR),HL
@@ -5295,9 +5336,9 @@ gotoend_back:
 editor_reshow:
         LD HL,(STORE_CURSOR)
         LD A,(HL)
-        CP 0xd0
+        CP MARK_LO
         JP c,editor_loop
-        CP 0xdb
+        CP MARK_HI+1
         JP nc,editor_loop
         JP show_top_of_msg
 
@@ -5374,14 +5415,14 @@ delete_chan_text:
         SBC HL,DE
         PUSH HL
         POP BC
-        CP 0xd0
+        CP MARK_LO
         LD HL,(STORE_CURSOR)
 
 deltext_find_marker:
         LD A,(HL)
-        CP 0xd0
+        CP MARK_LO
         JP c,deltext_back
-        CP 0xdb
+        CP MARK_HI+1
         JP nc,deltext_back
         JR deltext_marker_end
 
@@ -5396,9 +5437,9 @@ deltext_back:
 deltext_marker_end:
         INC HL
         LD A,(HL)
-        CP 0xd0
+        CP MARK_LO
         JP c,deltext_one_byte
-        CP 0xdb
+        CP MARK_HI+1
         JP nc,deltext_one_byte
         JR deltext_move
 
@@ -5448,9 +5489,9 @@ editor_toggle_caps:
 editor_reshow2:
         LD HL,(STORE_CURSOR)
         LD A,(HL)
-        CP 0xd0
+        CP MARK_LO
         JP c,editor_loop
-        CP 0xdb
+        CP MARK_HI+1
         JP nc,editor_loop
         JP show_top_of_msg
 
@@ -5460,16 +5501,16 @@ editor_toggle_euro:
         LD (EURO_STATE),A
         LD HL,(STORE_CURSOR)
         LD A,(HL)
-        CP 0xd0
+        CP MARK_LO
         JP c,editor_loop
-        CP 0xdb
+        CP MARK_HI+1
         JP nc,editor_loop
         JP show_top_of_msg
 
 editor_key_speed:
         LD HL,(STORE_CURSOR)
         LD A,(HL)
-        CP 3
+        CP TEXT_END
         JP z,editor_loop
         LD A,(CHAN_LOCK)
         OR A
@@ -5481,7 +5522,7 @@ editor_key_speed:
 editor_key_graph:
         LD HL,(STORE_CURSOR)
         LD A,(HL)
-        CP 3
+        CP TEXT_END
         JP z,editor_loop
         LD A,(CHAN_LOCK)
         OR A
@@ -5493,7 +5534,7 @@ editor_key_graph:
 editor_key_color:
         LD HL,(STORE_CURSOR)
         LD A,(HL)
-        CP 3
+        CP TEXT_END
         JP z,editor_loop
         LD A,(CHAN_LOCK)
         OR A
@@ -5510,7 +5551,7 @@ editor_key_func:
 editor_key_bgrnd:
         LD HL,(STORE_CURSOR)
         LD A,(HL)
-        CP 3
+        CP TEXT_END
         JP z,editor_loop
         LD A,(CHAN_LOCK)
         OR A
@@ -5611,15 +5652,15 @@ seqmenu_done:
         LD (SEQ_MENU_ACTIVE),A
         LD HL,(STORE_CURSOR)
         LD A,(HL)
-        CP 0xd0
+        CP MARK_LO
         JP c,editor_loop
-        CP 0xdb
+        CP MARK_HI+1
         JP nc,editor_loop
         JP show_top_of_msg
 
 seqmenu_test_prompt:
         CALL menu_getchar
-        CP 0x12
+        CP ATTR_BOLD
         JR z,seqmenu_test_prompt
         CP 0x43
         JR z,test_mode_enter
@@ -5777,7 +5818,7 @@ getkey_accept:
 
 getkey_check_shift:
         LD A,(IR_KEYNUM)
-        CP 0x1d
+        CP KEY_SHIFT
         JR nz,getkey_translate
         CALL beep_start
         LD A,(SHIFT_STATE)
@@ -5858,7 +5899,7 @@ IR_KEY_TABLE:
 editor_key_shift:
         LD HL,(STORE_CURSOR)
         LD A,(HL)
-        CP 3
+        CP TEXT_END
         JP z,editor_loop
         LD A,(SHIFT_STATE)
         OR A
@@ -5882,11 +5923,11 @@ editor_delete:
         LD (CTRL_LATCH),A
         LD HL,(STORE_CURSOR)
         LD A,(HL)
-        CP 3
+        CP TEXT_END
         JP z,editor_loop
-        CP 0xd0
+        CP MARK_LO
         JP c,delete_do
-        CP 0xdb
+        CP MARK_HI+1
         JP nc,delete_do
         JP show_top_of_msg
 
@@ -5915,9 +5956,9 @@ delete_do:
         LD (DISP_ON),A
         LD HL,(STORE_CURSOR)
         LD A,(HL)
-        CP 0xd0
+        CP MARK_LO
         JP c,editor_loop
-        CP 0xdb
+        CP MARK_HI+1
         JP nc,editor_loop
         DEC HL
         LD (STORE_CURSOR),HL
@@ -5928,13 +5969,13 @@ delete_do:
 cursor_right:
         LD HL,(STORE_CURSOR)
         LD A,(HL)
-        CP 3
+        CP TEXT_END
         JR z,cursor_right_done
         INC HL
         LD A,(HL)
-        CP 0xd0
+        CP MARK_LO
         JP c,cursor_right_set
-        CP 0xdb
+        CP MARK_HI+1
         JP nc,cursor_right_set
         INC HL
 
@@ -5951,7 +5992,7 @@ cursor_right_8:
 
 right8_loop:
         LD A,(HL)
-        CP 3
+        CP TEXT_END
         JR z,right8_done
         INC HL
         LD (STORE_CURSOR),HL
@@ -5964,9 +6005,9 @@ right8_done:
 cursor_left:
         LD IX,(STORE_CURSOR)
         LD A,(IX+0)
-        CP 0xd0
+        CP MARK_LO
         JP c,cursor_left_do
-        CP 0xdb
+        CP MARK_HI+1
         JP nc,cursor_left_do
         JP show_top_of_msg
 
@@ -5974,9 +6015,9 @@ cursor_left_do:
         DEC IX
         LD (STORE_CURSOR),IX
         LD A,(IX+0)
-        CP 0xd0
+        CP MARK_LO
         JP c,editor_loop
-        CP 0xdb
+        CP MARK_HI+1
         JP nc,editor_loop
         DEC IX
         LD (STORE_CURSOR),IX
@@ -5987,9 +6028,9 @@ cursor_left_8:
         LD B,8
         LD HL,(STORE_CURSOR)
         LD A,(HL)
-        CP 0xd0
+        CP MARK_LO
         JP c,left8_step
-        CP 0xdb
+        CP MARK_HI+1
         JP nc,left8_step
         JP show_top_of_msg
 
@@ -5997,9 +6038,9 @@ left8_step:
         DEC HL
         LD (STORE_CURSOR),HL
         LD A,(HL)
-        CP 0xd0
+        CP MARK_LO
         JP c,cursor_left_8
-        CP 0xdb
+        CP MARK_HI+1
         JP nc,cursor_left_8
         DEC HL
         LD (STORE_CURSOR),HL
@@ -6015,11 +6056,11 @@ editor_insert:
         JP nz,editor_reshow
         LD HL,(STORE_CURSOR)
         LD A,(HL)
-        CP 3
+        CP TEXT_END
         JP z,insert_done
-        CP 0xd0
+        CP MARK_LO
         JP c,insert_do
-        CP 0xdb
+        CP MARK_HI+1
         JP nc,insert_do
         INC HL
         LD (STORE_CURSOR),HL
@@ -6118,7 +6159,7 @@ apply_graph_prefix:
         RET z
         LD A,(EDIT_KEY)
         AND 15
-        OR 0xa0
+        OR GRAPH_BASE
         LD (EDIT_KEY),A
         LD A,0
         LD (GRAPH_PENDING),A
@@ -6131,7 +6172,7 @@ apply_speed_prefix:
         RET z
         LD A,(EDIT_KEY)
         AND 7
-        OR 0xf0
+        OR SPEED_BASE
         LD (EDIT_KEY),A
         XOR A
         LD (SPEED_PENDING),A
@@ -6147,23 +6188,23 @@ editor_key_to_attr:
         XOR A
         LD (FUNC_PENDING),A
         LD A,(EDIT_KEY)
-        LD C,0xb8
-        CP 0x1e
+        LD C,ATTR_DRAW
+        CP ATTR_GRAPH
         JR z,func_store
         INC C
-        CP 0x11
+        CP ATTR_NORM
         JR z,func_store
         INC C
-        CP 0x19
+        CP ATTR_PAUSE
         JR z,func_store
-        LD C,0xb0
-        CP 0x14
+        LD C,ATTR_REM
+        CP ATTR_FLASH
         JR z,func_store
         LD C,6
-        CP 0x12
+        CP ATTR_BOLD
         JR z,func_store
-        LD C,0xbc
-        CP 0x15
+        LD C,ATTR_RAINBOW
+        CP ATTR_COLOR
         JR z,func_store
         CP 0x8f
         JR z,func_store
@@ -6178,10 +6219,10 @@ editor_key_to_attr:
         CP 0x78
         JR z,func_store
         LD C,0x5e
-        CP 0x1f
+        CP ATTR_MAGIC
         JR z,func_store
-        LD C,0xbe
-        CP 0x10
+        LD C,ATTR_TINY
+        CP ATTR_BIG
         JR z,func_store
         POP HL
         POP HL
@@ -6271,9 +6312,9 @@ editor_redraw:
         JP nz,redraw_status
         LD HL,(STORE_CURSOR)
         LD A,(HL)
-        CP 0xd0
+        CP MARK_LO
         JP c,redraw_window
-        CP 0xdb
+        CP MARK_HI+1
         JP nc,redraw_window
         JP redraw_status
 
@@ -6330,16 +6371,16 @@ redraw_high:
         JP z,redraw_char_check
         CP 0xd0
         JP z,redraw_char_check
-        CP 0xa0
+        CP GRAPH_BASE
         JP z,redraw_char_check
 
 redraw_attr:
         LD A,(CUR_CHAR)
-        CP 0x15
+        CP ATTR_COLOR
         JP z,redraw_char_check
-        CP 0x16
+        CP ATTR_BGRND
         JP z,redraw_char_check
-        CP 0xbd
+        CP ATTR_MAGIC_OFF
         JR nz,redraw_attr2
         XOR A
         LD (REDRAW_MAGIC),A
@@ -6348,15 +6389,15 @@ redraw_attr:
 redraw_attr2:
         CP 15
         JP z,redraw_fx_attr
-        CP 0x19
+        CP ATTR_PAUSE
         JP z,redraw_fx_attr
-        CP 0x1a
+        CP ATTR_UP
         JP z,redraw_fx_attr
-        CP 0x1b
+        CP ATTR_DOWN
         JP z,redraw_fx_attr
-        CP 0x18
+        CP ATTR_LEFT
         JP z,redraw_left_attr
-        CP 0x11
+        CP ATTR_NORM
         JP nz,redraw_not_norm
         XOR A
         LD (FLASH_BIT),A
@@ -6364,21 +6405,21 @@ redraw_attr2:
         JR redraw_label_check
 
 redraw_not_norm:
-        CP 0x14
+        CP ATTR_FLASH
         JP nz,redraw_not_flash
-        LD A,0x10
+        LD A,COLOUR_FLASH
         LD (FLASH_PENDING),A
         JR redraw_label_check
 
 redraw_not_flash:
-        CP 0x13
+        CP ATTR_ITALIC
         JP nz,redraw_not_italic
         LD A,0x64
         LD (FONT_MODE),A
         JR redraw_label_check
 
 redraw_not_italic:
-        CP 0x12
+        CP ATTR_BOLD
         JP nz,redraw_not_bold
         XOR A
         SET 1,A
@@ -6386,7 +6427,7 @@ redraw_not_italic:
         JR redraw_label_check
 
 redraw_not_bold:
-        CP 0x10
+        CP ATTR_BIG
         JP nz,redraw_not_big
         XOR A
         SET 1,A
@@ -6395,7 +6436,7 @@ redraw_not_bold:
         JP redraw_label_check
 
 redraw_not_big:
-        CP 0xb9
+        CP ATTR_THIN
         JP nz,redraw_not_thin
         LD A,0xff
         LD (THIN_MODE),A
@@ -6404,7 +6445,7 @@ redraw_not_big:
         JP redraw_label_check
 
 redraw_not_thin:
-        CP 0x1f
+        CP ATTR_MAGIC
         JP nz,redraw_label_check
         XOR A
         LD (FONT_MODE),A
@@ -6467,7 +6508,7 @@ redraw_char:
         LD (TINY_MODE),A
         LD A,(CUR_CHAR)
         AND 0xf0
-        CP 0xa0
+        CP GRAPH_BASE
         LD A,(CUR_CHAR)
         JR nz,redraw_char_glyph
         AND 15
@@ -6598,9 +6639,9 @@ redraw_finish:
         LD (MENU_MSG_FLAG),A
         LD HL,(STORE_CURSOR)
         LD A,(HL)
-        CP 0xd0
+        CP MARK_LO
         JP c,redraw_again
-        CP 0xdb
+        CP MARK_HI+1
         JP nc,redraw_again
         POP HL
         JP show_top_of_msg
@@ -6732,9 +6773,9 @@ pkt_process:
         LD (CTRL_LATCH),A
         LD HL,(STORE_CURSOR)
         LD A,(HL)
-        CP 0xd0
+        CP MARK_LO
         JP c,pkt_find_marker
-        CP 0xdb
+        CP MARK_HI+1
         JP nc,pkt_find_marker
         DEC HL
         LD (STORE_CURSOR),HL
@@ -6751,9 +6792,9 @@ pkt_find_marker:
 
 pkt_marker_loop:
         LD A,(HL)
-        CP 0xd0
+        CP MARK_LO
         JP c,pkt_marker_back
-        CP 0xdb
+        CP MARK_HI+1
         JP nc,pkt_marker_back
         JR pkt_set_ins
 
@@ -6816,7 +6857,7 @@ pkt_insert_text:
         JP nz,pkt_next
         LD HL,(STORE_CURSOR)
         LD A,(HL)
-        CP 3
+        CP TEXT_END
         JR nz,pkt_ins_check_full
         DEC HL
         ; B6: assembler typo - opcode 0x32 (LD (nn),A) where 0x22 (LD (nn),HL)
@@ -6965,7 +7006,7 @@ query_wait_tx:
 cmd_1E_colour_A0:
         CALL pkt_next_byte
         AND 15
-        OR 0xa0
+        OR GRAPH_BASE
         LD (CUR_CHAR),A
         JP pkt_insert_text
 
@@ -7042,7 +7083,7 @@ pkt_next_byte:
 cmd_02_speed:
         CALL pkt_next_byte
         AND 7
-        OR 0xf0
+        OR SPEED_BASE
         LD (CUR_CHAR),A
         JP pkt_insert_text
 
@@ -7052,7 +7093,7 @@ cmd_B3_append:
 
 append_find_end:
         LD A,(HL)
-        CP 3
+        CP TEXT_END
         JR z,append_seat
         INC HL
         JR append_find_end
@@ -7061,9 +7102,9 @@ append_seat:
         DEC HL
         LD (STORE_CURSOR),HL
         LD A,(HL)
-        CP 0xd0
+        CP MARK_LO
         JP c,pkt_next
-        CP 0xdb
+        CP MARK_HI+1
         JP nc,pkt_next
         DEC HL
         LD (STORE_CURSOR),HL
