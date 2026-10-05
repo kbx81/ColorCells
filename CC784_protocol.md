@@ -1,17 +1,10 @@
 # Color Cells CC784 / CC6x7 LED sign — serial protocol
 
-Reverse-engineered from `NETCC.EXE` (NETCC USA v3.0, © 1991 Color Cells Ltd /
-Innovative Sign Technology; compiled QuickBASIC 4.x, EXEPACK-compressed).
+Reverse-engineered from `NETCC.EXE` (NETCC USA v3.0, © 1991 Color Cells Ltd / Innovative Sign Technology; compiled QuickBASIC 4.x, EXEPACK-compressed).
 
-Everything below is for the **CC784 / CC6x7 family** ("CC784NET" / "CC784NIR",
-model type 1 in the program). Where the program does something different for
-the NC900-series network controllers (model type 2, internal code 5) it is
-noted in *italics* so you can ignore it.
+Everything below is for the **CC784 / CC6x7 family** ("CC784NET" / "CC784NIR", model type 1 in the program). Where the program does something different for the NC900-series network controllers (model type 2, internal code 5) it is noted in *italics* so you can ignore it.
 
-Confidence: **high** for framing, checksum, ACK/NAK, message/clear/sequence
-packets and the attribute code table (all read directly from the code and
-DATA statements). **Medium** for the meaning of a few individual bytes that
-the program only ever emits as constants (marked "?").
+Confidence: **high** for framing, checksum, ACK/NAK, message/clear/sequence packets and the attribute code table (all read directly from the code and DATA statements). **Medium** for the meaning of a few individual bytes that the program only ever emits as constants (marked "?").
 
 ---
 
@@ -27,13 +20,9 @@ Opened as `COMn:baud,n,8,2,cs,ds,cd,bin`:
 | Stop bits | **2** |
 | Flow control | none (CTS/DSR/CD ignored) |
 
-The program sends **one byte at a time with a ~50 ms pause after each byte**.
-The firmware shows this is *not* required: reception is interrupt-driven into
-an 8-byte FIFO. What *is* required is not sending the next frame until the
-sign has ACKed the previous one (see §8).
+The program sends **one byte at a time with a ~50 ms pause after each byte**. The firmware shows this is *not* required: reception is interrupt-driven into an 8-byte FIFO. What *is* required is not sending the next frame until the sign has ACKed the previous one (see §7).
 
-For the ESP32: TX → sign RX via an RS-232 driver (MAX3232 etc.), plus RX for
-the ACK byte. Nothing else is required.
+**Connecting anything else** (a microcontroller, a USB adapter, your own cable): a TX line to the sign's RX on DB9 pin 8 and an RX line from the sign's TX on pin 3, ground on pin 5. The sign expects RS-232 polarity; a MAX3232-class driver is the faithful interface, and the [hardware notes §4](CC784_hardware.md#4-serial-port-h) explain why plain TTL may do. Nothing else is required on a NIR or on the patched firmware. A CC784NET on its stock firmware also needs sign pins 2 and 5 tied together: its boot-time test reads pin 2 low as "a PC is attached" and otherwise runs in keypad mode and ignores serial ([CC784_hardware.md §6](CC784_hardware.md#6-connectors)).
 
 ---
 
@@ -43,14 +32,15 @@ Every transmission to the sign is one frame:
 
 ```
  B1  <addr>  80  <len>  <payload ...>  <cksum>
- └─ header (4 bytes, not checksummed) ─┘
+ └───────────────────┘
+ header, 4 bytes, not checksummed; <cksum> = 8-bit sum of the payload bytes
 ```
 
 | Byte | Meaning |
 |---|---|
 | `0xB1` | Start of frame (constant) |
-| `addr` | Sign address as a **binary byte** (whatever is set on the sign's address switch/menu). `0x2A` (`*`) is used as the broadcast "all signs" address; the program does not wait for an ACK when using it. |
-| `0x80` | Flag. Stock firmware processes the packet immediately if it is exactly `0x80`, else defers it to the main loop (see §8). The patched firmware processes every packet at its next render step whatever bit 7 says, and bit 0 asks for DONE: with `0x81` the sign sends a `0x04` byte once the packet has been processed and its reply sent, i.e. the moment it will accept a new frame; a frame sent before that is parsed and ignored. |
+| `addr` | Sign address as a **binary byte** (as set in the sign's address menu/configuration). `0x2A` (`*`) is used as the broadcast "all signs" address; the program does not wait for an ACK when using it. |
+| `0x80` | Flag. Stock firmware processes the packet immediately if it is exactly `0x80`, else defers it to the main loop (see §7). The [patched firmware](CC784_patched.md) processes every packet at its next render step whatever bit 7 says, and bit 0 asks for DONE: with `0x81` the sign sends a `0x04` byte once the packet has been processed and its reply sent, which is the moment it will accept a new frame; a frame sent before that is parsed and ignored. |
 | `len` | Number of payload bytes that follow (does **not** include the checksum) |
 | payload | 1–254 bytes, see §4 |
 | `cksum` | **8-bit additive checksum: sum of all payload bytes, modulo 256.** The 4 header bytes are excluded. No inversion, no two's-complement. |
@@ -65,33 +55,25 @@ def frame(addr: int, payload: bytes) -> bytes:
 
 ### 2.1 Reply
 
-After the checksum byte the program waits (default 7 s, 2 s in some modes)
-and reads what has arrived:
+After the checksum byte the program waits (default 7 s, 2 s in some modes) and reads what has arrived:
 
 | Byte | Meaning |
 |---|---|
 | `0x06` (ACK) | Frame accepted |
-| `0x15` | NAK — bad checksum (**firmware-verified**; NETCC's source looked for `0x0F`, which the CC784 never sends) |
+| `0x15` | NAK, bad checksum (**firmware-verified**). `0x15` is the ASCII NAK character, as `0x06` is ASCII ACK. NETCC's source waits for `CHR$(15)`, decimal 15 = `0x0F`, which the sign never sends: a hex-read-as-decimal slip, so NETCC never notices a NAK |
 | anything else / nothing | treated as error |
 
-On anything but ACK the input buffer is flushed and the **same frame is
-re-sent, up to 3 attempts total**, then "sign not responding" is reported.
+On anything but ACK the input buffer is flushed and the **same frame is re-sent, up to 3 attempts total**, then "sign not responding" is reported.
 
-Query frames (§4.5) are answered with ACK **followed by a frame in the same
-format** (`B1 addr ... cksum`); the program validates it with exactly the same
-checksum rule (sum of bytes 5..N-1 mod 256 == byte N) and checks that byte 2
-equals the sign address.
+Query frames (§4.5) are answered with ACK **followed by a frame in the same format** (`B1 addr ... cksum`); the program validates it with exactly the same checksum rule (sum of bytes 5..N-1 mod 256 == byte N) and checks that byte 2 equals the sign address.
 
 ---
 
 ## 3. Long messages: splitting into 250-byte chunks
 
-If the *message* payload (§4.1) is ≤ 255 bytes it is sent as a single frame
-with the payload exactly as built.
+If the *message* payload (§4.1) is ≤ 255 bytes it is sent as a single frame with the payload exactly as built.
 
-If it is longer, the program removes the 4-byte message-header prefix
-(`09 '0' c 0E`) from the front and then sends the remainder in **chunks of
-250 bytes**, each wrapped as:
+If it is longer, the program removes the 4-byte message-header prefix (`09 '0' c 0E`) from the front and then sends the remainder in **chunks of 250 bytes**, each wrapped as:
 
 ```
 B1 addr 80 <chunklen+4>  09  '0' c  <type>  <chunk>  cksum
@@ -100,16 +82,13 @@ B1 addr 80 <chunklen+4>  09  '0' c  <type>  <chunk>  cksum
 * `type` = `0x0E` for the **first** chunk (same as the normal message header)
 * `type` = `0xB3` for every **continuation** chunk
 
-So the sign sees "message header with type 0x0E" then "append, type 0xB3".
-The length byte is `LEN(chunk) + 4` because the four bytes `09 '0' c type`
-are counted.
+So the sign sees "message header with type 0x0E" then "append, type 0xB3". The length byte is `LEN(chunk) + 4` because the four bytes `09 '0' c type` are counted.
 
 ---
 
 ## 4. Payloads (CC784 constants)
 
-The program builds every payload as `SOH … CR` and then strips the SOH and CR
-before framing, so the payloads below are what actually goes on the wire.
+The program builds every payload as `SOH … CR` and then strips the SOH and CR before framing, so the payloads below are what actually goes on the wire.
 
 Control bytes used by the CC784 build (the NC900 build uses different ones):
 
@@ -125,13 +104,7 @@ Control bytes used by the CC784 build (the NC900 build uses different ones):
 | remark | `0xB0` | `0x13` | hidden comment delimiter |
 | clear-all | `0x03` | – | clear all channels |
 
-Channels are `00`–`99`, always written as **two ASCII digits**; the sign stores
-them as a two-byte marker `D0+tens D0+units`. Channel 100 is the read-only
-built-in demo. All channels share one 6 625-byte pool (no per-channel limit).
-**A channel header (CHANNEL, `09 d d`) must be followed by DELETE_TEXT
-(`0E`, replace) or APPEND (`B3`) before any text** — on its own it leaves the
-insertion point on the channel marker and the text would corrupt it. The
-names are the firmware source's `CMD_*` constants; §8.3 lists them all.
+Channels are `00`–`99`, always written as **two ASCII digits**; the sign stores them as a two-byte marker `D0+tens D0+units`. Channel 100 is the read-only built-in demo. All channels share one 6625-byte pool (no per-channel limit). **A channel header (CHANNEL, `09 d d`) must be followed by DELETE_TEXT (`0E`, replace) or APPEND (`B3`) before any text** — on its own it leaves the insertion point on the channel marker and the text would corrupt it. The names are the firmware source's `CMD_*` constants; §7.3 lists them all.
 
 ### 4.1 Load a message into a channel
 
@@ -155,6 +128,8 @@ Trailer variants the program uses (after the body):
 * nothing — load only, no change on the sign ("no change")
 * `04 '0' d` — load into *c* but display sequence starting at *d*
 
+`04` is the SEQUENCE command: the trailer replaces the sign's display sequence, so the message appears as soon as the current channel ends. Without it the channel plays when the sequence reaches it, and after a RAM loss the default sequence is channels 0–99, so a load with no trailer still shows up.
+
 Example (address 1, channel 0, text `HELLO`, no remark, display it):
 
 ```
@@ -163,7 +138,7 @@ B1 01 80 0C | 09 30 30 0E 48 45 4C 4C 4F 04 30 30 | 9F
 
 ### 4.2 Clear a channel
 
-Same as a message with an empty body — i.e. just channel headers:
+Same as a message with an empty body, just channel headers:
 
 ```
 09 '0' c 0E   [09 '0' c 0E …]      one group per channel to clear
@@ -185,10 +160,7 @@ Clear **all** channels (`'A'` in the menu): payload is the single byte `03`.
 17  H H  M M  a
 ```
 
-`HH` = hour **1–12** (zero padded, ASCII), `MM` = minutes (ASCII),
-`a` = `'Y'` for AM, `'N'` for PM. Only the time is sent; the CC784 has no
-date command in this program (*the NC900 build sends a longer binary
-date/time record*).
+`HH` = hour **1–12** (zero padded, ASCII), `MM` = minutes (ASCII), `a` = `'Y'` for AM, `'N'` for PM. Only the time is sent; the CC784 has no date command in this program (*the NC900 build sends a longer binary date/time record*).
 
 Example 9:41 AM → `17 30 39 34 31 59` → frame `B1 01 80 06 17 30 39 34 31 59 <sum>`.
 
@@ -198,18 +170,13 @@ Example 9:41 AM → `17 30 39 34 31 59` → frame `B1 01 80 06 17 30 39 34 31 59
 17 32          ( 0x17 '2' )
 ```
 
-Sent by the "Messages in sign" / "Check sequence usage" screens. The sign
-replies ACK then a frame whose payload the program scans for `B0 … B0`
-remark blocks (name/date/size) to build the listing, and reads a "remaining
-memory" figure. Exact reply layout was not fully decoded — capture one and
-it should be self-explanatory given the remark format above.
+Sent by the "Messages in sign" / "Check sequence usage" screens. The sign replies ACK then a frame whose payload the program scans for `B0 … B0` remark blocks (name/date/size) to build the listing, and reads a "remaining memory" figure. Exact reply layout was not fully decoded — capture one and it should be self-explanatory given the remark format above.
 
 ---
 
 ## 5. In-text control codes (CC784 / CC6x7 column of the program's table)
 
-These are single bytes embedded in the message body. The editor letter is
-what you type after the attribute key in NETCC; the code is what is sent.
+These are single bytes embedded in the message body. The editor letter is what you type after the attribute key in NETCC; the code is what is sent.
 
 ### 5.1 Letter styles
 
@@ -284,8 +251,7 @@ Background `0x90 | n`:
 | g | Green | `0x92` |
 | y | Yellow | `0x93` |
 
-Other foreground combinations in `0x80`–`0x8F` (e.g. `0x84`, `0x88`, `0x8E`)
-are probably valid dimmer shades — worth trying.
+The other foreground codes in `0x80`–`0x8F` are the dimmer and mixed shades; all sixteen are named in [CC784_firmware.md §7](CC784_firmware.md#7-rendering-h).
 
 ### 5.6 Built-in graphics (CC600/700 list; editor `G` then letter)
 
@@ -300,17 +266,13 @@ are probably valid dimmer shades — worth trying.
 | g | Diamond | `0x04` (4) | o | Bell | `0xEA` (234) |
 | h | Square | `0xDC` (220) | p | Right arrow | `0x1A` (26) |
 
-Note several graphic bytes collide with attribute bytes (e.g. `0x1B` is both
-"left arrow" and "wipe down"); presumably the sign interprets them by
-context (the program emits graphics only right after `0xB8`?). Test before
-relying on them.
+Note several graphic bytes collide with attribute bytes (`0x1B` is both "left arrow" and "wipe down"); presumably the sign interprets them by context (the program emits graphics only right after `0xB8`?). Test before relying on them.
 
-*(NC900/CC900 graphics differ: 3 heart, 2 muncher, 227 phone, 248 wheel,
-249 ball, 27 plane, 23 ship, 127 house, 232 car.)*
+*(NC900/CC900 graphics differ: 3 heart, 2 muncher, 227 phone, 248 wheel, 249 ball, 27 plane, 23 ship, 127 house, 232 car.)*
 
 ---
 
-## 6. Suggested ESP32 send routine
+## 6. A send routine
 
 ```python
 import time
@@ -340,130 +302,21 @@ send_frame(u, 1, b'\x04' + b'000201')
 
 ---
 
-## 7. Things worth verifying on real hardware
+## 7. What the firmware adds
 
-1. Whether the sign actually needs the 50 ms inter-byte gap.
-2. Whether the trailing `04 '0' c` is required for the message to appear, or
-   the sign displays the loaded channel by default.
-3. The `0x80` header byte — try `0x00`/`0x01` to see if it is a source
-   address (would matter only for multi-sign networks).
-4. Reply format to `17 32` (the NETCC listing shows name/date/size per channel
-   and a "Remaining" byte count).
+The sign's side of this protocol is read from the firmware itself, and lives in the firmware notes rather than here:
 
-
----
-
-## 8. What the sign firmware says (CC784NIR EPROM, 32 KB, code in first 15 KB)
-
-I disassembled the Z80 image. The findings below override anything above where
-they differ; everything here is read directly from the code.
-
-### 8.1 Hardware as inferred
-
-* Z80, ROM 0x0000–0x3BFF, RAM 0x4000–0x5FFF (top of RAM 0x5EF1–0x5FFF is the
-  packet receive buffer + parser state). Sign address is kept in RAM with a
-  complement byte, i.e. it survives power-off only if RAM is battery-backed.
-* **Serial is fully bit-banged.** RX is sampled on I/O port `0xC0` bit 3, TX
-  is bit 4 of a latch at memory address `0x8000`. Timing: 8 MHz crystal →
-  74HC4020 ÷1024 → 7812.5 Hz interrupt; the bit engines run every 6th
-  interrupt (1302 Hz) with a 4,4,5-tick bit table ⇒ 300.5 baud.
-  **So the baud rate is hard-wired to 300**; the 1200–9600 options in NETCC are
-  for other models. 8 data bits, no parity; the sign checks one stop bit on
-  receive and sends about two on transmit.
-* Port `0xC0` bit 1 is an IR remote receiver (pulse-width decoded state
-  machine) — that is the "NIR" part. Ports `0x48`–`0x4F` + `0x80` drive the
-  LED matrix (86 columns).
-* An NMI-driven clock from the 60 Hz mains keeps the time (needs an AC adapter).
-* RAM (HY6264, 8 KB) is not battery-backed on this unit — address and messages
-  are lost at power-off.
-* ROM ID string at 0x0048: `78409O1702930205`.
-
-### 8.2 Frame parser (confirms §2)
-
-```
-idle ──B1──> addr ──> flag(0x80) ──> len ──> len×payload ──> cksum
-```
-
-* Checksum is the 8-bit sum of the payload bytes only — exactly as NETCC does it.
-* The address byte must equal the sign's own address, **or be `0x2A`**.
-  Anything else: the frame is silently discarded, no NAK.
-* Reply: `0x06` if checksum OK, `0x15` if not. **Broadcast (`0x2A`) frames get
-  no reply at all** but are still processed.
-* `len = 0` is legal (just ACKs).
-* After the ACK is fully shifted out, the packet is processed **with
-  interrupts disabled**, so any bytes arriving during processing are lost.
-  Wait for the ACK, then a little longer, before the next frame. For broadcast
-  frames (no ACK) pad ~0.5 s between frames. The patched firmware replaces
-  the guess: send flag `0x81` and wait for the `0x04` DONE byte, which follows
-  the ACK (and any query reply) once processing has finished. Broadcast
-  frames get no DONE either.
-* **Default address is 0.** If the RAM has lost its contents (very likely after
-  20 years) the sign only answers to `addr = 0x00` or `0x2A` until you set an
-  address from its own menu. NETCC's "address 1" will be ignored. Use `0x2A`
-  to get started.
-
-### 8.3 Payload command set — the complete list
-
-The parser walks the payload byte by byte. Anything not listed is inserted
-into the current message as text/attribute data.
-
-| Command | Byte(s) | Action |
-|---|---|---|
-| (ignored) | `00 01 05 08 0A 0B 0C 1C 1D 7F` | Skipped |
-| SPEED | `02 n` | Speed = `0xF0 \| (n & 7)` (alternative to sending `F0`–`F7` directly) |
-| CLEAR_ALL | `03` | Clear all messages |
-| SEQUENCE | `04 d d [d d …] ['D'\|'d']` | Display sequence; each channel is **two ASCII digits (00–99)**; optional `D`/`d` terminator |
-| CHANNEL | `09 d d` | Select channel `dd` (00–99) and set insertion point at its start |
-| END | `0D` | End of packet (stop parsing) |
-| DELETE_TEXT | `0E` | Delete existing content of the selected channel (so CHANNEL then DELETE_TEXT = "replace") |
-| FORE_IDX | `15 n` | Foreground colour by index, n = 0–9 → `8C 8D 8F 87 83 84 8E 80 8B 81` |
-| BACK_IDX | `16 n` | Background colour by index, n = 0–5 → `91 93 93 93 92 90` |
-| SET_TIME | `17 h h m m a` | Set clock: 4 ASCII digits HHMM, `a` = `Y`/`y` AM, anything else PM. (Stock bug: a truncated SET_TIME stops the clock.) |
-| COLOUR_A0 | `1E n` | Insert byte `0xA0 \| (n & 15)` (an alternate colour range, see below) |
-| APPEND | `B3` | Continuation: move insertion point to the end of the selected channel |
-| QUERY ROMID | `B4 '0'` | Reply with the 16-byte ROM ID string |
-| QUERY MEMORY | `B4 '1'` | Reply with two 5-digit ASCII numbers: total and free message memory |
-| QUERY NOP | `B4 '2'` | No-op |
-| QUERY DUMP | `B4 '3'` | Reply with a dump of the whole message store (see 8.4) |
-| OTA | `B5 c …` | Patched firmware only: `CC784_ota.md` §4 |
-
-So the NETCC-style status query (`17 32`) does nothing useful on this
-firmware — that screen was for the network models. Use QUERY MEMORY and
-QUERY DUMP.
-
-### 8.4 Reply frames
-
-```
-B4 '0' / '1' :  B1 <addr> <len> <payload> <sum of payload>
-B4 '3'       :  B1 <addr> <5 ASCII digits = byte count> <dump…> <sum of dump only>
-```
-
-Note: **no `0x80` byte in replies**, and the `'3'` reply's checksum excludes
-the 5-digit count. The dump is the sign's internal store: `D0`+n marks the
-start of channel n, `03` terminates a channel, `DA` ends the store; NETCC's
-`B0 … B0` remark blocks appear verbatim inside.
-
-### 8.5 Rendering codes recognised by the display engine
-
-Confirms the NETCC table (§5) and adds a few:
-
-| Byte | Meaning |
+| Topic | Where |
 |---|---|
-| `10` large, `11` normal, `12` bold, `13` italic, `14` flash, `1F` magic | as §5 |
-| `18` crawl, `19` jump, `1A` wipe up, `1B` wipe down, `0F` wipe back | as §5 |
-| `06` pause, `07` beep, `03` end of channel | as §5 |
-| `5F` | display time |
-| `80`–`8F` | foreground colour (`0x80 \| red<<2 \| green`) — all 16 values are accepted |
-| `90`–`9F` | background colour |
-| `A0`–`AF` | second colour range (used by the `1E n` command; probably the CC900-compatible colours) |
-| `F0`–`F7` | speed |
-| `B0` remark, `B8` graphic, `BA` wait-key, `BC` rainbow | as §5 |
-| `BB` | an extra movement effect not in NETCC (try it) |
-| `BD` | restart / reset display state |
-| `BE` | an extra display mode not in NETCC (try it) |
-| `94`–`9D`, `C0`–`CF`, `E0`–`EF` | extended glyph / graphic characters |
+| The fixed 300 baud, the bit-banged receiver and transmitter | [firmware notes §3](CC784_firmware.md#3-serial-link-h) |
+| The frame parser state by state, ACK, NAK and the silent discard of other addresses | [firmware notes §4](CC784_firmware.md#4-packet-parser-pkt_st_-16ef178c-h) |
+| The complete command list, including the ones NETCC never sends, and the exact reply and dump frame formats | [firmware notes §5](CC784_firmware.md#5-packet-processing-and-command-set-pkt_process-2a68-h) |
+| Every attribute byte with the sign's own name for it, the colour codes, the graphics and the European characters | [firmware notes §7](CC784_firmware.md#7-rendering-h) |
+| The board, the DB9 and the serial levels | [hardware notes §4](CC784_hardware.md#4-serial-port-h) |
 
-### 8.6 Minimal "hello" using only firmware-verified facts
+Two consequences for a host, both covered in detail there: the NETCC-style status query (`17 32`) is a truncated set-time that does nothing useful (and stops the stock firmware's clock), so use QUERY MEMORY and QUERY DUMP instead; and after a RAM loss the stock firmware answers only at address 0 (the patched firmware at 1) until an address is set, so `0x2A` broadcast is the way to reach an unknown sign.
+
+### 7.1 Minimal "hello" using only firmware-verified facts
 
 ```
 B1 2A 80 09  09 30 30 0E 48 45 4C 4C 4F  EB     (broadcast, channel 00, "HELLO")

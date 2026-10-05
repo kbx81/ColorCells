@@ -1,15 +1,8 @@
 # CC784NIR patched firmware
 
-`src/patched/cc784nir.asm`, on the `wip` branch, is the stock reconstruction
-plus the patches below. `diff src/stock/cc784nir.asm src/patched/cc784nir.asm`
-is the authoritative changelog: everything outside the patches is kept
-identical on purpose. The source is fully relocatable (every ROM address is a
-label), so code is inserted freely and patched addresses differ from stock
-above `144A`.
+`src/patched/cc784nir.asm`, on the `wip` branch, is the stock reconstruction plus the patches below. `diff src/stock/cc784nir.asm src/patched/cc784nir.asm` is the authoritative changelog: everything outside the patches is kept identical on purpose. The source is fully relocatable (every ROM address is a label), so code is inserted freely; the addresses quoted in the stock notes apply to the stock build only.
 
-What the stock firmware does, and the bugs these patches fix, are in
-`CC784_firmware.md`; the over-the-air update mechanism the patched build
-carries is in `CC784_ota.md`; fitting the chips it needs is in `AT28C256.md`.
+What the stock firmware does, and the bugs these patches fix, are in [CC784_firmware.md](CC784_firmware.md); the over-the-air update mechanism the patched build carries is in [CC784_ota.md](CC784_ota.md); fitting the chips it needs is in [CC784_upgrades.md](CC784_upgrades.md).
 
 ---
 
@@ -29,262 +22,90 @@ RAM, with the chip-size detection of patch 13:
 | `7FFC–7FFF` | boot stub: `NMI_VEC`, `NMI_MAGIC`, `ROM_BANK` |
 | `C000` | `BANK_REG`, the added '273 (write-only; bit 0 = EEPROM A14) |
 
-ROM: `0000–023F` boot stub, `0240` jump table, `0249` `ROM_ID` (stock `0048`),
-application to `3FBF`, trailer page at `3FC0` (`CC784_ota.md` §2). About 320
-bytes of the bank are free.
+ROM, per 16 K bank ([CC784_ota.md §2](CC784_ota.md#2-rom-layout-each-bank)):
+
+| Range | Use |
+|---|---|
+| `0000–023F` | boot stub: reset, `0038`, `0066`, bank choice, trial marking, the RAM library. Programmer only |
+| `0240–0248` | jump table: `JP app_start`, `JP int_timer`, `JP nmi_entry` |
+| `0249–0258` | `ROM_ID` (stock `0048`) |
+| `0259–3FBF` | application, then the free space (about 600 bytes) |
+| `3FC0–3FFF` | trailer page: magic, sequence number, state, CRCs |
 
 ## 2. Patches
 
-1. **Relocate the stack** (fixes B1). The stack is carved off the top of the
-   message store instead of the 64 bytes below `4000`: 128 bytes
-   (`STACK_SIZE`; the measurements are in `CC784_firmware.md` §2).
-   All seven `LD SP` sites use the symbol (reset, `fx_end_of_channel`,
-   `menu_enter`, `key_handler`, the editor, `pkt_process`,
-   `pkt_process_done`). The store's ceiling and the constants `store_init`
-   derives from it move down together, and `store_init` writes the `0xDA`
-   store terminator through `STORE_LIMIT` before zeroing the packet page,
-   since the terminator does not sit inside that page.
-2. **Restore the clock** (fixes B2). `pkt_process_done` sets `CLK_RUN=FF`
-   inline, just before its `CALL shift_chain_clear`. This covers every early
-   exit, not just `cmd_17`'s.
-   `cmd_17_set_time` itself cannot be fixed in place: `pkt_next_byte` reads the
-   caller's stack frame (`POP IX/DE/IY`), so no helper can be interposed.
-3. **Fix the cursor store** (fixes B6). `32` → `22` at `2B1F`.
-4. **Default address 1 + valid complement** (fixes B5 and B7).
-   `LD A,0 / LD (MY_ADDRESS),A / LD (…INV),A` → `LD HL,FE01 /
-   LD (MY_ADDRESS),HL / NOP / NOP`. `MY_ADDRESS_INV` is `MY_ADDRESS+1`, so one
-   16-bit store writes both, and `FE` is a genuine complement of `01`.
-5. **Shift only the live store** (fixes B8). `LD HL,(STORE_LIMIT)` →
-   `LD HL,(STORE_END)` at `2B3D` — a two-byte operand change.
-6. **Sane defaults after RAM loss: clock at 12:00 AM, empty store, demo.**
-   `init_vars` copies its RAM image from `CLK_RUN` up, so `CLK_H10`…`CLK_PM`
-   (4200–4205) are left alone on purpose, to survive a battery-backed power
-   cycle. Without a battery they are SRAM noise: `clock_tick` only tests for
-   equality, so a garbage second count runs through 255 before wrapping, and
-   `render_clock` shows digits 10–15 as `: ; < = > ?`. The message store is
-   noise too, and `store_repair` faithfully tidies it into 100 channels of
-   garbage that the default sequence then plays. The fix sits in the branch
-   patch 4 already owns — the `MY_ADDRESS`/complement check fails exactly when
-   RAM is fresh — and writes `1 2 0 0 0 0` to the six clock bytes (12:00,
-   seconds 0, AM) and calls `store_clear_all`, so `init_sequence` sees every
-   channel empty and runs the demo, exactly as after a CLR ALL. With a battery
-   and valid RAM the branch is skipped, as before. The clock runs from midnight
-   rather than waiting to be set.
-7. **RAM re-layout: 7014-byte store** (+344 over patch 1's layout, +88 over
-   stock). Three changes, each a constant:
-   - `STACK_SIZE` 128, sized from the measured 70-byte high-water mark and
-     the ~108-byte constructed worst case.
-   - `FRAMEBUF_SIZE` 344 → 192. The column ring only ever holds the 86
-     visible columns plus the glyph being written (at most 32 more; the
-     renderer waits for the scroll to catch up before the next one) — the
-     four-rows-of-86 size is not needed. TINY mode's output frame lives in
-     `TXBUF`, which is idle while TINY text is displayed (effects are off,
-     and a packet resets everything anyway); the TINY line buffer
-     (`FRAMEBUF_TINY`, 189 bytes from the ring start) fits in the ring.
-   - `FRAMEBUF` `4040` → `4000`: the stock stack slot is free once the stack
-     has moved.
-   `cc784_sim.py compare` shows the same frames and replies as the previous
-   layout for every effect, the clock, TINY and the editor.
-8. **Compact the variable block: 7086-byte store** (+72). Every byte of the
-   block that nothing reads is gone: ten write-only variables together with
-   the code that fed them, and the unnamed bytes between variables, including
-   `INIT_DATA`'s misaligned second copies of `RX_TIMING` and
-   `rx_st_wait_start`. The order is unchanged and `INIT_DATA` is regenerated
-   as four runs matching the new positions. Three bytes that look dead are
-   not and are kept: `NMI_COUNT+1` is the high byte of a pointer
-   `magic_short_word` reads through, `MSG_STORE-1` takes a space from
-   `store_repair` on every boot (`STORE_GUARD`), and the four bytes after
-   `FB_COL` were what `tiny_scroll_off` scanned through a typo'd pointer,
-   always finding a `0x95` constant, so TINY always pushed the display off
-   first; the scan is gone and that behaviour kept. Verified by an emulator
-   census (every RAM byte read or written across the suite, attributed to its
-   symbol), a lockstep diff of every variable against patch 7, and
-   `compare`/`stack`.
-9. **Remove the unreachable code.** A static reachability walk over the
-   assembled listing (roots: the three vectors plus every label loaded as a
-   vector or stored as data) leaves five islands nothing can jump to:
-   `keypad_scan` (47 bytes, not referenced at all), `menu_enter` (48 bytes —
-   an "enter your address or
-   `*`" gate that nothing enters; serial `01` goes to `key_handler`), and
-   three orphans behind unconditional jumps (an extra `LD A,0x20` after
-   `clock_emit`, a digit-decrement stub after `editor_key_bgrnd`, a stray
-   `DJNZ/JP` after `cursor_left_8`). Also gone: the raw bytes the disassembly
-   kept as `db` (an unreachable `JP render_loop`, a `RET`, a `JP`, the `AA 55`
-   pair), the five `NOP`s (two of them patch 4's size padding), and
-   `tick6_service`'s re-entrancy guard, which tested `(IX)==AA && (IY)==55`
-   against registers nothing ever points there. About 140 bytes of ROM, zero
-   behaviour (`compare` clean).
+1. **Relocate the stack** (fixes B1). The stack is carved off the top of the message store instead of the 64 bytes below `4000`: 128 bytes (`STACK_SIZE`; the measurements are in [CC784_firmware.md §2](CC784_firmware.md#2-execution-architecture-h)). All seven `LD SP` sites use the symbol (reset, `fx_end_of_channel`, `menu_enter`, `key_handler`, the editor, `pkt_process`, `pkt_process_done`). The store's ceiling and the constants `store_init` derives from it move down together, and `store_init` writes the `0xDA` store terminator through `STORE_LIMIT` before zeroing the packet page, since the terminator does not sit inside that page.
+2. **Restore the clock** (fixes B2). `pkt_process_done` sets `CLK_RUN=FF` inline, just before its `CALL shift_chain_clear`. This covers every early exit, not just `cmd_17`'s. `cmd_17_set_time` itself cannot be fixed in place: `pkt_next_byte` reads the caller's stack frame (`POP IX/DE/IY`), so no helper can be interposed.
+3. **Fix the cursor store** (fixes B6). `LD (STORE_CURSOR),A` → `LD (STORE_CURSOR),HL` in `pkt_insert_text`.
+4. **Default address 1 + valid complement** (fixes B5 and B7). `LD A,0 / LD (MY_ADDRESS),A / LD (…INV),A` → `LD HL,FE01 / LD (MY_ADDRESS),HL / NOP / NOP`. `MY_ADDRESS_INV` is `MY_ADDRESS+1`, so one 16-bit store writes both, and `FE` is a genuine complement of `01`.
+5. **Shift only the live store** (fixes B8). `LD HL,(STORE_LIMIT)` → `LD HL,(STORE_END)` in `pkt_insert_text`, a two-byte operand change.
+6. **Sane defaults after RAM loss: clock at 12:00 AM, empty store, demo.** `init_vars` copies its RAM image from `CLK_RUN` up, so `CLK_H10`…`CLK_PM` (4200–4205) are left alone on purpose, to survive a battery-backed power cycle. Without a battery they are SRAM noise: `clock_tick` only tests for equality, so a garbage second count runs through 255 before wrapping, and `render_clock` shows digits 10–15 as `: ; < = > ?`. The message store is noise too, and `store_repair` faithfully tidies it into 100 channels of garbage that the default sequence then plays. The fix sits in the branch patch 4 already owns — the `MY_ADDRESS`/complement check fails exactly when RAM is fresh — and writes `1 2 0 0 0 0` to the six clock bytes (12:00, seconds 0, AM) and calls `store_clear_all`, so `init_sequence` sees every channel empty and runs the demo, exactly as after a CLR ALL. With a battery and valid RAM the branch is skipped, as before. The clock runs from midnight rather than waiting to be set.
+7. **RAM re-layout: 7014-byte store** (+344 over patch 1's layout, +88 over stock). Three changes, each a constant:
+   - `STACK_SIZE` 128, sized from the measured 70-byte high-water mark and the ~108-byte constructed worst case.
+   - `FRAMEBUF_SIZE` 344 → 192. The column ring only ever holds the 86 visible columns plus the glyph being written (at most 32 more; the renderer waits for the scroll to catch up before the next one) — the four-rows-of-86 size is not needed. TINY mode's output frame lives in `TXBUF`, which is idle while TINY text is displayed (effects are off, and a packet resets everything anyway); the TINY line buffer (`FRAMEBUF_TINY`, 189 bytes from the ring start) fits in the ring.
+   - `FRAMEBUF` `4040` → `4000`: the stock stack slot is free once the stack has moved. `cc784_sim.py compare` shows the same frames and replies as the previous layout for every effect, the clock, TINY and the editor.
+8. **Compact the variable block: 7086-byte store** (+72). Every byte of the block that nothing reads is gone: ten write-only variables together with the code that fed them, and the unnamed bytes between variables, including `INIT_DATA`'s misaligned second copies of `RX_TIMING` and `rx_st_wait_start`. The order is unchanged and `INIT_DATA` is regenerated as four runs matching the new positions. Three bytes that look dead are not and are kept: `NMI_COUNT+1` is the high byte of a pointer `magic_short_word` reads through, `MSG_STORE-1` takes a space from `store_repair` on every boot (`STORE_GUARD`), and the four bytes after `FB_COL` were what `tiny_scroll_off` scanned through a typo'd pointer, always finding a `0x95` constant, so TINY always pushed the display off first; the scan is gone and that behaviour kept. Verified by an emulator census (every RAM byte read or written across the suite, attributed to its symbol), a lockstep diff of every variable against patch 7, and `compare`/`stack`.
+9. **Remove the unreachable code.** A static reachability walk over the assembled listing (roots: the three vectors plus every label loaded as a vector or stored as data) leaves five islands nothing can jump to: `keypad_scan` (47 bytes, not referenced at all), `menu_enter` (48 bytes — an "enter your address or `*`" gate that nothing enters; serial `01` goes to `key_handler`), and three orphans behind unconditional jumps (an extra `LD A,0x20` after `clock_emit`, a digit-decrement stub after `editor_key_bgrnd`, a stray `DJNZ/JP` after `cursor_left_8`). Also gone: the raw bytes the disassembly kept as `db` (an unreachable `JP render_loop`, a `RET`, a `JP`, the `AA 55` pair), the five `NOP`s (two of them patch 4's size padding), and `tick6_service`'s re-entrancy guard, which tested `(IX)==AA && (IY)==55` against registers nothing ever points there. About 140 bytes of ROM, zero behaviour (`compare` clean).
 
-10. **Boot stub, bank register and A/B layout** (`CC784_ota.md`). `0000–01FF`
-    is a stub that picks a bank by trailer and CRC and runs its app through a
-    jump table at `0200`; the `0066` NMI goes through a RAM vector guarded by
-    `NMI_MAGIC`. `ROM_ID` sits in the app, and `query_0_romid` uses the
-    label rather than a raw `0048`. Boot is ~1 s slower: the CRC pass.
-11. **OTA command set** (`CMD_OTA` = `B5`, `cmd_B5_ota`, `CC784_ota.md` §4): info, page
-    CRCs, begin, write 1–3 pages, finish, reset. Runs the stub's RAM library
-    from `FRAMEBUF`; pages below `0200` refused. ≈ 540 bytes of ROM.
+10. **Boot stub, bank register and A/B layout** ([CC784_ota.md](CC784_ota.md)). `0000–023F` is a stub that picks a bank by trailer and CRC and runs its app through a jump table at `0240` (`STUB_END`); the `0066` NMI goes through a RAM vector guarded by `NMI_MAGIC`. `ROM_ID` sits in the app, and `query_0_romid` uses the label rather than a raw `0048`. Boot is ~1 s slower: the CRC pass.
+11. **OTA command set** (`CMD_OTA` = `B5`, `cmd_B5_ota`, [CC784_ota.md §4](CC784_ota.md#4-the-ota-command)): info, page CRCs, begin, write 1–3 pages, finish, reset. Runs the stub's RAM library from `FRAMEBUF`; pages inside the stub refused. ≈ 540 bytes of ROM.
 12. **`tx_try_queue` reports busy with carry** (fixes B10).
-13. **RAM at the top of the 16 K window; chip size detected at boot.** The
-    board decodes RAM for all of `4000–7FFF`; the 6264 mirrors the upper half.
-    Everything at a fixed address (stack, packet buffers, the stub's bytes)
-    sits under `RAM_TOP` = `8000`, which the 6264 aliases to `5Exx/5Fxx`
-    for free, and `store_init` writes a marker through the mirror to pick
-    `STORE_TOP` (15246 bytes) or `STORE_TOP_8K` (7054). One build for both
-    chips; a 62256 is two wires (`AT28C256.md`).
+13. **RAM at the top of the 16 K window; chip size detected at boot.** The board decodes RAM for all of `4000–7FFF`; the 6264 mirrors the upper half. Everything at a fixed address (stack, packet buffers, the stub's bytes) sits under `RAM_TOP` = `8000`, which the 6264 aliases to `5Exx/5Fxx` for free, and `store_init` writes a marker through the mirror to pick `STORE_TOP` (15246 bytes) or `STORE_TOP_8K` (7054). One build for both chips; a 62256 is two wires ([CC784_upgrades.md](CC784_upgrades.md)).
 
-14. **Payload bytes are not keys** (fixes B12): `rx_consume` clears `RX_BYTE`
-    after `pkt_feed_byte`. The OTA handler also blanks the panel before each
-    reply (its RAM library sits in `FRAMEBUF`) and shows a parked UPDATING
-    message from `B5 'B'` to the reboot through the factory test mode.
-15. **APPEND seats like DELETE_TEXT** (fixes B11): the extra step back onto an empty
-    channel's marker is gone.
-20. **Clock digits next to the store.** The stub copies its 322-byte library
-    to `4000` at every boot, which runs 130 bytes into the variable block
-    (`RAM_VARS+00..81`). The clock digits sat at `+62..67`, so every power
-    cycle read "0=:39 PM". They now live at `+1F2..1F7`, swapped with six
-    scratch bytes; `CLK_RUN` stays, since the init image rewrites it on every
-    boot. An `ASSERT` keeps the library below `STORE_END`, and `ram` in the
-    emulator checks that a set clock survives a reset.
-25. **Restarts stop scanning at the store's end.** `store_repair` runs on
-    every restart and made three passes over the store's whole capacity,
-    15 K on a 62256, about a second with the panel dark. The passes now stop
-    at the first `DA`; a store that has lost its `DA` still gets the full
-    scan and the repair. Boot is now the CRC pass alone, and a restart after
-    an edit of the playing channel is back on the panel in milliseconds.
-24. **Text without a channel goes to channel 0.** The insertion point is
-    derived from the renderer's cursor; while the demo plays that cursor is
-    in ROM and the demo channel's lock (`CHAN_LOCK`) makes every insert a
-    no-op, so the text was ACKed and dropped. A cursor below `MSG_STORE` now
-    clears the lock and seats on channel 0 as `09 30 30 0E` would.
-23. **Set-time starts the minute at :00.** `17 hhmm a` carries no seconds
-    and left `CLK_SEC` and the mains-tick count as they were, so the clock
-    came up anywhere inside the minute. Both are zeroed now, and the host
-    tool's `time` command waits for the top of the PC's minute and sends the
-    frame 0.3 s early, which is its wire time.
-22. **Typed queries removed** (−270 bytes). The editor hooked `B4` plus a
-    digit typed as keys and answered with its own copies of the three query
-    replies on the serial line, which only a terminal driving the menus
-    could ever see. `editor_query_hook`, `query_dispatch` and the three
-    handlers are gone; packets keep theirs. `QUERIES_ENABLED` is now unused.
-21. **Packets are processed by the render loop.** Nothing in the interrupt
-    context reads the message store, so `pkt_process` now runs as a
-    subroutine of the render loop (`pkt_poll`, called at every render step
-    and inside every frame wait) with interrupts on: no `DI`, no stack
-    reset, no restart unless the text being played changed. Its effects:
-    - The display keeps scrolling through text loads into other channels,
-      sequence changes, time setting and queries. A restart happens only
-      for an edit of the playing channel, a clear-all, or the first text
-      into an empty sign (the demo stops). The renderer's cursor is saved
-      at entry and put back, shifted by the size change when a lower
-      channel grew or shrank.
-    - The sign never goes deaf: the receiver keeps running. A frame that
-      arrives before DONE is parsed in discard mode (`PKT_DISCARD`) and
-      never answered, so its bytes cannot reach the editor as keys.
-    - Replies and DONE leave through a background transmitter: two
-      segments with an optional appended sum (`TX_SEG0/1`, fed by
-      `tx_bit_engine`), so a store dump stalls nothing. The
-      `B4` query frames are built over `PKT_BUF`; a query ends its packet.
-    - Text goes into the store in one move per run of plain bytes instead
-      of one per byte (`pkt_insert_run`), and DELETE_TEXT moves the store up
-      to its end instead of up to the RAM ceiling: a 240-byte load into a
-      small store is now ~20 ms of processing instead of ~130.
-    - `cmd_B5_ota` waits for TX idle and does its own `DI`; OTA packets
-      still park and restart the display.
-    The state lives in 32 bytes carved off the store top (`STREAM_AREA`):
-    the store is 15246/7054 bytes. The demo message shrank to one line to
-    pay for the code. Gate: `quiet` in the emulator; `compare` against a tree
-    without this patch reports differences by design.
-19. **RAINBOW starts on a random colour.** `BC` set the cycle index to 1 and
-    the per-character step advances before it looks up, so every rainbow
-    began on orange. The index now starts at 1–5 from a running 8-bit
-    generator (MAGIC's `RND_SEED`, stirred with the mains and tick counters),
-    so each display cycle begins on a different one of the five colours, on
-    AC and DC alike.
-18. **Trial and confirm.** `F` writes a new image's trailer as TRIAL; the
-    stub rewrites a TRIAL trailer as TRIED before booting it and treats TRIED
-    as invalid, so an image that crashes, hangs or cannot talk is skipped at
-    the next reset. `B5 'K' state seq` rewrites the running bank's trailer:
-    the host confirms (GOOD) once the image answers, or lowers the sequence
-    number to roll back. `NMI_SEEN` (`7FF0`), set by every mains NMI, lets the
-    page writer skip its NMI sync on a DC supply instead of waiting forever;
-    `I` reports it. The stub grew to `0240`.
-17. **Label strings parked in the index-space gaps** (+237 bytes). The
-    editor's label lookup is `ATTR_LABEL_TABLE + 2·attr`, so the colour-name
-    table must sit 256 bytes after it and the speed labels 128 bytes after
-    the `B0` table; the slots in between (`20–7F`, `D0–EF`) are never indexed.
-    Stock filled the first gap with eleven "TOP OF MSG n" strings that nothing
-    can display (the redraw treats `D0`-class bytes as characters; the real
-    banner is built by `show_top_of_msg`) and the second with zeros. Both now
-    hold live label strings moved from after the tables, and `ds` guards make
-    the assembler enforce the offsets.
-16. **DONE handshake.** Immediate mode is "flag bit 7 set"; with bit 0 set as
-    well (`81`) `pkt_process_done` queues a `04` byte, which leaves on the
-    `EI` that makes the sign receptive again, so the sender waits for it
-    instead of guessing at the deaf window of B4. Addressed frames only;
-    NETCC's `80` is unchanged. `B5 'I'` gains a features byte (bit 0) so the
-    host can tell. `cc784.py --done` and `cc784_ota.py` use it; chunked
-    messages and OTA pages then follow each other at wire speed.
+14. **Payload bytes are not keys** (fixes B12): `rx_consume` clears `RX_BYTE` after `pkt_feed_byte`. The OTA handler also blanks the panel before each reply (its RAM library sits in `FRAMEBUF`) and shows a parked UPDATING message from `B5 'B'` to the reboot through the factory test mode.
+15. **APPEND seats like DELETE_TEXT** (fixes B11): the extra step back onto an empty channel's marker is gone.
+20. **Clock digits next to the store.** The stub copies its 322-byte library to `4000` at every boot, which runs 130 bytes into the variable block (`RAM_VARS+00..81`). The clock digits sat at `+62..67`, so every power cycle read "0=:39 PM". They now live at `+1F2..1F7`, swapped with six scratch bytes; `CLK_RUN` stays, since the init image rewrites it on every boot. An `ASSERT` keeps the library below `STORE_END`, and `ram` in the emulator checks that a set clock survives a reset.
+25. **Restarts stop scanning at the store's end.** `store_repair` runs on every restart and made three passes over the store's whole capacity, 15 K on a 62256, about a second with the panel dark. The passes now stop at the first `DA`; a store that has lost its `DA` still gets the full scan and the repair. Boot is now the CRC pass alone, and a restart after an edit of the playing channel is back on the panel in milliseconds.
+24. **Text without a channel goes to channel 0** (fixes B13). The insertion point is derived from the renderer's cursor; while the demo plays that cursor is in ROM and the demo channel's lock (`CHAN_LOCK`) makes every insert a no-op, so the text was ACKed and dropped. A cursor below `MSG_STORE` now clears the lock and seats on channel 0 as `09 30 30 0E` would.
+23. **Set-time starts the minute at :00.** `17 hhmm a` carries no seconds and left `CLK_SEC` and the mains-tick count as they were, so the clock came up anywhere inside the minute. Both are zeroed now, and the host tool's `time` command waits for the top of the PC's minute and sends the frame 0.3 s early, which is its wire time.
+22. **Typed queries removed** (−270 bytes). The editor hooked `B4` plus a digit typed as keys and answered with its own copies of the three query replies on the serial line, which only a terminal driving the menus could ever see. `editor_query_hook`, `query_dispatch` and the three handlers are gone; packets keep theirs. `QUERIES_ENABLED` is now unused.
+21. **Packets are processed by the render loop.** Nothing in the interrupt context reads the message store, so `pkt_process` now runs as a subroutine of the render loop (`pkt_poll`, called at every render step and inside every frame wait) with interrupts on: no `DI`, no stack reset, no restart unless the text being played changed. Its effects:
+    - The display keeps scrolling through text loads into other channels, sequence changes, time setting and queries. A restart happens only for an edit of the playing channel, a clear-all, or the first text into an empty sign (the demo stops). The renderer's cursor is saved at entry and put back, shifted by the size change when a lower channel grew or shrank.
+    - The sign never goes deaf: the receiver keeps running. A frame that arrives before DONE is parsed in discard mode (`PKT_DISCARD`) and never answered, so its bytes cannot reach the editor as keys.
+    - Replies and DONE leave through a background transmitter: two segments with an optional appended sum (`TX_SEG0/1`, fed by `tx_bit_engine`), so a store dump stalls nothing. The `B4` query frames are built over `PKT_BUF`; a query ends its packet.
+    - Text goes into the store in one move per run of plain bytes instead of one per byte (`pkt_insert_run`), and DELETE_TEXT moves the store up to its end instead of up to the RAM ceiling: a 240-byte load into a small store is now ~20 ms of processing instead of ~130.
+    - `cmd_B5_ota` waits for TX idle and does its own `DI`; OTA packets still park and restart the display.
+
+    The state lives in 32 bytes carved off the store top (`STREAM_AREA`): the store is 15246/7054 bytes. The demo message shrank to one line to pay for the code. Gate: `quiet` in the emulator; `compare` against a tree without this patch reports differences by design.
+19. **RAINBOW starts on a random colour.** `BC` set the cycle index to 1 and the per-character step advances before it looks up, so every rainbow began on orange. The index now starts at 1–5 from a running 8-bit generator (MAGIC's `RND_SEED`, stirred with the mains and tick counters), so each display cycle begins on a different one of the five colours, on AC and DC alike.
+18. **Trial and confirm.** `F` writes a new image's trailer as TRIAL; the stub rewrites a TRIAL trailer as TRIED before booting it and treats TRIED as invalid, so an image that crashes, hangs or cannot talk is skipped at the next reset. `B5 'K' state seq` rewrites the running bank's trailer: the host confirms (GOOD) once the image answers, or lowers the sequence number to roll back. `NMI_SEEN` (`7FF0`), set by every mains NMI, lets the page writer skip its NMI sync on a DC supply instead of waiting forever; `I` reports it. The stub grew to `0240`.
+17. **Label strings parked in the index-space gaps** (+237 bytes). The editor's label lookup is `ATTR_LABEL_TABLE + 2·attr`, so the colour-name table must sit 256 bytes after it and the speed labels 128 bytes after the `B0` table; the slots in between (`20–7F`, `D0–EF`) are never indexed. Stock filled the first gap with eleven "TOP OF MSG n" strings that nothing can display (the redraw treats `D0`-class bytes as characters; the real banner is built by `show_top_of_msg`) and the second with zeros. Both now hold live label strings moved from after the tables, and `ds` guards make the assembler enforce the offsets.
+16. **DONE handshake.** Immediate mode is "flag bit 7 set"; with bit 0 set as well (`81`) `pkt_process_done` queues a `04` byte, which leaves on the `EI` that makes the sign receptive again, so the sender waits for it instead of guessing at the deaf window of B4. Addressed frames only; NETCC's `80` is unchanged. `B5 'I'` gains a features byte (bit 0) so the host can tell. `cc784.py --done` and `cc784_ota.py` use it; chunked messages and OTA pages then follow each other at wire speed.
 
 ## 3. Rejected
 
-- **Always defer processing** (proposed for B3) — *regression on the stock
-  structure*; patch 21 polls from the render loop instead. `main_loop`
-  tests `PKT_READY` only on entry at `009A`; the `render_loop` render loop never
-  falls back to it. Re-entry happens only via `fx_end_of_channel` (`0F5E`) or
-  the `BA` wait-for-key spin (`0A49`), so a deferred packet waits for the
-  current channel to finish — potentially many seconds after its ACK, during
-  which `02DD` refuses every further `B1`. Immediate mode is what makes NETCC
-  responsive. B3 stands as documented, but patch 1 removes its only known
-  trigger: `pkt_process` resets SP on entry and `pkt_process_done` resets it
-  again before jumping to `restart_display`, so the abandoned interrupt frame is
-  harmless as long as the stack is large enough.
-- **Send ACK after processing** (proposed for B4) — *regression*. Zero-length
-  frames are ACKed in `pkt_st_cksum` but never set `PKT_READY`, so they would
-  lose their ACK entirely; and a valid ACK would be delayed by the whole
-  insert, which is exactly the interval the sender is trying to measure.
-  Padding after each ACK remains the right mitigation. B8 shrinks the window
-  it has to cover by one to three orders of magnitude — but see the
-  completion byte below, which replaces the padding with a real handshake.
+- **Always defer processing** (proposed for B3) — *regression on the stock structure*; patch 21 polls from the render loop instead. `main_loop` tests `PKT_READY` only on entry; the `render_loop` render loop never falls back to it. Re-entry happens only via `fx_end_of_channel` or the `BA` wait-for-key spin (`wait_poll`), so a deferred packet waits for the current channel to finish — potentially many seconds after its ACK, during which `rx_idle_byte` refuses every further `B1`. Immediate mode is what makes NETCC responsive. B3 stands as documented, but patch 1 removes its only known trigger: `pkt_process` resets SP on entry and `pkt_process_done` resets it again before jumping to `restart_display`, so the abandoned interrupt frame is harmless as long as the stack is large enough.
+- **Send ACK after processing** (proposed for B4) — *regression*. Zero-length frames are ACKed in `pkt_st_cksum` but never set `PKT_READY`, so they would lose their ACK entirely; and a valid ACK would be delayed by the whole insert, which is exactly the interval the sender is trying to measure. Padding after each ACK remains the right mitigation. B8 shrinks the window it has to cover by one to three orders of magnitude — but see the completion byte below, which replaces the padding with a real handshake.
 
 ## 4. Verified on the sign
 
-- **B1** — ten immediate-mode `B4 '0'` queries in a row, all byte-identical,
-  and a following `B4 '1'` unchanged. Stock garbles the replies and corrupts
-  `SEQ_LIST`.
-- **B2** — the clock keeps running after `raw 17 32`. (The hour tens digit
-  does change: `cmd_17` stores `0x32 & 0x0F` before discovering the packet
-  ended; a full `17` puts it right. That is the command, not the patch.)
-- **B5/B7** — the sign ACKs at address 1 from cold with no battery.
-- **B8** — messages into channels 0, 42 and 99, then `B4 '3'`: all intact.
-- **Patches 7–8** — `B4 '1'` reports 7086 on the 6264; the store filled to
-  the last byte in 250-byte chunks dumps back intact.
-- **Patch 7** — a message alternating BOLD, TINY (45 characters), NORMAL,
-  TINY, ITALIC, BIG and TINY (30 characters) renders cleanly; TINY's frame in
-  `TXBUF` and its line buffer in the 192-byte ring hold up on the panel.
-- **Patch 13** — `B4 '1'` reports 15246 on a 62256 (15278 before patch 21).
-- **Patches 10–11** — OTA pushes over the ESPHome bridge: identical image,
-  one-page, ~100-page and interrupted-then-resumed updates, all booted and
-  confirmed; the store survives every reboot.
-- **Patch 25** — replacing the playing channel restarts the display
-  visibly faster than before; the dark second is gone.
-- **Patch 24** — after a bare CLEAR_ALL, text sent with no CHANNEL command
-  lands in channel 0 and plays; the dump shows it there.
-- **Patch 23** — `time` from the PC: the sign's minute changes within a
-  second of the PC's.
-- **Patch 21** — messages loaded into other channels, queries and a store
-  dump mid-scroll: the text keeps scrolling, with a pause of a few frames
-  while the packet is processed; no blank, no restart. A DONE follows each
-  addressed frame's reply.
-- **Patch 20** — the clock set from the PC survives a power cycle.
-- **Patch 19** — a RAINBOW message starts on a different colour each cycle.
-- **Patch 18** — a `--trial` push boots the new bank as TRIED and leaves it
-  unconfirmed; a power cycle then comes back on the GOOD bank with the trial
-  skipped; `confirm` makes a trial GOOD; `rollback` reboots into the other
-  bank with nothing transferred.
-- **B11/B12** — APPEND `"XYZW"` into an empty channel stores all four bytes;
-  the update display stays put while pages carrying `20` arrive.
-- **FLASH clock** — `FLASH_HALF_PERIOD` 7 instead of 13 blinks visibly
-  faster (~5 Hz against ~2.4 Hz): latch bit 7 is the blink clock.
+| Patch | Seen on the sign |
+|---|---|
+| 1 | ten immediate-mode `B4 '0'` queries in a row, all byte-identical, and a following `B4 '1'` unchanged; stock garbles the replies and corrupts `SEQ_LIST` |
+| 2 | the clock keeps running after `raw 17 32` (the hour tens digit changes to 2, which is the command's doing, not the patch's) |
+| 3 | emulation only: the cursor case needs a hand-built store state |
+| 4 | the sign ACKs at address 1 from cold with no battery |
+| 5 | messages into channels 0, 42 and 99, then `B4 '3'`: all intact |
+| 6 | cold boot shows the demo at address 1 with an empty store |
+| 7, 8 | `B4 '1'` reports 7054 on the 6264; the store filled to the last byte in 250-byte chunks dumps back intact; a message alternating BOLD, TINY (45 characters), NORMAL, TINY, ITALIC, BIG and TINY (30 characters) renders cleanly |
+| 9 | nothing to see: dead code removed, behaviour unchanged by `compare` |
+| 10, 11 | OTA pushes over the ESPHome bridge: identical image, one-page, ~100-page and interrupted-then-resumed updates, all booted and confirmed; the store survives every reboot |
+| 12 | OTA replies carrying `00` bytes arrive complete |
+| 13 | `B4 '1'` reports 15246 on a 62256 |
+| 14 | the update display stays put while pages carrying `20` arrive |
+| 15 | APPEND `"XYZW"` into an empty channel stores all four bytes |
+| 16 | the host tools run frame after frame on the DONE byte |
+| 17 | emulation only (`compare`): the editor's labels are a repack, not a change |
+| 18 | a `--trial` push boots the new bank as TRIED and leaves it unconfirmed; a power cycle comes back on the GOOD bank with the trial skipped; `confirm` makes a trial GOOD; `rollback` reboots into the other bank with nothing transferred |
+| 19 | a RAINBOW message starts on a different colour each cycle |
+| 20 | the clock set from the PC survives a power cycle |
+| 21 | messages into other channels, queries and a store dump mid-scroll: the text keeps scrolling with a pause of a few frames, no blank, no restart; a DONE follows each addressed frame's reply |
+| 22 | nothing to see: the typed-query path had no effect on the display |
+| 23 | `time` from the PC: the sign's minute changes within a second of the PC's |
+| 24 | after a bare CLEAR_ALL, text sent with no CHANNEL command lands in channel 0 and plays |
+| 25 | replacing the playing channel restarts the display visibly faster; the dark second is gone |
+
+Also watched: `FLASH_HALF_PERIOD` 7 instead of 13 blinks visibly faster (~5 Hz against ~2.4 Hz), which is what proved latch bit 7 is the blink clock.
 
 ## 5. Rebuilding and testing
 
@@ -294,11 +115,6 @@ uv run tools/cc784_ota.py pack src/patched/cc784nir_patched.bin \
     -o src/patched/cc784nir_bank.bin --t48 src/patched/cc784nir_chip.bin
 ```
 
-Or the `Build patched ROM` and `Pack OTA image` tasks. The raw build has empty
-trailers and must not be burned: `cc784nir_chip.bin` is what the T48 burns
-(task `AT28C256-15PU -- program`) and `cc784nir_bank.bin` what
-`cc784_ota.py push` sends.
+Or the `Build patched ROM` and `Pack OTA image` tasks. The raw build has empty trailers and must not be burned: `cc784nir_chip.bin` is what the T48 burns (task `AT28C256-15PU -- program`) and `cc784nir_bank.bin` what `cc784_ota.py push` sends.
 
-Before any push, run the emulator regression set in `CC784_ota.md` §6, plus
-`fuzz` for changes to the stub or the page writer. The emulator itself is
-described in `CC784_firmware.md` §11.
+Before any push, run the emulator regression set in [CC784_ota.md §6](CC784_ota.md#6-testing), plus `fuzz` for changes to the stub or the page writer. The emulator itself is described in [CC784_firmware.md §11](CC784_firmware.md#11-rebuilding).
