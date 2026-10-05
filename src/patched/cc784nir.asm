@@ -211,8 +211,8 @@ FLASH_HALF_PERIOD    equ 13
 FRAME_COLS           equ 86          ; columns sent per row: the panel's 84 plus two that fall off the chain
 HOLD_FRAMES          equ 80          ; frames a PAUSE, HOLD, wipe or clock holds the panel (~1.3 s)
 BEEP_LEN             equ 150         ; beeper on for this many tick6 periods (~115 ms)
-IR_REPEAT_DELAY      equ 0x0514      ; tick6 periods a held remote key waits before repeating (~1 s)
-IR_REPEAT_TICKS      equ 0x012c      ; ... and between repeats (~0.23 s)
+IR_REPEAT_DELAY      equ 1300        ; tick6 periods a held remote key waits before repeating (~1 s)
+IR_REPEAT_TICKS      equ 300         ; ... and between repeats (~0.23 s)
 STACK_SIZE           equ 128         ; measured high-water 70 bytes, worst-case chain ~108
 ; P21: packet processing runs in the render loop and replies go out in the
 ; background, so their state cannot share renderer scratch. 32 bytes below the
