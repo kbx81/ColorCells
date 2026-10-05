@@ -23,7 +23,7 @@ TXBUF                equ RAM_VARS+0x00a   ; reply frames, and the effect staging
 STAGE_PTR            equ RAM_VARS+0x060   ; next free column in TXBUF while an effect stages text
 STAGE_OFFSET         equ RAM_VARS+0x063   ; centring offset of the staged text (free columns / 2)
 ROW_PORT             equ RAM_VARS+0x065   ; port group for the row data: 40 first pass, 48 second
-BEEP_TICKS           equ RAM_VARS+0x066   ; beeper on while non-zero (port bit 5); beep_start = 0x96
+BEEP_TICKS           equ RAM_VARS+0x066   ; beeper on while non-zero (port bit 5); beep_start loads BEEP_LEN
 CLK_H10              equ RAM_VARS+0x068
 CLK_H1               equ RAM_VARS+0x069
 CLK_M10              equ RAM_VARS+0x06a
@@ -213,6 +213,14 @@ QUERY_ROMID          equ '0'
 QUERY_MEMORY         equ '1'
 QUERY_NOP            equ '2'
 QUERY_DUMP           equ '3'
+
+; ---- Tuning and geometry (names shared with src/patched) ----------------------
+FLASH_HALF_PERIOD    equ 13          ; frames per half period of CTRL_LATCH bit 7, the FLASH blink clock (2.4 Hz)
+FRAME_COLS           equ 86          ; columns sent per row: the panel's 84 plus two that fall off the chain
+HOLD_FRAMES          equ 80          ; frames a PAUSE, HOLD, wipe or clock holds the panel (~1.3 s)
+BEEP_LEN             equ 150         ; beeper on for this many tick6 periods (~115 ms)
+IR_REPEAT_DELAY      equ 1300        ; tick6 periods a held remote key waits before repeating (~1 s)
+IR_REPEAT_TICKS      equ 300         ; ... and between repeats (~0.23 s)
 
         org 0x0000
 
@@ -499,7 +507,7 @@ frame_scroll:
         AND A
         JR z,frame_check_still
         LD HL,(FB_COL)
-        LD DE,0x56
+        LD DE,FRAME_COLS
         CALL fb_ptr_add
         LD DE,(FB_COLPTR)
         OR A
@@ -508,7 +516,7 @@ frame_scroll:
         LD HL,(FB_COL)
         CALL fb_ptr_inc
         LD (FB_COL),HL
-        LD DE,0x56
+        LD DE,FRAME_COLS
         CALL fb_ptr_add
         LD DE,(FB_COLPTR)
         OR A
@@ -548,7 +556,7 @@ frame_set_window:
         LD (FB_OUT_PTR),HL
         LD HL,FB_COLPTR
         LD BC,(FB_COL)
-        LD DE,0x56
+        LD DE,FRAME_COLS
         XOR A
         SBC HL,BC
         XOR A
@@ -560,7 +568,7 @@ frame_set_window:
         JP frame_set_extra
 
 frame_window_wrap:
-        LD HL,0x56
+        LD HL,FRAME_COLS
         LD (FB_OUT_LEN),HL
         LD HL,0
 
@@ -571,7 +579,7 @@ frame_bit7_tick:
         LD A,(FRAME_COUNT)
         INC A
         LD (FRAME_COUNT),A
-        CP 13
+        CP FLASH_HALF_PERIOD
         JR nz,frame_done
         XOR A
         LD (FRAME_COUNT),A
@@ -1288,7 +1296,7 @@ init_render:
         LD (FB_COL),HL
         LD HL,0
         LD (FB_EXTRA_LEN),HL
-        LD HL,0x56
+        LD HL,FRAME_COLS
         LD (FB_OUT_LEN),HL
         LD A,1
         LD (EFFECT_ID_COPY),A
@@ -2485,7 +2493,7 @@ fx_toggle_flush:
         JR z,fx_reset_stage
         XOR A
         LD (FLUSH_PENDING),A
-        LD A,0x56
+        LD A,FRAME_COLS
 
 fx_reset_stage:
         LD (COL_COUNT),A
@@ -2554,7 +2562,7 @@ fx_flush_stage:
         XOR A
         EX DE,HL
         SBC HL,DE
-        LD A,0x56
+        LD A,FRAME_COLS
         SUB L
         LD (COL_COUNT),A
         JP stage_centre
@@ -2586,10 +2594,10 @@ fx_beep:
         CALL beep_start
         JP render_next_char
 
-; ---- beep_start: BEEP_TICKS = 0x96 (~115 ms)
+; ---- beep_start: BEEP_TICKS = BEEP_LEN (~115 ms)
 beep_start:
         PUSH HL
-        LD HL,0x96
+        LD HL,BEEP_LEN
         LD (BEEP_TICKS),HL
         POP HL
         RET
@@ -2608,7 +2616,7 @@ fx_end_of_channel:
 fx_right:
         XOR A
         LD (SCROLLING),A
-        LD A,0x56
+        LD A,FRAME_COLS
         LD (COL_COUNT),A
         LD A,4
         LD HL,fxv_right
@@ -2624,17 +2632,17 @@ fx_left:
 ; ---- fx_hold: BB: blank, then reveal the staged text right to left
 fx_hold:
         XOR A
-        LD A,0x56
+        LD A,FRAME_COLS
         LD (COL_COUNT),A
         LD A,5
         LD HL,fxv_hold
         JP set_effect_vector
 
-; ---- fx_pause: 19: show the staged text at once and hold 0x50 frames
+; ---- fx_pause: 19: show the staged text at once and hold HOLD_FRAMES frames
 fx_pause:
         XOR A
         LD (SCROLLING),A
-        LD A,0x56
+        LD A,FRAME_COLS
         LD (COL_COUNT),A
         LD A,1
         LD HL,fxv_pause
@@ -2644,7 +2652,7 @@ fx_pause:
 fx_up:
         XOR A
         LD (SCROLLING),A
-        LD A,0x56
+        LD A,FRAME_COLS
         LD (COL_COUNT),A
         LD A,2
         LD HL,fxv_wipe_updown
@@ -2654,7 +2662,7 @@ fx_up:
 fx_down:
         XOR A
         LD (SCROLLING),A
-        LD A,0x56
+        LD A,FRAME_COLS
         LD (COL_COUNT),A
         LD A,3
         LD HL,fxv_wipe_updown
@@ -2721,7 +2729,7 @@ attr_magic_off:
         LD (CUR_COLOUR),A
         JP render_next_char
 
-; ---- fx_halt: 06: hold 0x50 frames (~1.3 s) with the colours reset
+; ---- fx_halt: 06: hold HOLD_FRAMES frames (~1.3 s) with the colours reset
 fx_halt:
         XOR A
         LD (SCROLLING),A
@@ -2735,7 +2743,7 @@ halt_wait_frames:
         JR nz,halt_wait_frames
 
 halt_hold:
-        LD A,0x50
+        LD A,HOLD_FRAMES
         LD (FRAME_DELAY),A
         CALL fb_colours_default
         LD HL,(STORE_CURSOR)
@@ -2745,7 +2753,7 @@ halt_hold:
         LD A,(EFFECT_ID)
         AND A
         JP z,fx_left
-        LD A,0x56
+        LD A,FRAME_COLS
         LD (COL_COUNT),A
         JP render_next_char
 
@@ -2890,7 +2898,7 @@ tiny_end:
 tiny_scroll_off:
         LD E,0
         LD HL,FB_COL
-        LD B,0x56
+        LD B,FRAME_COLS
 
 tinyoff_scan:
         BIT 7,(HL)
@@ -3015,7 +3023,7 @@ tinysc_loop:
 tiny_copy_frame:
         LD HL,FRAMEBUF
         LD DE,FRAMEBUF_TINY+31
-        LD BC,0x56
+        LD BC,FRAME_COLS
         LD A,(TINY_FRAME_READY)
         AND A
         JR nz,tiny_copy_frame
@@ -3067,7 +3075,7 @@ tiny_row_out:
 ; ---- disp_blank_row: Send 0x8F (all off) to the current row
 disp_blank_row:
         LD HL,FRAMEBUF_TINY+31
-        LD B,0x56
+        LD B,FRAME_COLS
         LD C,0x48
         LD A,(ROW_INDEX)
         CPL
@@ -3124,7 +3132,7 @@ fxv_prepare:
 fxv_pointers:
         LD HL,FRAMEBUF_ROW1
         LD (FB_COLPTR),HL
-        LD HL,0x56
+        LD HL,FRAME_COLS
         LD (FB_OUT_LEN),HL
         LD HL,0
         LD (FB_EXTRA_LEN),HL
@@ -3163,7 +3171,7 @@ right_wait_frame:
         AND A
         JR nz,right_wait_frame
         DJNZ right_wait_row
-        LD A,0x50
+        LD A,HOLD_FRAMES
         LD (FRAME_DELAY),A
         XOR A
         LD (SCROLLING),A
@@ -3218,7 +3226,7 @@ hold_wait_frame:
         AND A
         JR nz,hold_wait_frame
         DJNZ hold_wait_row
-        LD A,0x50
+        LD A,HOLD_FRAMES
         LD (FRAME_DELAY),A
         XOR A
         LD (SCROLLING),A
@@ -3231,7 +3239,7 @@ fxv_pause:
         LD A,(COL_COUNT)
         LD C,A
         LDIR
-        LD A,0x50
+        LD A,HOLD_FRAMES
         LD (FRAME_DELAY),A
         XOR A
         LD (SCROLLING),A
@@ -3311,7 +3319,7 @@ wipev_next_pass:
         POP AF
         DEC A
         JR nz,wipev_pass
-        LD A,0x50
+        LD A,HOLD_FRAMES
         LD (FRAME_DELAY),A
         XOR A
         LD (SCROLLING),A
@@ -4274,7 +4282,7 @@ clear_txbuf:
         PUSH HL
         PUSH BC
         LD HL,TXBUF
-        LD B,0x56
+        LD B,FRAME_COLS
 
 clrtx_loop:
         LD (HL),0
@@ -4797,7 +4805,7 @@ time_get_digit:
         LD (CLK_H1),A
 
 time_wait:
-        LD A,0x50
+        LD A,HOLD_FRAMES
         LD (FRAME_DELAY),A
 
 time_wait_loop:
@@ -4814,13 +4822,13 @@ time_wait_loop:
 time_get_ampm:
         CALL menu_getchar
         RES 5,A
-        CP 0x59
+        CP 'Y'
         JR nz,time_check_n
         LD A,0
         JR time_store_pm
 
 time_check_n:
-        CP 0x4e
+        CP 'N'
         JR nz,time_get_ampm
         LD A,0xff
 
@@ -4881,9 +4889,9 @@ clock_not_space:
         JR nz,clock_not_ampm
         LD A,(CLK_PM)
         AND 1
-        LD A,0x41
+        LD A,'A'
         JR z,clock_ampm_char
-        LD A,0x50
+        LD A,'P'
 
 clock_ampm_char:
         LD (CUR_CHAR),A
@@ -5008,13 +5016,13 @@ askchan_key:
         JP z,askchan_magic_key
         CP 0x7f
         JR z,askchan_backspace
-        CP 0x41
+        CP 'A'
         JR z,askchan_all
-        CP 0x61
+        CP 'a'
         JR z,askchan_all
-        CP 0x44
+        CP 'D'
         JR z,askchan_demo
-        CP 0x64
+        CP 'd'
         JR z,askchan_demo
         LD A,(CUR_CHAR)
         CALL is_digit
@@ -5036,11 +5044,11 @@ askchan_backspace:
 askchan_accept:
         LD A,(CHAN_D10)
         OR 0x20
-        CP 0x64
+        CP 'd'
         JR z,askchan_demo
         LD A,(CHAN_D1)
         OR 0x20
-        CP 0x64
+        CP 'd'
         JR z,askchan_demo
         LD B,2
         LD HL,CHAN_D10
@@ -5344,7 +5352,7 @@ menu_clear_all:
         CALL menu_show_text
         CALL menu_getchar
         AND 0x5f
-        CP 0x59
+        CP 'Y'
         JP nz,editor_loop
         CALL store_clear_all
         CALL store_finalize
@@ -5737,7 +5745,7 @@ getkey_ir:
         LD A,H
         OR L
         JR nz,getkey_none
-        LD HL,0x012c
+        LD HL,IR_REPEAT_TICKS
         LD (GEN_COUNTDOWN),HL
         JP getkey_check_shift
 
@@ -5762,7 +5770,7 @@ getkey_first_frame:
 getkey_accept:
         LD A,(IR_KEYNUM)
         LD (IR_KEY),A
-        LD HL,0x0514
+        LD HL,IR_REPEAT_DELAY
         LD (GEN_COUNTDOWN),HL
         XOR A
         LD (IR_DEBOUNCE),A
@@ -6605,7 +6613,7 @@ redraw_ret:
         LD (DISP_ON),A
         RET
 
-; ---- redraw_hold: let one frame out, then hold 0x50 frames
+; ---- redraw_hold: let one frame out, then hold HOLD_FRAMES frames
 redraw_hold:
         LD A,0xff
         LD (DISP_ON),A
@@ -6619,7 +6627,7 @@ hold_wait_row2:
         LD A,(ROW_INDEX)
         CP 2
         JR nz,hold_wait_row2
-        LD A,0x50
+        LD A,HOLD_FRAMES
         LD (FRAME_DELAY),A
 
 hold_wait_frames:
@@ -6659,7 +6667,7 @@ showtext_done:
 ; ---- fb_rewind_window: FB_COL = FB_COLPTR - 86 (ring wrap)
 fb_rewind_window:
         LD HL,(FB_COLPTR)
-        LD DE,0x56
+        LD DE,FRAME_COLS
         XOR A
         SBC HL,DE
         LD (FB_COL),HL
@@ -6872,9 +6880,9 @@ pkt_process_done:
         CALL shift_chain_clear
         JP restart_display
 
-; ---- shift_chain_clear: clock 85 zeros through port 40, strobe
+; ---- shift_chain_clear: clock a row's worth of zeros through port 40, strobe
 shift_chain_clear:
-        LD B,0x55
+        LD B,FRAME_COLS-1
         XOR A
 
 chainclr_loop:
@@ -7005,7 +7013,7 @@ settime_digits:
         DJNZ settime_digits
         CALL pkt_next_byte
         AND 0x5f
-        CP 0x59
+        CP 'Y'
         LD A,0xff
         JR nz,settime_store_pm
         XOR A
@@ -7117,26 +7125,26 @@ seq_default_fill:
 
 seq_pair_loop:
         CALL pkt_next_byte
-        CP 0x44
+        CP 'D'
         JR z,seq_pair_demo
-        CP 0x64
+        CP 'd'
         JR z,seq_pair_demo
         LD (CUR_CHAR),A
-        CP 0x3a
+        CP '9'+1
         JP nc,pkt_next
-        CP 0x30
+        CP '0'
         JP c,pkt_next
         AND 15
         LD (CHAN_D10),A
         CALL pkt_next_byte
-        CP 0x44
+        CP 'D'
         JR z,seq_pair_demo
-        CP 0x64
+        CP 'd'
         JR z,seq_pair_demo
         LD (CUR_CHAR),A
-        CP 0x3a
+        CP '9'+1
         JP nc,pkt_next
-        CP 0x30
+        CP '0'
         JP c,pkt_next
         AND 15
         LD (CHAN_D1),A
