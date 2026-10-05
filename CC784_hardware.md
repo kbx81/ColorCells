@@ -101,17 +101,16 @@ Q12 (pin 1, the trace the NIR cuts), so `/INT` asserts 3072 clocks = 768 µs
 after the acknowledge: 1302 Hz, the rate the NET firmware runs its serial
 engines and row scan at directly. The NIR's 8 MHz crystal and the Q11-only
 bodge give the 7812.5 Hz tick its IR decoder needs; its firmware divides by 6
-to get the same 1302 Hz for everything else. A NET board therefore needs
-both the crystal and the bodge before it can run the NIR firmware; done on
-2026-10-03, and its Z8400A (4 MHz grade) runs the patched firmware at 8 MHz.
+to get the same 1302 Hz for everything else. A NET board needs both the
+crystal and the bodge before it can run the NIR firmware; a converted one
+runs the patched firmware on its Z8400A (4 MHz grade) at 8 MHz.
 
 NMI: 60 Hz from the AC input via a zero-cross detector (`NMI_PER_SEC = 60`).
 With a DC supply the clock would not run; the supplied PSU is AC, so it does.
 
 ## 4. Serial port [H]
 
-DB9 wiring, from the schematic (2026-09-27; corrects the earlier photo trace,
-which had RX on pin 2):
+DB9 wiring, from the schematic:
 
 | DB9 | Path | Direction | Function |
 |---|---|---|---|
@@ -253,17 +252,6 @@ Without a battery the sign boots with address 0 and an empty store.
   reaches `PORT_IN` bit 1.
 
 ## 9. Open questions
-
-Answered from the schematic (2026-09): CPU clock (8 MHz), the INT source and
-the watchdog (§3), the control-latch and colour-latch bit maps (§5), the
-input port (§4, the '244, not a mux), SK2 pins 10–12 (data, clock, strobe),
-the bodge wires (§8), the battery path (§7), the `OUT (40)` role and the
-double row write (§5).
-
-Answered on the bench (2026-10): the IR carrier and the remote's chip (§6),
-the panel's construction (§5), the background codes (§5).
-
-Still open:
 
 - **Direct 3.3 V TTL serial** without a MAX3232 (§4): probable, unverified.
 

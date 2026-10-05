@@ -182,7 +182,7 @@ bytes of the bank are free.
       never answered, so its bytes cannot reach the editor as keys.
     - Replies and DONE leave through a background transmitter: two
       segments with an optional appended sum (`TX_SEG0/1`, fed by
-      `tx_bit_engine`), so a store dump no longer stalls anything. The
+      `tx_bit_engine`), so a store dump stalls nothing. The
       `B4` query frames are built over `PKT_BUF`; a query ends its packet.
     - Text goes into the store in one move per run of plain bytes instead
       of one per byte (`pkt_insert_run`), and DELETE_TEXT moves the store up
@@ -192,8 +192,8 @@ bytes of the bank are free.
       still park and restart the display.
     The state lives in 32 bytes carved off the store top (`STREAM_AREA`):
     the store is 15246/7054 bytes. The demo message shrank to one line to
-    pay for the code; ~330 bytes of the bank remain. Gate: `quiet` in the
-    emulator; `compare` differs from earlier trees by design.
+    pay for the code. Gate: `quiet` in the emulator; `compare` against a tree
+    without this patch reports differences by design.
 19. **RAINBOW starts on a random colour.** `BC` set the cycle index to 1 and
     the per-character step advances before it looks up, so every rainbow
     began on orange. The index now starts at 1–5 from a running 8-bit
@@ -227,8 +227,8 @@ bytes of the bank are free.
 
 ## 3. Rejected
 
-- **Always defer processing** (proposed for B3) — *regression at the time*,
-  superseded by patch 21, which polls from the render loop. `main_loop`
+- **Always defer processing** (proposed for B3) — *regression on the stock
+  structure*; patch 21 polls from the render loop instead. `main_loop`
   tests `PKT_READY` only on entry at `009A`; the `render_loop` render loop never
   falls back to it. Re-entry happens only via `fx_end_of_channel` (`0F5E`) or
   the `BA` wait-for-key spin (`0A49`), so a deferred packet waits for the
