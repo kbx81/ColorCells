@@ -5077,13 +5077,13 @@ time_wait_loop:
 time_get_ampm:
         CALL menu_getchar
         RES 5,A
-        CP 0x59
+        CP 'Y'
         JR nz,time_check_n
         LD A,0
         JR time_store_pm
 
 time_check_n:
-        CP 0x4e
+        CP 'N'
         JR nz,time_get_ampm
         LD A,0xff
 
@@ -5144,9 +5144,9 @@ clock_not_space:
         JR nz,clock_not_ampm
         LD A,(CLK_PM)
         AND 1
-        LD A,0x41
+        LD A,'A'
         JR z,clock_ampm_char
-        LD A,0x50
+        LD A,'P'
 
 clock_ampm_char:
         LD (CUR_CHAR),A
@@ -5269,13 +5269,13 @@ askchan_key:
         JP z,askchan_magic_key
         CP 0x7f
         JR z,askchan_backspace
-        CP 0x41
+        CP 'A'
         JR z,askchan_all
-        CP 0x61
+        CP 'a'
         JR z,askchan_all
-        CP 0x44
+        CP 'D'
         JR z,askchan_demo
-        CP 0x64
+        CP 'd'
         JR z,askchan_demo
         LD A,(CUR_CHAR)
         CALL is_digit
@@ -5297,11 +5297,11 @@ askchan_backspace:
 askchan_accept:
         LD A,(CHAN_D10)
         OR 0x20
-        CP 0x64
+        CP 'd'
         JR z,askchan_demo
         LD A,(CHAN_D1)
         OR 0x20
-        CP 0x64
+        CP 'd'
         JR z,askchan_demo
         LD B,2
         LD HL,CHAN_D10
@@ -5601,7 +5601,7 @@ menu_clear_all:
         CALL menu_show_text
         CALL menu_getchar
         AND 0x5f
-        CP 0x59
+        CP 'Y'
         JP nz,editor_loop
         CALL store_clear_all
         CALL store_finalize
@@ -7802,7 +7802,7 @@ settime_digits:
         DJNZ settime_digits
         CALL pkt_next_byte
         AND 0x5f
-        CP 0x59
+        CP 'Y'
         LD A,0xff
         JR nz,settime_store_pm
         XOR A
@@ -7912,26 +7912,26 @@ seq_default_fill:
 
 seq_pair_loop:
         CALL pkt_next_byte
-        CP 0x44
+        CP 'D'
         JR z,seq_pair_demo
-        CP 0x64
+        CP 'd'
         JR z,seq_pair_demo
         LD (CUR_CHAR),A
-        CP 0x3a
+        CP '9'+1
         JP nc,pkt_next
-        CP 0x30
+        CP '0'
         JP c,pkt_next
         AND 15
         LD (CHAN_D10),A
         CALL pkt_next_byte
-        CP 0x44
+        CP 'D'
         JR z,seq_pair_demo
-        CP 0x64
+        CP 'd'
         JR z,seq_pair_demo
         LD (CUR_CHAR),A
-        CP 0x3a
+        CP '9'+1
         JP nc,pkt_next
-        CP 0x30
+        CP '0'
         JP c,pkt_next
         AND 15
         LD (CHAN_D1),A
