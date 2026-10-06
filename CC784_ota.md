@@ -114,10 +114,11 @@ Everything above is modelled in `tools/cc784_sim.py` (AT28C256 with banks, page 
 | `uv run tools/cc784_sim.py update` | a whole OTA update over the fake serial line, including refusals |
 | `uv run tools/cc784_sim.py push` | the real `push()` against the emulator |
 | `uv run tools/cc784_sim.py ram` | the build on the 6264 and on a 62256: sizes, fill, dump; a set clock survives a reset |
-| `uv run tools/cc784_sim.py quiet` | packets arriving mid-scroll: no restart, no watchdog clear, replies and DONE in the background, early frames dropped whole, cursor fix-up |
+| `uv run tools/cc784_sim.py quiet` | packets arriving mid-scroll: no restart, no watchdog clear, replies and DONE in the background, early frames dropped whole, cursor fix-up; the demo's lock survives a packet and a SEQ change is acted on |
+| `uv run tools/cc784_sim.py speed` | each scroll speed steps columns at stock's rate with no dark frames, and the seven rows get the same dwell |
 | `uv run tools/cc784_sim.py fuzz [N]` | N power cuts at random instants of an update; every reboot must land in a verified bank (1000/1000 when last run) |
 
-The `OTA: emulator regression` task runs the six fast ones.
+The `OTA: emulator regression` task runs the seven fast ones.
 
 ## 7. Not built
 

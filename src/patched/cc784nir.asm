@@ -119,7 +119,7 @@ EURO_STATE           equ RAM_VARS+0x19b
 DRAW_BUF             equ RAM_VARS+0x19c   ; 16 packed hex columns of a DRAW graphic
 IR_DEBOUNCE          equ RAM_VARS+0x1ac   ; key number seen once, awaiting its second frame
 TICK6_COUNT          equ RAM_VARS+0x1ad
-TICK1_COUNT          equ RAM_VARS+0x1ae
+DISP_COUNT           equ RAM_VARS+0x1ae   ; P26: interrupts to the next display tick (was TICK1_COUNT, a divider by 1)
 GEN_COUNTDOWN        equ RAM_VARS+0x1af   ; IR repeat/hold timer, counts down in tick6 (word)
 IR_STATE_CNT         equ RAM_VARS+0x1b1
 IR_BITCNT            equ RAM_VARS+0x1b2
@@ -152,7 +152,7 @@ FUNC_PENDING         equ RAM_VARS+0x1ec   ; editor: FUNC (B7) pressed, next key 
 MY_ADDRESS           equ RAM_VARS+0x1ed
 MY_ADDRESS_INV       equ RAM_VARS+0x1ee
 SCROLL_SPEED         equ RAM_VARS+0x1ef   ; 0..7 from F0-F7; blank ticks inserted after every frame
-BLANK_TIMER          equ RAM_VARS+0x1f0
+DISP_ACC             equ RAM_VARS+0x1f0   ; P26: sevenths of an interrupt carried to the next display tick (was BLANK_TIMER)
 SPEED_PENDING        equ RAM_VARS+0x1f1   ; editor: SPEED key pressed, next key is the digit
 ; P20: the clock digits must survive a power cycle, so they live up here next
 ; to the store, out of reach of the stub's library copy (RAM_VARS+00..81).
@@ -279,7 +279,12 @@ PKT_SAVE_END         equ STREAM_AREA+21
 PKT_SAVE_MARK        equ STREAM_AREA+23
 PKT_DISCARD          equ STREAM_AREA+25    ; FF = the frame being parsed arrived while busy: parse it, keep nothing
 PKT_DONE_WANT        equ STREAM_AREA+26    ; the DONE decision, latched at pkt_process entry
-STREAM_AREA_SIZE     equ 27
+PKT_SAVE_LOCK        equ STREAM_AREA+27    ; P27: the renderer's CHAN_LOCK at entry
+PKT_SEQ_CHANGED      equ STREAM_AREA+28    ; P27: FF once the packet has rewritten SEQ_LIST
+DISP_STRETCH         equ STREAM_AREA+29    ; P26: sevenths of an interrupt added to every display tick: 2 x speed
+SVC_DUE              equ STREAM_AREA+30    ; P26: bit 0 = tick6 engines due, bit 1 = display tick due
+SVC_ACTIVE           equ STREAM_AREA+31    ; P26: FF while tick6_service runs; it drains SVC_DUE, so it never nests
+STREAM_AREA_SIZE     equ 32
 STORE_TOP            equ STREAM_AREA-1    ; with a 32 K chip (16 K usable)
 STORE_TOP_8K         equ STORE_TOP-0x2000         ; with the stock 8 K chip
 ; store_init derives the warning level, the text allowance (301 = framing) and
@@ -705,29 +710,61 @@ nmi_entry:
         RETN
 
 ; ---- int_timer: Timer ISR. Every 6th tick schedules tick6_service; every tick schedules the handler in TICK_VECTOR (IR decoder). Both are invoked by pushing their address so they run as the ISR returns.
+;      P26: the display has its own divider. A display tick is 6 interrupts plus
+;      DISP_STRETCH sevenths, carried in DISP_ACC, so the plain crawl's slower
+;      speeds come from longer rows rather than dark ticks. Both dividers only
+;      mark SVC_DUE; tick6_service is pushed when it is not already running and
+;      drains the marks itself, so the engines and the display never nest and
+;      share the latch shadow and the RX FIFO as they did on one divider.
 int_timer:
         EX AF,AF'
         EXX
+        LD HL,DISP_COUNT
+        DEC (HL)
+        JR nz,int_tick6
+        LD A,(DISP_STRETCH)
+        LD C,A
+        LD A,(DISP_ACC)
+        ADD A,C
+        LD B,6
+
+int_disp_carry:
+        CP 7
+        JR c,int_disp_reload
+        SUB 7
+        INC B
+        JR int_disp_carry
+
+int_disp_reload:
+        LD (DISP_ACC),A
+        LD (HL),B
+        LD HL,SVC_DUE
+        SET 1,(HL)
+
+int_tick6:
         LD A,(TICK6_COUNT)
         INC A
         CP 6
         JR nz,int_tick6_store
-        LD HL,tick6_service     ; the address is pushed so the service runs as the ISR returns
-        PUSH HL
+        LD HL,SVC_DUE
+        SET 0,(HL)
         XOR A
 
 int_tick6_store:
         LD (TICK6_COUNT),A
-        LD A,(TICK1_COUNT)
-        INC A
-        CP 1
-        JR nz,int_tick1_store
+        LD A,(SVC_DUE)
+        OR A
+        JR z,int_vector
+        LD HL,SVC_ACTIVE
+        OR (HL)
+        JP m,int_vector         ; the running service picks the new mark up
+        LD (HL),0xff
+        LD HL,tick6_service     ; the address is pushed so the service runs as the ISR returns
+        PUSH HL
+
+int_vector:
         LD HL,(TICK_VECTOR)
         PUSH HL
-        XOR A
-
-int_tick1_store:
-        LD (TICK1_COUNT),A
         EX AF,AF'
         EXX
         EI
@@ -785,6 +822,12 @@ tick6_service:
         PUSH HL
         PUSH IX
         PUSH IY
+
+svc_loop:
+        LD HL,SVC_DUE           ; P26: the engines on the tick6 mark, the display on its own
+        BIT 0,(HL)
+        JR z,svc_display
+        RES 0,(HL)
         LD HL,(GEN_COUNTDOWN)
         DEC HL
         LD A,H
@@ -799,10 +842,18 @@ tick6_engines:
         LD HL,(BEEP_TICKS)
         LD A,H
         OR L
-        JR z,tick6_display
+        JR z,svc_display
         DEC HL
         LD (BEEP_TICKS),HL
 
+svc_display:
+        LD HL,SVC_DUE
+        BIT 1,(HL)
+        JP z,tick6_restore
+        RES 1,(HL)
+
+; ---- tick6_display: one display tick: a row pass, or the row advance with the
+;      frame end and the RX byte consumer; every exit leads to tick6_restore
 tick6_display:
         LD A,(MENU_ACTIVE)
         AND A
@@ -813,16 +864,8 @@ tick6_display:
         LD A,(TINY_RENDER)
         AND A
         JP nz,tiny_refresh
-        LD A,(BLANK_TIMER)
-        AND A
-        JR z,row_output
-        DEC A
-        LD (BLANK_TIMER),A
-        LD A,(CTRL_LATCH_SHADOW)
-        OR 15
-        LD (CTRL_LATCH_SHADOW),A
-        LD (CTRL_LATCH),A
-        JP tick6_restore
+        ; P26: no blanked ticks; the scroll speed stretches the display tick
+        ; instead (DISP_STRETCH, set at the end of the frame)
 
 row_output:
         LD A,(ROW_OUT_PENDING)
@@ -933,14 +976,30 @@ row_advance:
         JP c,tick6_arm_row
         LD A,0
         LD (ROW_INDEX),A
-        LD A,(SCROLL_SPEED)
-        LD (BLANK_TIMER),A
+        LD (DISP_STRETCH),A     ; P26: full rate unless the plain crawl below asks
         LD A,(FRAME_DELAY)
         AND A
-        JR z,frame_scroll
+        JR z,frame_speed
         DEC A
         LD (FRAME_DELAY),A
         JP frame_bit7_tick
+
+; ---- frame_speed (P26): where stock queued SCROLL_SPEED dark ticks after the
+;      frame, the next frame's 21 display ticks are stretched by the same total
+;      (2 x speed sevenths each), so the rows stay lit and evenly so.
+;      Effects, the editor and TINY run at the full rate, as before.
+frame_speed:
+        LD A,(MENU_ACTIVE)
+        LD HL,EFFECT_ID
+        OR (HL)
+        LD HL,TINY_RENDER
+        OR (HL)
+        JR nz,frame_scroll
+        LD A,(SCROLL_SPEED)
+        ADD A,A
+        LD (DISP_STRETCH),A
+        LD HL,DISP_ACC          ; 21 ticks is a multiple of 7: rotate the carry
+        INC (HL)                ; pattern a seventh per frame so every row averages the same
 
 frame_scroll:
         LD A,(SCROLLING)
@@ -1105,6 +1164,12 @@ tick6_arm_row:
         LD (ROW_PORT),A
 
 tick6_restore:
+        DI                      ; P26: a mark set after this check would be lost
+        LD A,(SVC_DUE)
+        OR A
+        JR nz,svc_again
+        LD (SVC_ACTIVE),A
+        EI
         POP IY
         POP IX
         POP HL
@@ -1112,6 +1177,10 @@ tick6_restore:
         POP BC
         POP AF
         RET
+
+svc_again:
+        EI
+        JP svc_loop
 
 ; ---- init_sequence: validate SEQ_LIST (reset to 0..99 if not), then flag
 ;      SEQ_ALL_EMPTY when no listed channel has text
@@ -1566,7 +1635,7 @@ init_clear_addrbuf:
         LD (SPEED_PENDING),A
         LD (FUNC_PENDING),A
         LD (SCROLL_SPEED),A
-        LD (BLANK_TIMER),A
+        LD (DISP_ACC),A
         LD (TICK6_COUNT),A
         LD HL,STREAM_AREA       ; P21: no reply in flight, no packet busy
         LD B,STREAM_AREA_SIZE
@@ -1575,6 +1644,8 @@ init_clear_stream:
         LD (HL),A
         INC HL
         DJNZ init_clear_stream
+        INC A
+        LD (DISP_COUNT),A       ; P26: first display tick on the next interrupt
         LD A,0xff
         LD (NEXT_CHAN),A
         LD A,' '
@@ -3457,9 +3528,12 @@ tiny_copy_frame:
         LD HL,FRAMEBUF
         LD DE,TXBUF             ; P7: the TINY output frame lives in TXBUF
         LD BC,FRAME_COLS
+
+tiny_copy_wait:
+        CALL pkt_poll           ; P26: a TINY line is seconds of these waits
         LD A,(TINY_FRAME_READY)
         AND A
-        JR nz,tiny_copy_frame
+        JR nz,tiny_copy_wait
 
 tinycp_loop:
         LDI
@@ -3865,7 +3939,6 @@ ir_init:
         LD (IR_KEY),A
         LD (GEN_COUNTDOWN),A
         LD (GEN_COUNTDOWN+1),A
-        LD (TICK1_COUNT),A
 
 ; ---- ir_reset: IR decoder: reset state, wait for leader (port C0 bit1)
 ir_reset:
@@ -4130,6 +4203,9 @@ tx_idle:
 ;      its sum if flagged, then TX_SEG1 the same way, then DONE if pending;
 ;      when all of that is out, the packet is no longer busy.
 tx_stream_next:
+        LD A,(TX_ACTIVE)        ; P27: the segments are written one at a time;
+        OR A                    ; nothing streams until pkt_done_handoff
+        RET z
         LD HL,(TX_SEG0+2)
         LD A,H
         OR L
@@ -4651,6 +4727,8 @@ key_handler:
 
 editor_start:
         LD SP,STACK_TOP
+        XOR A
+        LD (SVC_ACTIVE),A       ; P26: entered from rx_consume inside the service
         LD A,0xff
         LD (MENU_ACTIVE),A
         EI
@@ -6997,6 +7075,7 @@ pkt_process:
         LD (PKT_READY),A
         LD (PKT_RESTART),A
         LD (PKT_DONE_WANT),A
+        LD (PKT_SEQ_CHANGED),A
         DEC A
         LD (PKT_BUSY),A
         ; P16: flag bit 0 asks for a DONE byte once the packet has been
@@ -7018,6 +7097,8 @@ pkt_entry_nodone:
         LD (PKT_SAVE_INS),HL
         LD HL,(STORE_END)
         LD (PKT_SAVE_END),HL
+        LD A,(CHAN_LOCK)        ; P27: put back with the cursor unless the display restarts
+        LD (PKT_SAVE_LOCK),A
         LD HL,0xffff
         LD (PKT_LOW_EDIT),HL
         LD HL,(STORE_CURSOR)
@@ -7294,11 +7375,27 @@ pkt_done_continue:
         LD (STORE_CURSOR),HL
         LD HL,(PKT_SAVE_INS)
         LD (INS_PTR),HL
+        LD A,(PKT_SAVE_LOCK)    ; P27: cmd_09 and the P24 entry path clear the lock;
+        LD (CHAN_LOCK),A        ; the renderer keeps the channel it was playing
         LD HL,(STORE_END)
         LD DE,(PKT_SAVE_END)
         OR A
         SBC HL,DE
-        RET z                   ; the store did not change size
+        JR nz,pkt_done_resized
+        LD A,(SEQ_ALL_EMPTY)    ; P27: the store is unchanged, but a SEQ command, or
+        LD B,A                  ; any packet while the demo plays, may change what
+        LD HL,PKT_SEQ_CHANGED   ; there is to play: recount, and restart only when
+        OR (HL)                 ; the answer flips between the demo and real text
+        RET z
+        PUSH BC
+        CALL init_sequence
+        POP BC
+        LD A,(SEQ_ALL_EMPTY)
+        CP B
+        RET z                   ; same as before: a new sequence starts at the next channel
+        JR pkt_done_restart
+
+pkt_done_resized:
         LD A,(SEQ_ALL_EMPTY)
         OR A
         JR nz,pkt_done_restart  ; the demo was playing: show the new text now
@@ -7937,6 +8034,8 @@ select_chan_done:
 
 ; ---- cmd_04_sequence: 04 dd dd ... [D|d]: rebuild SEQ_LIST from 2-digit channel numbers
 cmd_04_sequence:
+        LD A,0xff
+        LD (PKT_SEQ_CHANGED),A  ; P27: pkt_done_continue recounts the empty channels
         LD HL,SEQ_LIST
         LD A,0
         LD B,CHANNELS
@@ -8028,7 +8127,9 @@ is_plain_byte:
         CP 0x20
         JR c,plain_lookup
         CP 0x7f
-        RET c                   ; printable ASCII: never a command or ignored (Z from CP)
+        JR nc,plain_lookup
+        XOR A                   ; printable ASCII: never a command or ignored
+        RET
 
 plain_lookup:
         PUSH BC

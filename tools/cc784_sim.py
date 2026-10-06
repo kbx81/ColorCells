@@ -221,6 +221,7 @@ class Sign:
         self.min_stack, self.min_stack_pc = self.stack_top, None
         self.rom_writes = 0
         self.wdog_clears = 0                # times the watchdog blanked the control latch
+        self.refreshes = 0                  # frames sent to the panel, distinct or not
         self.latch = 0
         self.tx_edges = []
         self.rx_events, self.ir_events = [], []
@@ -228,6 +229,7 @@ class Sign:
         self.rx_level = self.ir_level = 0
         self.rx_busy_until = self.ir_busy_until = 0
         self.burst, self.frames = [], []
+        self.row_starts, self.last_out_t = [], 0   # (t, port low nibble) at each row burst
 
     # ---- memory and port hooks
     def _set_latch(self, value):
@@ -303,12 +305,17 @@ class Sign:
         return 0xff
 
     def _on_output(self, port, value):
+        if port & 0xf0 == 0x40:           # a row burst: note where each one starts
+            if self.t - self.last_out_t > 3000:    # a burst pauses for the engines, bursts are a tick apart
+                self.row_starts.append((self.t, port & 0x0f))
+            self.last_out_t = self.t
         if port & 0xff == 0x4e:           # ROW_INDEX 0, second pass: colour byte + 86 columns
             self.burst.append(value)
             if len(self.burst) == 87:
                 f = bytes(self.burst); self.burst = []
+                self.refreshes += 1                 # every frame the panel is sent
                 if not self.frames or self.frames[-1] != f:
-                    self.frames.append(f)
+                    self.frames.append(f)           # only the distinct ones
 
     # ---- interrupts, raised by hand
     def _push_pc(self):
@@ -971,7 +978,62 @@ def cmd_quiet():
           % (delta, s.ram('PKT_RESTART')[0], before, word(s, 'STORE_CURSOR')),
           playing1 and s.ram('PKT_RESTART')[0] == 0 and delta > 0 and marker(s, 1) < word(s, 'STORE_CURSOR') < marker(s, 2) and s.wdog_clears == 0)
     check('no faults, stack high-water %d' % s.depth(), not s.faults and s.depth() < 100)
+    # P27: a packet while the demo plays leaves the renderer's lock on the demo channel,
+    # so STOP and a key edit nothing; a SEQ change is acted on when it flips demo/text
+    s2 = Sign(rom, syms, fresh_ram=True); s2.run_ms(2500)
+    send(s2, b'\x17' + b'1045' + b'P', wait_ms=500)
+    lock = s2.ram('CHAN_LOCK')[0]; cur = word(s2, 'STORE_CURSOR')
+    s2.ir_key('STOP'); s2.ir_wait(); s2.run_ms(800)
+    head = s2.ram('MSG_STORE', 8)
+    s2.ir_key('H'); s2.ir_wait(); s2.run_ms(500)
+    check('set time while the demo plays keeps the demo lock (%02x, cursor %04x); STOP then a key edits nothing, no faults (P27)' % (lock, cur),
+          lock == syms['CHAN_DEMO'] and cur < syms['MSG_STORE'] and s2.ram('MSG_STORE', 8) == head and not s2.faults)
+    s3 = Sign(rom, syms, fresh_ram=True); s3.run_ms(2500)
+    send(s3, b'\x09\x30\x35\x0e' + b'FIVE ' * 10, wait_ms=3000)      # channel 5 replaces the demo
+    send(s3, b'\x04\x30\x32', wait_ms=500)                             # sequence = channel 2, empty
+    r1 = s3.ram('PKT_RESTART')[0]; s3.run_ms(3000)
+    demo = word(s3, 'STORE_CURSOR') < syms['MSG_STORE']
+    send(s3, b'\x04\x30\x35', wait_ms=500)
+    r2 = s3.ram('PKT_RESTART')[0]; s3.run_ms(1000)
+    in5 = marker(s3, 5) < word(s3, 'STORE_CURSOR') < marker(s3, 6)
+    check('SEQ to an empty channel restarts into the demo (%02x, demo %s); SEQ back to the text restarts into it (%02x, in 5 %s) (P27)'
+          % (r1, demo, r2, in5), r1 == 0xFF and demo and r2 == 0xFF and in5 and not s3.faults)
     print('quiet processing: %d/%d checks pass' % (sum(checks), len(checks)))
+    return all(checks)
+
+
+def cmd_speed():
+    """P26: every scroll speed steps one column per frame at stock's rate,
+    62 * 21 / (21 + n) per second, with the rows lit for the whole frame and
+    every row given the same time; nothing ever goes dark"""
+    rom, syms = assemble(HERE.parent / 'src' / 'patched')
+    checks = []
+    def check(name, cond):
+        checks.append(bool(cond)); print('  %s %s' % ('ok  ' if cond else 'FAIL', name))
+    text = b'THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG ' * 5
+    for n in range(8):
+        s = Sign(rom, syms, fresh_ram=True)
+        s.run_ms(2500)
+        s.send_frame(b'\x09\x30\x30\x0e' + bytes([0xF0 + n]) + text + b'\x04\x30\x30', addr=1, flag=0x81); s.rx_wait()
+        s.run_ms(4000)                              # restart, then settle into the crawl
+        s.refreshes = 0; s.frames.clear(); s.wdog_clears = 0; s.row_starts.clear()
+        s.run_ms(5000)
+        fps, cps = s.refreshes / 5.0, len(s.frames) / 5.0
+        want = 62.0 * 21 / (21 + n)
+        dark = sum(1 for f in s.frames if not any(f[1:]))
+        # a row's dwell: from its first pass to the next row's first pass; lit throughout
+        firsts = [(t, p & 7) for t, p in s.row_starts if not p & 8]
+        dwell = {}
+        for (t0, r), (t1, _) in zip(firsts, firsts[1:]):
+            dwell.setdefault(r, []).append((t1 - t0) / CPU_HZ * 1e6)
+        mean = {r: sum(v) / len(v) for r, v in dwell.items()}
+        lo, hi = min(mean.values()), max(mean.values())
+        want_dwell = (18 + 6 * n / 7) * 128
+        check('speed %d: %5.1f refreshes/s, %5.1f columns/s (want %5.1f), %d dark frames, row dwell %4.0f-%4.0f us (want %4.0f), watchdog %d'
+              % (n, fps, cps, want, dark, lo, hi, want_dwell, s.wdog_clears),
+              abs(fps - want) < 1.5 and abs(cps - want) < 1.5 and dark == 0 and len(mean) == 7
+              and hi - lo < 140 and abs((lo + hi) / 2 - want_dwell) < 60 and s.wdog_clears == 0)
+    print('speeds: %d/%d checks pass' % (sum(checks), len(checks)))
     return all(checks)
 
 
@@ -1123,10 +1185,12 @@ def cmd_compare(dir_a, dir_b):
 
 if __name__ == '__main__':
     args = sys.argv[1:]
-    if not args or args[0] not in ('stack', 'compare', 'eeprom', 'ota', 'update', 'push', 'fuzz', 'ram', 'quiet'):
+    if not args or args[0] not in ('stack', 'compare', 'eeprom', 'ota', 'update', 'push', 'fuzz', 'ram', 'quiet', 'speed'):
         sys.exit(__doc__)
     if args[0] == 'ram':
         sys.exit(0 if cmd_ram() else 1)
+    if args[0] == 'speed':
+        sys.exit(0 if cmd_speed() else 1)
     if args[0] == 'quiet':
         sys.exit(0 if cmd_quiet() else 1)
     if args[0] == 'push':
