@@ -89,7 +89,7 @@ uv run tools/cc784_ota.py pack src/patched/cc784nir_patched.bin \
 **Push:**
 
 ```
-uv run tools/cc784_ota.py push src/patched/cc784nir_bank.bin -H <bridge> -k <key>   # ESPHome
+uv run tools/cc784_ota.py push src/patched/cc784nir_bank.bin -H <bridge> -k <key>   # ESPHome; -i N picks the serial_proxy instance when the bridge has several
 uv run tools/cc784_ota.py push src/patched/cc784nir_bank.bin -p <port>              # serial
 ```
 

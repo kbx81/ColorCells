@@ -145,7 +145,8 @@ CHAN_D10             equ RAM_VARS+0x1c6
 CHAN_D1              equ RAM_VARS+0x1c7
 FLASH_PENDING        equ RAM_VARS+0x1c8   ; 0x10 after FLASH until the next printable char
 TEXT_DRAWN           equ RAM_VARS+0x1c9   ; FF once a printable char has been drawn since init_render
-RAINBOW_IDX          equ RAM_VARS+0x1ca   ; RAINBOW per-char colour index, 0 = off
+RAINBOW_IDX          equ RAM_VARS+0x1ca   ; RAINBOW per-char colour index 1..5, 0 = off; bit 7 = P28 reverse
+RAINBOW_REVERSE      equ 0x80
 TEST_MSG_BUF         equ RAM_VARS+0x1cb   ; RAM copy of TEST_MESSAGE plus the ROM checksum, 28 bytes
 MENU_ENTRY_BUF       equ RAM_VARS+0x1e7
 FUNC_PENDING         equ RAM_VARS+0x1ec   ; editor: FUNC (B7) pressed, next key picks the second function
@@ -2223,6 +2224,10 @@ rainbow_mod5:
         SUB 5
         JR nc,rainbow_mod5
         ADD A,6                 ; -5..-1 -> 1..5
+        LD B,A
+        LD A,(RND_SEED)         ; P28: bit 7 of the index is the direction, from
+        AND RAINBOW_REVERSE     ; the generator's best bit
+        OR B
         LD (RAINBOW_IDX),A
         LD (MAGIC_COLOUR_SET),A ; any non-zero value means "set"
         POP HL
@@ -2242,10 +2247,20 @@ rainbow_step:
         BIT 1,(IX+0)
         RET nz
         LD A,(RAINBOW_IDX)
-        INC A
+        LD B,A
         AND 7
-        JR nz,rainbow_lookup
+        BIT 7,B
+        JR nz,rainbow_back
+        INC A                   ; forward: 1..5 then round to 1
+        CP 6
+        JR c,rainbow_lookup
         LD A,1
+        JR rainbow_lookup
+
+rainbow_back:
+        DEC A                   ; P28: reverse: 5..1 then round to 5
+        JR nz,rainbow_lookup
+        LD A,5
 
 rainbow_lookup:
         LD E,A
@@ -2261,7 +2276,9 @@ rainbow_lookup:
 rainbow_apply:
         AND 15
         LD (CUR_COLOUR),A
-        LD A,E
+        LD A,B
+        AND RAINBOW_REVERSE     ; keep the direction with the new index
+        OR E
         LD (RAINBOW_IDX),A
         LD A,(CUR_CHAR)
         RET

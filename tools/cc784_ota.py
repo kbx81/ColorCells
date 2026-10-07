@@ -10,7 +10,7 @@ cc784_ota.py - build and deliver OTA firmware images for the CC784 (CC784_ota.md
     cc784_ota.py diff OLD.bin NEW.bin
         The 64-byte pages that differ, and the transfer time at 300 baud.
 
-    cc784_ota.py info (-p PORT | -H HOST -k KEY) [-a ADDR]
+    cc784_ota.py info (-p PORT | -H HOST -k KEY [-i INSTANCE]) [-a ADDR]
         Which bank the sign is running and what both trailers say.
 
     cc784_ota.py push BANK.bin (-p PORT | -H HOST -k KEY) [-a ADDR] [-s SEQ] [-n] [--trial]
@@ -262,6 +262,7 @@ def main():
     for x in (u, i, c, r):
         x.add_argument('-p', '--port'); x.add_argument('-H', '--host')
         x.add_argument('-k', '--key', default=os.environ.get('ESPHOME_KEY'))
+        x.add_argument('-i', '--instance', default=None, help='serial_proxy instance on the ESPHome device: name or index (default 0)')
         x.add_argument('-a', '--addr', type=int, default=1); x.add_argument('-v', '--verbose', action='store_true')
     a = ap.parse_args()
 
@@ -273,7 +274,7 @@ def main():
                 sys.exit('%s has no valid trailer: run pack first' % a.bank)
         if a.host:
             import cc784_esphome
-            link = cc784_esphome.ESPHomeLink(a.host, a.key, verbose=a.verbose)
+            link = cc784_esphome.ESPHomeLink(a.host, a.key, instance=a.instance, verbose=a.verbose)
         elif a.port:
             link = cc784.SerialLink(a.port)
         else:
