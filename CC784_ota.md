@@ -1,6 +1,6 @@
 # CC784NIR — over-the-air ROM updates
 
-The patched firmware can be replaced over the sign's own 300-baud serial link. The ROM is an AT28C256 EEPROM split into two 16 K banks; an update is written into the bank that is not running, verified there, and booted on the next reset, so a failed or interrupted update never touches the running code. Only the 64-byte pages that differ are sent.
+The patched firmware can be replaced over the sign's own serial link. The ROM is an AT28C256 EEPROM split into two 16 K banks; an update is written into the bank that is not running, verified there, and booted on the next reset, so a failed or interrupted update never touches the running code. Only the 64-byte pages that differ are sent.
 
 What you need:
 
@@ -90,6 +90,7 @@ uv run tools/cc784_ota.py pack src/patched/cc784nir_patched.bin \
 
 ```
 uv run tools/cc784_ota.py push src/patched/cc784nir_bank.bin -H <bridge> -k <key>   # ESPHome; -i N picks the serial_proxy instance when the bridge has several
+uv run tools/cc784_ota.py push src/patched/cc784nir_bank.bin -H <bridge> -k <key> -b 1200   # a sign already on patch 30: 3 min instead of 12
 uv run tools/cc784_ota.py push src/patched/cc784nir_bank.bin -p <port>              # serial
 ```
 
@@ -116,9 +117,10 @@ Everything above is modelled in `tools/cc784_sim.py` (AT28C256 with banks, page 
 | `uv run tools/cc784_sim.py ram` | the build on the 6264 and on a 62256: sizes, fill, dump; a set clock survives a reset |
 | `uv run tools/cc784_sim.py quiet` | packets arriving mid-scroll: no restart, no watchdog clear, replies and DONE in the background, early frames dropped whole, cursor fix-up; the demo's lock survives a packet and a SEQ change is acted on |
 | `uv run tools/cc784_sim.py speed` | each scroll speed steps columns at stock's rate with no dark frames, and the seven rows get the same dwell |
+| `uv run tools/cc784_sim.py baud` | a cold sign follows the host at 300, 600 and 1200; replies come back at that rate; a rate change after a pause is followed; 1200 holds over interrupt periods from 126 to 134 µs thanks to the calibration and on a DC supply; 300-baud bare bytes still work. `update 1200` and `push 1200` run those gates at a rate |
 | `uv run tools/cc784_sim.py fuzz [N]` | N power cuts at random instants of an update; every reboot must land in a verified bank (1000/1000 when last run) |
 
-The `OTA: emulator regression` task runs the seven fast ones.
+The `OTA: emulator regression` task runs the eight fast ones.
 
 ## 7. Not built
 

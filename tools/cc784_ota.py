@@ -263,6 +263,7 @@ def main():
         x.add_argument('-p', '--port'); x.add_argument('-H', '--host')
         x.add_argument('-k', '--key', default=os.environ.get('ESPHOME_KEY'))
         x.add_argument('-i', '--instance', default=None, help='serial_proxy instance on the ESPHome device: name or index (default 0)')
+        x.add_argument('-b', '--baud', type=int, default=300, choices=(300, 600, 1200), help='line rate (patch 30 firmware follows the host; default 300)')
         x.add_argument('-a', '--addr', type=int, default=1); x.add_argument('-v', '--verbose', action='store_true')
     a = ap.parse_args()
 
@@ -274,13 +275,13 @@ def main():
                 sys.exit('%s has no valid trailer: run pack first' % a.bank)
         if a.host:
             import cc784_esphome
-            link = cc784_esphome.ESPHomeLink(a.host, a.key, instance=a.instance, verbose=a.verbose)
+            link = cc784_esphome.ESPHomeLink(a.host, a.key, instance=a.instance, verbose=a.verbose, baud=a.baud)
         elif a.port:
-            link = cc784.SerialLink(a.port)
+            link = cc784.SerialLink(a.port, a.baud)
         else:
             ap.error('%s needs -p PORT or -H HOST' % a.cmd)
         try:
-            sign = cc784.Sign(link, a.addr, verbose=a.verbose)
+            sign = cc784.Sign(link, a.addr, verbose=a.verbose, baud=a.baud)
             sign.quiet = True
             if a.cmd == 'info':
                 describe(*Ota(sign).info()); sys.exit(0)

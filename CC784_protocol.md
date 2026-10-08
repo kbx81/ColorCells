@@ -309,6 +309,7 @@ The sign's side of this protocol is read from the firmware itself, and lives in 
 | Topic | Where |
 |---|---|
 | The fixed 300 baud, the bit-banged receiver and transmitter | [firmware notes §3](CC784_firmware.md#3-serial-link-h) |
+| The patched firmware's 300 to 1200 baud, set by the first frame after a second of silence | [CC784_patched.md](CC784_patched.md#2-patches), patch 30 |
 | The frame parser state by state, ACK, NAK and the silent discard of other addresses | [firmware notes §4](CC784_firmware.md#4-packet-parser-pkt_st_-16ef178c-h) |
 | The complete command list, including the ones NETCC never sends, and the exact reply and dump frame formats | [firmware notes §5](CC784_firmware.md#5-packet-processing-and-command-set-pkt_process-2a68-h) |
 | Every attribute byte with the sign's own name for it, the colour codes, the graphics and the European characters | [firmware notes §7](CC784_firmware.md#7-rendering-h) |

@@ -71,14 +71,16 @@ SHIFT_LABEL          equ RAM_VARS+0x095   ; FF = redraw shows the SHIFT indicato
 FLUSH_PENDING        equ RAM_VARS+0x096   ; FF = staged text must be shown before the next effect runs
 FRAME_DELAY          equ RAM_VARS+0x097   ; frames to hold before the next column step (1, 3 or 0x50)
 ROW_INDEX            equ RAM_VARS+0x098
-RX_BITMASK           equ RAM_VARS+0x099
+RX_BITS              equ RAM_VARS+0x099   ; P30: data bits still to sample (was RX_BITMASK)
 RX_SHIFT             equ RAM_VARS+0x09a
-RX_TICKS             equ RAM_VARS+0x09b
+RX_ACC               equ RAM_VARS+0x09b   ; P30: fifths of an interrupt to the next sample (was RX_TICKS)
 RX_FIFO              equ RAM_VARS+0x09c
 RX_COUNT             equ RAM_VARS+0x0a4
-RX_TIMING_PTR        equ RAM_VARS+0x0a5   ; set by rx_st_wait_start before use
+BAUD_T               equ RAM_VARS+0x0a5   ; P30: the 300-baud bit in fifths of an interrupt, calibrated from the NMI, 128 by default (was RX_TIMING_PTR)
+RX_WIDTH             equ RAM_VARS+0x0a6   ; P30: interrupts the start pulse has lasted while it sets the rate
 REDRAW_PTR           equ RAM_VARS+0x0a7   ; editor redraw: byte being rendered
-RX_STATE             equ RAM_VARS+0x0a9   ; set by store_init before use
+RX_PHASE             equ RAM_VARS+0x0a9   ; P30: 0 idle, 1 timing the start pulse, 2 sampling bits (was the RX_STATE vector)
+TICK6_CAL            equ RAM_VARS+0x0aa   ; P30: low byte of the tick6 runs this second, read and zeroed by baud_calibrate
 CHAN_LOCK            equ RAM_VARS+0x0ab
 SEQ_LIST             equ RAM_VARS+0x0ac
 SEQ_PTR              equ RAM_VARS+0x114
@@ -99,12 +101,13 @@ MOVE_SRC             equ RAM_VARS+0x183
 REDRAW_FROM          equ RAM_VARS+0x185   ; editor redraw: first byte actually displayed (cursor-21, >= INS_PTR)
 STORE_CURSOR         equ RAM_VARS+0x187
 TX_BITIDX            equ RAM_VARS+0x189
-TX_BITMASK           equ RAM_VARS+0x18a
+RX_IDLE              equ RAM_VARS+0x18a   ; P30: frames since the last start bit, held at 255 (was TX_BITMASK)
 TX_PENDING           equ RAM_VARS+0x18b
-TX_TICKS             equ RAM_VARS+0x18c
+TX_ACC               equ RAM_VARS+0x18c   ; P30: fifths of an interrupt to the next edge (was TX_TICKS)
 TX_SHIFT             equ RAM_VARS+0x18d
 TX_STATUS            equ RAM_VARS+0x18e
-TX_TIMING_PTR        equ RAM_VARS+0x18f
+BAUD_STEP            equ RAM_VARS+0x18f   ; P30: fifths of an interrupt per interrupt at the current rate: 5, 10 or 20 (was TX_TIMING_PTR)
+BAUD_CAL_LAST        equ RAM_VARS+0x190   ; P30: the previous second's tick count, for the agreement test
 CAPS_LOCK            equ RAM_VARS+0x191
 ROW_OUT_PENDING      equ RAM_VARS+0x192   ; FF = the current row still has to be sent
 SEQ_SET              equ RAM_VARS+0x193   ; FF = sequence set by hand; do not auto-add the edited channel
@@ -244,6 +247,19 @@ ATTR_REM             equ 0xb0        ; remark: skipped up to the next B0
 KEY_EURO             equ 0xb6
 KEY_FUNC             equ 0xb7
 KEY_DEL              equ 0x7f
+; P30: serial timing. An interrupt is 128 us plus the acknowledge latency, about
+; 130 us; the 300-baud bit is 25.6 of them, kept in fifths as BAUD_T, and the
+; faster rates step the same accumulator 10 or 20 fifths per interrupt. 2400
+; is not offered: sampled once per interrupt, its bits are read within a third
+; of a bit of their middles and long frames fail on the board.
+; baud_calibrate sets BAUD_T from the tick6 count per NMI second (1280 + s ticks
+; -> (1280 + s) / 10); until then, or on a DC supply, it is the default.
+BAUD_T_DEFAULT       equ 128
+BAUD_STEP_300        equ 5
+BAUD_STEP_600        equ 10
+BAUD_STEP_1200       equ 20
+BAUD_CAL_LIMIT       equ 60          ; |s| beyond this (4.7 %) is a partial second or a stall: ignored
+BAUD_IDLE_FRAMES     equ 62          ; display frames, about a second
 IR_CODE_STOP         equ 0xa4        ; 0x80 | remote key 36, STOP/START
 IR_CODE_SPACE        equ 0xa5        ; 0x80 | remote key 37, SPACE
 ATTR_DRAW            equ 0xb8
@@ -312,6 +328,7 @@ QUERY_ROMID          equ '0'
 QUERY_MEMORY         equ '1'
 QUERY_NOP            equ '2'
 QUERY_DUMP           equ '3'
+QUERY_TIMING         equ '4'         ; P30: BAUD_T, BAUD_STEP, BAUD_CAL_LAST, NMI_SEEN
 CMD_OTA              equ 0xb5        ; B5 c ... (patch 11)
 DONE_BYTE            equ 0x04        ; sent after processing when the frame's flag was 81 (patch 16)
 
@@ -720,6 +737,21 @@ nmi_entry:
 int_timer:
         EX AF,AF'
         EXX
+        LD A,(RX_PHASE)         ; P30: the serial bit engines, every interrupt,
+        AND A                   ; so 1200 baud fits; idle they cost a line poll
+        JR nz,int_rx_active
+        IN A,(PORT_IN)
+        BIT 3,A
+        CALL nz,rx_start
+        JR int_tx
+
+int_rx_active:
+        CALL rx_phase_run
+
+int_tx:
+        LD A,(TX_STATUS)
+        AND 3
+        CALL nz,tx_isr
         LD HL,DISP_COUNT
         DEC (HL)
         JR nz,int_tick6
@@ -829,6 +861,8 @@ svc_loop:
         BIT 0,(HL)
         JR z,svc_display
         RES 0,(HL)
+        LD HL,TICK6_CAL         ; P30: baud_calibrate reads this once a second
+        INC (HL)
         LD HL,(GEN_COUNTDOWN)
         DEC HL
         LD A,H
@@ -838,8 +872,17 @@ svc_loop:
         LD (GEN_COUNTDOWN),HL
 
 tick6_engines:
-        CALL rx_bit_engine
-        CALL tx_bit_engine
+        LD A,(TX_STATUS)        ; P30: the bit engines run in the ISR; a reply
+        AND 3                   ; handed over while the line is idle starts here
+        JR nz,tick6_beep
+        LD A,(TX_ACTIVE)
+        OR A
+        JR z,tick6_beep
+        DI
+        CALL tx_stream_next
+        EI
+
+tick6_beep:
         LD HL,(BEEP_TICKS)
         LD A,H
         OR L
@@ -872,10 +915,7 @@ row_output:
         LD A,(ROW_OUT_PENDING)
         AND A
         JP z,row_advance
-        LD A,(CTRL_LATCH_SHADOW)
-        OR 15
-        LD (CTRL_LATCH_SHADOW),A
-        LD (CTRL_LATCH),A
+        CALL latch_blank
         LD A,(DISP_ON)
         AND A
         JP z,row_phase_step
@@ -929,10 +969,12 @@ row_out_wrap:
         OTIR
 
 row_strobe:
+        DI                      ; P30: the ISR's transmitter owns latch bit 4
         LD A,(CTRL_LATCH_SHADOW)
         AND 0x70
         OR 15
         LD (CTRL_LATCH),A
+        EI
         OUT (PORT_STROBE),A
         LD A,(ROW_INDEX)
         CPL
@@ -947,11 +989,7 @@ row_select:
         OR C
         AND 0x8f
         LD C,A
-        LD A,(CTRL_LATCH_SHADOW)
-        AND 0x70
-        OR C
-        LD (CTRL_LATCH_SHADOW),A
-        LD (CTRL_LATCH),A
+        CALL latch_row
 
 row_phase_step:
         LD A,(ROW_PORT)
@@ -978,6 +1016,12 @@ row_advance:
         LD A,0
         LD (ROW_INDEX),A
         LD (DISP_STRETCH),A     ; P26: full rate unless the plain crawl below asks
+        LD HL,RX_IDLE           ; P30: frames since the last start bit, held at 255
+        INC (HL)
+        JR nz,frame_idle_held
+        DEC (HL)
+
+frame_idle_held:
         LD A,(FRAME_DELAY)
         AND A
         JR z,frame_speed
@@ -1096,6 +1140,8 @@ frame_bit7_set:
 
 frame_done:
 ; ---- rx_consume: Pop a byte from RX_FIFO; in normal mode feed the packet parser (or if IR_CODE=A4/A5 handle keypad); packet start needs 0xB1 while idle
+;      P30: runs once per display frame, so it drains the FIFO rather than taking
+;      one byte: 62 bytes a second was enough for 300 baud only
 rx_consume:
         LD A,(MENU_ACTIVE)
         AND A
@@ -1122,7 +1168,7 @@ rx_have_byte:
         CALL pkt_feed_byte
         XOR A                   ; B12: a payload byte is not a key; a 0x20 left
         LD (RX_BYTE),A          ; here would release a WAIT (wait_poll)
-        JP tick6_exit
+        JP rx_consume
 
 rx_idle_byte:
         ; P21: while a packet waits, is processed or is being answered, a new
@@ -1136,7 +1182,7 @@ rx_idle_byte:
         JR z,rx_idle_free
         LD A,(HL)
         CP FRAME_START
-        JP nz,tick6_exit
+        JP nz,rx_consume
         JR rx_frame_start
 
 rx_idle_free:
@@ -1149,12 +1195,13 @@ rx_frame_start:
         LD (PKT_STATE),A
         LD HL,pkt_st_addr
         LD (PKT_VECTOR),HL
-        JP tick6_exit
+        JP rx_consume
 
 rx_not_start:
         LD A,(RX_BYTE)
         CP 1
         JP z,key_handler
+        JP rx_consume
 
 ; ---- tick6_exit
 tick6_exit:
@@ -1753,14 +1800,16 @@ INIT_DATA:
         db 0x01                ; FLUSH_PENDING
         db 0x00                ; FRAME_DELAY
         db 0x00                ; ROW_INDEX
-        db 0x00                ; RX_BITMASK
+        db 0x00                ; RX_BITS
         db 0x00                ; RX_SHIFT
-        db 0x00                ; RX_TICKS
+        db 0x00                ; RX_ACC
         db 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00 ; RX_FIFO
         db 0x00                ; RX_COUNT
-        dw 0                   ; RX_TIMING_PTR
+        db BAUD_T_DEFAULT      ; BAUD_T
+        db 0x00                ; RX_WIDTH
         dw 0                   ; REDRAW_PTR (stock had junk here from a misaligned copy; set by editor_redraw)
-        dw 0                   ; RX_STATE
+        db 0x00                ; RX_PHASE
+        db 0x00                ; TICK6_CAL
 ; -- +4f -> SEQ_MENU_ACTIVE, 28 bytes
         db 0x00                ; SEQ_MENU_ACTIVE
         db 0x00                ; SHIFT_STATE
@@ -1768,19 +1817,20 @@ INIT_DATA:
         db 0x00                ; FONT_MODE
         db 0x00                ; TINY_MODE
         db 0x00                ; FORCE_BOLD
-        dw 0x04b0              ; NMI_COUNT
+        dw 0x0400              ; NMI_COUNT (stock 04b0: its first second ran 140 cycles; P30 wants whole seconds from the start)
         dw 0x0000              ; STORE_TMP
         dw 0x0000              ; MOVE_DST
         dw 0x0000              ; MOVE_SRC
         dw 0x0000              ; REDRAW_FROM
         dw MSG_STORE           ; STORE_CURSOR
         db 0x00                ; TX_BITIDX
-        db 0x01                ; TX_BITMASK
+        db 0xff                ; RX_IDLE: the first frame sets the rate
         db 0x00                ; TX_PENDING
-        db 0x00                ; TX_TICKS
+        db 0x00                ; TX_ACC
         db 0x00                ; TX_SHIFT
         db 0x00                ; TX_STATUS
-        dw TX_TIMING           ; TX_TIMING_PTR
+        db BAUD_STEP_300       ; BAUD_STEP
+        db 0x7f                ; BAUD_CAL_LAST: nothing agrees with the first window
         db 0xff                ; CAPS_LOCK
         db 0xff                ; ROW_OUT_PENDING
 
@@ -3581,20 +3631,14 @@ tiny_refresh:
         LD A,(TINY_FRAME_READY)
         AND A
         JR nz,tiny_row_out
-        LD A,(CTRL_LATCH_SHADOW)
-        OR 15
-        LD (CTRL_LATCH_SHADOW),A
-        LD (CTRL_LATCH),A
+        CALL latch_blank
         JP rx_consume
 
 tiny_row_out:
         LD A,(ROW_OUT_PENDING)
         AND A
         JP z,disp_next_row
-        LD A,(CTRL_LATCH_SHADOW)
-        OR 15
-        LD (CTRL_LATCH_SHADOW),A
-        LD (CTRL_LATCH),A
+        CALL latch_blank
 
 ; ---- disp_blank_row: Send 0x8F (all off) to the current row
 disp_blank_row:
@@ -3625,11 +3669,7 @@ tiny_row_select:
         OR C
         AND 0x8f
         LD C,A
-        LD A,(CTRL_LATCH_SHADOW)
-        AND 0x70
-        OR C
-        LD (CTRL_LATCH_SHADOW),A
-        LD (CTRL_LATCH),A
+        CALL latch_row
         XOR A
         LD (ROW_OUT_PENDING),A
         JP tick6_restore
@@ -3940,10 +3980,9 @@ store_init_zero_page:
         LD A,C
         OR B
         JR nz,store_init_zero_page
-        LD HL,rx_st_wait_start
-        LD (RX_STATE),HL
         XOR A
-        LD (RX_TICKS),A
+        LD (RX_PHASE),A
+        LD (RX_ACC),A
         RET
 
 ; ---- ir_init: clear the IR decoder state, then fall into ir_reset
@@ -4142,50 +4181,46 @@ tx_try_queue:
         XOR A
         RET
 
-; ---- tx_bit_engine: Called every 6 ticks: shifts TX_SHIFT out on CTRL_LATCH bit 4 (1=start/space, 0=mark). Bit times from TX_TIMING table (4,4,5 ticks); state 9 = stop bits (10 ticks)
-tx_bit_engine:
+; ---- tx_isr (P30, ISR): called while TX_STATUS has bit 0 (shifting) or bit 1
+;      (a byte queued). Shifts TX_SHIFT out on CTRL_LATCH bit 4 (1 = start/space,
+;      0 = mark), one bit per BAUD_T fifths of an interrupt, two stop bits.
+tx_isr:
         LD HL,TX_STATUS
         BIT 0,(HL)
-        JR nz,tx_bit_tick
-        BIT 1,(HL)
-        JR z,tx_stream_next     ; P21: nothing queued, feed the background reply
+        JR z,tx_start_byte
 
-tx_start_byte:
-        LD A,(TX_PENDING)
-        LD (TX_SHIFT),A
-        LD (HL),1
-        XOR A
-        LD (TX_BITIDX),A
+tx_tick:
+        LD A,(BAUD_STEP)
+        LD C,A
         INC A
-        LD (TX_BITMASK),A
-        LD HL,TX_TIMING
-        LD (TX_TIMING_PTR),HL
-        LD A,(CTRL_LATCH_SHADOW)
-        OR LATCH_TX
-        LD (CTRL_LATCH_SHADOW),A
-        LD (CTRL_LATCH),A
-        LD A,(HL)
-        LD (TX_TICKS),A
+        SRL A
+        LD B,A
+        LD A,(TX_ACC)
+        SUB C
+        JR c,tx_edge
+        CP B
+        JR c,tx_edge
+        LD (TX_ACC),A
         RET
 
-tx_bit_tick:
-        LD HL,TX_TICKS
-        DEC (HL)
-        RET nz
+tx_edge:
+        LD C,A
+        LD A,(BAUD_T)
+        ADD A,C
+        LD (TX_ACC),A
         LD HL,TX_BITIDX
         INC (HL)
         LD A,(HL)
         CP 9
         JR z,tx_stop_bit
         CP 10
+        RET z                   ; the second stop bit: one more bit time of mark
+        CP 11
         JR z,tx_idle
-        LD HL,TX_BITMASK
-        LD E,(HL)
-        SLA (HL)
-        LD A,(TX_SHIFT)
-        AND E
+        LD HL,TX_SHIFT
+        SRL (HL)                ; LSB first
         LD A,(CTRL_LATCH_SHADOW)
-        JR nz,tx_mark
+        JR c,tx_mark
         OR LATCH_TX
         JR tx_latch_bit
 
@@ -4195,11 +4230,6 @@ tx_mark:
 tx_latch_bit:
         LD (CTRL_LATCH_SHADOW),A
         LD (CTRL_LATCH),A
-        LD HL,(TX_TIMING_PTR)
-        INC HL
-        LD (TX_TIMING_PTR),HL
-        LD A,(HL)
-        LD (TX_TICKS),A
         RET
 
 tx_stop_bit:
@@ -4207,13 +4237,30 @@ tx_stop_bit:
         AND ~LATCH_TX&0xff
         LD (CTRL_LATCH_SHADOW),A
         LD (CTRL_LATCH),A
-        LD A,10
-        LD (TX_TICKS),A
         RET
 
 tx_idle:
         LD HL,TX_STATUS
         RES 0,(HL)
+        BIT 1,(HL)
+        RET nz                  ; a queued byte starts on the next interrupt
+        JP tx_stream_next       ; else the background reply's next byte, now
+
+; ---- tx_start_byte: TX_PENDING goes out; TX_STATUS is set last so the ISR
+;      only sees a byte whose timing is in place
+tx_start_byte:
+        LD A,(TX_PENDING)
+        LD (TX_SHIFT),A
+        XOR A
+        LD (TX_BITIDX),A
+        LD A,(BAUD_T)
+        LD (TX_ACC),A
+        LD A,(CTRL_LATCH_SHADOW)
+        OR LATCH_TX
+        LD (CTRL_LATCH_SHADOW),A
+        LD (CTRL_LATCH),A
+        LD HL,TX_STATUS
+        LD (HL),1
         RET
 
 ; ---- tx_stream_next (P21): the background transmitter. Sends TX_SEG0, then
@@ -4285,102 +4332,181 @@ tx_stream_idle:
         LD (PKT_BUSY),A
         RET
 
-; ---- rx_bit_engine: Called every 6 ticks: bit-banged receiver state machine on PORT_IN bit 3 (1 = space). Uses RX_TIMING table; assembled bytes go to RX_FIFO (8 deep, RX_COUNT)
-rx_bit_engine:
-        LD A,(RX_COUNT)
-        CP 8
-        JR nz,rx_tick
-        LD HL,rx_st_wait_start
-        LD (RX_STATE),HL
+; ---- rx_start (P30, ISR): a start bit has just been seen on PORT_IN bit 3
+;      (1 = space). After BAUD_IDLE_FRAMES of silence the pulse is timed to set
+;      the rate (a frame's B1 has a one-bit start pulse: 26 interrupts at 300
+;      baud, 13 at 600, 6.5 at 1200); otherwise the first sample
+;      is scheduled 1.5 bits out at the known rate. Times are in fifths of an
+;      interrupt (BAUD_T, stepped BAUD_STEP per interrupt), so 1200 baud keeps its half.
+rx_start:
+        XOR A
+        LD (RX_SHIFT),A
+        LD (RX_WIDTH),A
+        LD A,8
+        LD (RX_BITS),A
+        LD A,(RX_IDLE)
+        CP BAUD_IDLE_FRAMES
         LD A,0
-        LD (RX_TICKS),A
-        RET
-
-rx_tick:
-        LD A,(RX_TICKS)
-        AND A
-        JR z,rx_run_state
-        DEC A
-        LD (RX_TICKS),A
-        RET nz
-
-rx_run_state:
-        LD HL,(RX_STATE)
-        JP (HL)
-
-; ---- rx_st_wait_start
-rx_st_wait_start:
-        IN A,(PORT_IN)
-        BIT 3,A
-        RET z
-        LD HL,rx_st_sample_bit
-        LD (RX_STATE),HL
-        LD HL,RX_TIMING
-        LD (RX_TIMING_PTR),HL
-        LD A,(HL)
-        LD (RX_TICKS),A
+        LD (RX_IDLE),A
+        JR c,rx_start_timed
         LD A,1
-        LD (RX_BITMASK),A
-        XOR A
-        LD (RX_SHIFT),A
+        LD (RX_PHASE),A
         RET
 
-; ---- data 164a-1653: ticks between RX bit samples (start,8 data,stop)
-RX_TIMING:
-        db 0x06,0x04,0x05,0x04,0x04,0x05,0x04,0x04,0x05,0x04
+rx_start_timed:
+        LD A,(BAUD_T)
+        LD C,A
+        SRL A
+        ADD A,C                 ; 1.5 bits: the middle of bit 0, less the half
+        LD C,A                  ; interrupt the edge was seen late by on average
+        LD A,(BAUD_STEP)
+        SRL A
+        LD B,A
+        LD A,C
+        SUB B
+        LD (RX_ACC),A
+        LD A,2
+        LD (RX_PHASE),A
+        RET
 
-; ---- data 1654-165d: ticks per TX bit: start,8 data (4,4,5 pattern = 300 baud @ ~1300 Hz), stop = 10
-TX_TIMING:
-        db 0x04,0x04,0x05,0x04,0x04,0x05,0x04,0x04,0x05,0x0a
-
-; ---- rx_st_sample_bit
-rx_st_sample_bit:
-        IN A,(PORT_IN)
+; ---- rx_phase_run (P30, ISR): A = RX_PHASE, 1 or 2
+rx_phase_run:
+        DEC A
+        JP nz,rx_sample_tick
+        IN A,(PORT_IN)          ; phase 1: how long is the start pulse
         BIT 3,A
-        LD A,0xff
-        JR z,rx_merge_bit
-        XOR A
+        JR z,rx_measured
+        LD HL,RX_WIDTH
+        INC (HL)
+        RET nz
+        DEC (HL)                ; held at 255
+        RET
 
-rx_merge_bit:
+rx_measured:
+        LD A,(RX_WIDTH)
+        CP 5
+        JR c,rx_abort           ; a 2400-baud start bit, or noise: not taken
+        LD C,BAUD_STEP_1200
+        CP 10
+        JR c,rx_rate
+        LD C,BAUD_STEP_600
+        CP 19
+        JR c,rx_rate
+        LD C,BAUD_STEP_300
+
+rx_rate:
+        LD A,C
+        LD (BAUD_STEP),A        ; the transmitter follows: replies at the host's rate
+        LD A,(RX_WIDTH)         ; the pulse ran width + 1.5 interrupts: the edge
+        LD H,0                  ; was seen up to one late and the count began
+        LD L,A                  ; an interrupt after that. HL = that in BAUD_STEP
+        LD D,H                  ; units + T/2: whole bits the pulse covered (the
+        LD E,L                  ; start bit and leading 0 bits), remainder to the next middle
+        ADD HL,HL
+        ADD HL,HL
+        ADD HL,DE               ; 5 x width
+
+rx_rate_scale:
+        LD A,C                  ; x 2 for each doubling of the step
+        CP 6
+        JR c,rx_rate_scaled
+        ADD HL,HL
+        SRL C
+        JR rx_rate_scale
+
+rx_rate_scaled:
+        LD A,(BAUD_STEP)
         LD E,A
-        LD A,(RX_SHIFT)
-        LD D,A
-        LD A,(RX_BITMASK)
-        PUSH AF
-        CPL
-        AND D
-        LD D,A
-        POP AF
-        AND E
-        OR D
-        LD (RX_SHIFT),A
-        LD HL,(RX_TIMING_PTR)
-        INC HL
-        LD (RX_TIMING_PTR),HL
-        LD A,(HL)
-        LD (RX_TICKS),A
-        LD A,(RX_BITMASK)
-        SLA A
-        LD (RX_BITMASK),A
-        RET nc
-        LD HL,rx_st_stop_bit
-        LD (RX_STATE),HL
-        RET
-
-; ---- rx_st_stop_bit: stop bit must read as mark else byte is dropped
-rx_st_stop_bit:
-        IN A,(PORT_IN)
-        BIT 3,A
-        JR nz,rx_byte_done
-        LD A,(RX_SHIFT)
-        AND A
-        LD A,(RX_COUNT)
-        CP 8
-        JR z,rx_byte_done
-        AND 7
-        LD HL,RX_FIFO
+        SRL A
+        ADD A,E                 ; 1.5 interrupts
+        LD E,A
+        LD A,(BAUD_T)
+        LD C,A
+        SRL A
+        ADD A,E                 ; + T/2
         LD E,A
         LD D,0
+        ADD HL,DE
+        LD E,C                  ; DE = T
+        LD B,0
+
+rx_bits_loop:
+        OR A
+        SBC HL,DE
+        JR c,rx_bits_done
+        INC B
+        JR rx_bits_loop
+
+rx_bits_done:
+        ADD HL,DE
+        LD A,B
+        OR A
+        JR z,rx_abort           ; shorter than half a bit: noise
+        LD A,C
+        SUB L                   ; to the next bit's middle
+        LD (RX_ACC),A
+        LD A,9
+        SUB B                   ; data bits left after the ones the pulse covered
+        JR c,rx_abort           ; longer than a byte: not a byte
+        LD (RX_BITS),A
+        LD A,2
+        LD (RX_PHASE),A
+        RET
+
+rx_abort:
+        XOR A
+        LD (RX_PHASE),A
+        RET
+
+; ---- rx_sample_tick (P30, ISR): phase 2, one sample per bit at the middle
+rx_sample_tick:
+        LD A,(BAUD_STEP)
+        LD C,A
+        INC A
+        SRL A
+        LD B,A                  ; half an interrupt
+        LD A,(RX_ACC)
+        SUB C
+        JR c,rx_sample_now
+        CP B
+        JR c,rx_sample_now      ; within half an interrupt of the middle
+        LD (RX_ACC),A
+        RET
+
+rx_sample_now:
+        LD C,A
+        LD A,(BAUD_T)
+        ADD A,C
+        LD (RX_ACC),A
+        LD A,(RX_BITS)
+        AND A
+        JR z,rx_stop_sample
+        DEC A
+        LD (RX_BITS),A
+        IN A,(PORT_IN)
+        AND 8                   ; space is a 0 bit
+        LD A,(RX_SHIFT)
+        JR nz,rx_bit_zero
+        SCF
+        RR A                    ; bits arrive LSB first: in at the top
+        LD (RX_SHIFT),A
+        RET
+
+rx_bit_zero:
+        SRL A
+        LD (RX_SHIFT),A
+        RET
+
+rx_stop_sample:
+        IN A,(PORT_IN)
+        BIT 3,A
+        JR nz,rx_byte_end       ; no stop bit: dropped
+        LD A,(RX_COUNT)
+        CP 8
+        JR nc,rx_byte_end       ; FIFO full: dropped
+        LD E,A
+        LD D,0
+        LD HL,RX_FIFO
         ADD HL,DE
         LD A,(RX_SHIFT)
         LD (HL),A
@@ -4388,16 +4514,80 @@ rx_st_stop_bit:
         INC A
         LD (RX_COUNT),A
 
-rx_byte_done:
+rx_byte_end:
         XOR A
-        LD (RX_TICKS),A
-        LD (RX_SHIFT),A
-        LD HL,rx_st_wait_start
-        LD (RX_STATE),HL
+        LD (RX_PHASE),A
+        RET
+
+; ---- baud_calibrate (P30): from the NMI once a second. TICK6_CAL is the low
+;      byte of the tick6 runs in that second, 1280 + s, so the 300-baud bit in
+;      fifths of an interrupt is (1280 + s) / 10 = 128 + s / 10. A second is
+;      taken only when it agrees with the one before within 3 ticks and is
+;      within 5 % of nominal: a window that lost interrupts to a long DI
+;      stretch (an OTA page write, a restart) disagrees with its neighbours.
+baud_calibrate:
+        LD HL,TICK6_CAL
+        LD A,(HL)
+        LD (HL),0
+        LD HL,BAUD_CAL_LAST
+        LD C,(HL)
+        LD (HL),A
+        LD B,A
+        SUB C
+        ADD A,3
+        CP 7
+        RET nc
+        LD A,B
+        ADD A,BAUD_CAL_LIMIT
+        CP 2*BAUD_CAL_LIMIT+1
+        RET nc
+        LD A,B
+        ADD A,5                 ; round to the nearest tenth
+        LD B,BAUD_T_DEFAULT
+        JP m,cal_down
+
+cal_up:
+        CP 10
+        JR c,cal_done
+        SUB 10
+        INC B
+        JR cal_up
+
+cal_down:
+        DEC B
+        ADD A,10                ; last, so the branch tests A
+        JP m,cal_down
+
+cal_done:
+        LD A,B
+        LD (BAUD_T),A
+        RET
+
+; ---- latch_blank / latch_row (P30): CTRL_LATCH read-modify-writes, closed to
+;      the ISR, whose transmitter owns bit 4. latch_blank parks the rows (code
+;      15); latch_row selects the row in C, which carries the blink bit.
+latch_blank:
+        DI
+        LD A,(CTRL_LATCH_SHADOW)
+        OR 15
+        LD (CTRL_LATCH_SHADOW),A
+        LD (CTRL_LATCH),A
+        EI
+        RET
+
+latch_row:
+        DI
+        LD A,(CTRL_LATCH_SHADOW)
+        AND 0x70
+        OR C
+        LD (CTRL_LATCH_SHADOW),A
+        LD (CTRL_LATCH),A
+        EI
         RET
 
 ; ---- rx_fifo_get: Pop one byte from RX_FIFO into RX_BYTE. Returns NC with A=byte, or C if empty
 rx_fifo_get:
+        DI                      ; P30: the ISR appends to the FIFO
         LD A,(RX_COUNT)
         AND A
         JR z,rx_fifo_empty
@@ -4411,11 +4601,13 @@ rx_fifo_get:
         LDIR
         DEC A
         LD (RX_COUNT),A
+        EI
         LD A,(RX_BYTE)
         OR A
         RET
 
 rx_fifo_empty:
+        EI
         XOR A
         LD (RX_BYTE),A
         SCF
@@ -4614,6 +4806,7 @@ clock_tick:
         RET nz
         LD A,0
         LD (NMI_COUNT),A
+        CALL baud_calibrate     ; P30: a second of NMIs has passed
         LD HL,CLK_SEC
         INC (HL)
         LD A,(HL)
@@ -6197,10 +6390,7 @@ editor_delete:
         LD A,(CHAN_LOCK)
         OR A
         JP nz,editor_reshow
-        LD A,(CTRL_LATCH_SHADOW)
-        OR 15
-        LD (CTRL_LATCH_SHADOW),A
-        LD (CTRL_LATCH),A
+        CALL latch_blank
         LD HL,(STORE_CURSOR)
         LD A,(HL)
         CP TEXT_END
@@ -6343,10 +6533,7 @@ editor_insert:
         LD (STORE_CURSOR),HL
 
 insert_do:
-        LD A,(CTRL_LATCH_SHADOW)
-        OR 15
-        LD (CTRL_LATCH_SHADOW),A
-        LD (CTRL_LATCH),A
+        CALL latch_blank
         LD A,0
         LD (DISP_ON),A
         LD HL,(STORE_END)
@@ -6566,10 +6753,7 @@ editor_redraw:
         CALL init_render
         XOR A
         LD (DISP_ON),A
-        LD A,(CTRL_LATCH_SHADOW)
-        OR 15
-        LD (CTRL_LATCH_SHADOW),A
-        LD (CTRL_LATCH),A
+        CALL latch_blank
         LD A,(SEQ_MENU_ACTIVE)
         BIT 7,A
         JP nz,redraw_status
@@ -7413,6 +7597,8 @@ cmd_B4_query:
         JR z,pq_memory
         CP QUERY_DUMP
         JR z,pq_dump
+        CP QUERY_TIMING
+        JR z,pq_timing
         JP pkt_done_pop
 
 pq_romid:
@@ -7438,6 +7624,20 @@ pq_reply:
         LD (PKT_BUF+2),A
         LD E,3
         JR pq_stream
+
+pq_timing:
+        LD IX,PKT_BUF+3         ; P30: the serial timing state, for the bench
+        LD A,(BAUD_T)
+        LD (IX+0),A
+        LD A,(BAUD_STEP)
+        LD (IX+1),A
+        LD A,(BAUD_CAL_LAST)
+        LD (IX+2),A
+        LD A,(NMI_SEEN)
+        LD (IX+3),A
+        LD HL,PKT_BUF+3
+        LD BC,4
+        JR pq_reply
 
 pq_dump:
         LD HL,(STORE_END)

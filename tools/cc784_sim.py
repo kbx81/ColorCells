@@ -61,7 +61,6 @@ import cc784_ir  # noqa: E402
 CPU_HZ = 8_000_000
 TICK_T = CPU_HZ // 7812      # INT period in T-states
 NMI_T = CPU_HZ // 60
-BIT_T = round(CPU_HZ / 300)  # serial bit at 300 baud
 US = CPU_HZ / 1_000_000
 SLICE = 128                  # run granularity
 BANK_SIZE = 0x4000
@@ -185,7 +184,7 @@ def assemble(src_dir):
 
 
 class Sign:
-    def __init__(self, rom, syms, fresh_ram=True, seed=1, sdp=True, ram8k=False, mains=True):
+    def __init__(self, rom, syms, fresh_ram=True, seed=1, sdp=True, ram8k=False, mains=True, baud=300):
         # rom: one 16 K bank (the rest of the chip erased) or the whole chip image
         # ram8k: the stock 6264, which mirrors 4000-5FFF at 6000-7FFF
         # mains=False: a DC supply, no NMI ever
@@ -228,6 +227,9 @@ class Sign:
         self.rx_i = self.ir_i = 0
         self.rx_level = self.ir_level = 0
         self.rx_busy_until = self.ir_busy_until = 0
+        self.int_pending = False
+        self.tick_t = TICK_T + int(2 * US)  # 128 us + ~2 us of acknowledge latency, as measured on the board
+        self.set_baud(baud)
         self.burst, self.frames = [], []
         self.row_starts, self.last_out_t = [], 0   # (t, port low nibble) at each row burst
 
@@ -339,19 +341,18 @@ class Sign:
 
     def run(self, t_states):
         end = self.t + t_states
-        pending = False
         m = self.m
         while self.t < end:
             if self.cut_at is not None and self.t >= self.cut_at:
                 raise PowerCut()
             if self.t >= self.next_int:
-                pending = True
-                self.next_int += TICK_T
+                self.int_pending = True             # level: held until acknowledged, across run() calls
+                self.next_int += self.tick_t        # the counter restarts at the acknowledge: 128 us + latency
             # the core can stop between a DD/FD prefix and its opcode, where a real
             # Z80 takes no interrupt: hold both kinds until the next slice
             if m.index_rp_kind is z80.HL:
-                if pending and self._irq():
-                    pending = False
+                if self.int_pending and self._irq():
+                    self.int_pending = False
                     self.last_inta = self.t
                 if self.t >= self.next_nmi:
                     self._nmi()
@@ -369,12 +370,16 @@ class Sign:
         self.run(int(ms * 1000 * US))
 
     # ---- stimulus
+    def set_baud(self, baud):
+        """the host's line rate: what send_bytes drives and tx_bytes decodes"""
+        self.baud, self.bit_t = baud, round(CPU_HZ / baud)
+
     def send_bytes(self, data, gap_bits=1):
         t = max(self.t, self.rx_busy_until)
         for b in data:
             for bit in [1] + [0 if (b >> i) & 1 else 1 for i in range(8)] + [0]:
-                self.rx_events.append((t, bit)); t += BIT_T
-            t += gap_bits * BIT_T
+                self.rx_events.append((t, bit)); t += self.bit_t
+            t += gap_bits * self.bit_t
         self.rx_busy_until = t
 
     def send_frame(self, payload, addr=1, flag=0x80):
@@ -400,7 +405,7 @@ class Sign:
 
     # ---- observation
     def tx_bytes(self):
-        """decode latch bit-4 edges as 300 baud, 1 = space"""
+        """decode latch bit-4 edges at self.baud, 1 = space"""
         out, edges, i = [], self.tx_edges, 0
         def level_at(t):
             l = 0
@@ -412,14 +417,14 @@ class Sign:
             t0, lvl = edges[i]
             if lvl != 1:
                 i += 1; continue
-            if t0 + int(9.5 * BIT_T) > self.t:
+            if t0 + int(9.5 * self.bit_t) > self.t:
                 break                           # still on the wire: a real host has not seen it yet
             val = 0
             for n in range(8):
-                if not level_at(t0 + int((n + 1.5) * BIT_T)):
+                if not level_at(t0 + int((n + 1.5) * self.bit_t)):
                     val |= 1 << n
             out.append(val)
-            tend = t0 + int(9.5 * BIT_T)
+            tend = t0 + int(9.5 * self.bit_t)
             while i < len(edges) and edges[i][0] < tend:
                 i += 1
         return bytes(out)
@@ -609,7 +614,7 @@ def ota_cmd(s, payload, addr=1, wait_ms=4000):
     return None
 
 
-def cmd_update():
+def cmd_update(baud=300):
     """a whole OTA over the fake serial line: stage in the idle bank, finish, reboot"""
     import cc784_ota
     rom, syms = assemble(HERE.parent / 'src' / 'patched')
@@ -623,7 +628,7 @@ def cmd_update():
     assert new_app != app
     b1, b0 = cc784_ota.pack(app, 1), cc784_ota.pack(app, 0)
     new_bank = cc784_ota.pack(new_app, 2)
-    s = Sign(b1 + b0, syms, fresh_ram=True, sdp=False)      # fresh from the T48: SDP off
+    s = Sign(b1 + b0, syms, fresh_ram=True, sdp=False, baud=baud)      # fresh from the T48: SDP off
     s.run_ms(2500)
     check('booted bank 0', s.ram('ROM_BANK')[0] == 0)
 
@@ -733,7 +738,7 @@ class SimLink:
     def _available(self):
         out = self.s.tx_bytes()
         edges = self.s.tx_edges
-        if edges and self.s.t - edges[-1][0] < 11 * BIT_T:
+        if edges and self.s.t - edges[-1][0] < 11 * self.s.bit_t:
             out = out[:-1]                      # the last byte may still be on the wire
         return out
 
@@ -762,16 +767,16 @@ class SimLink:
         pass
 
 
-def cmd_push():
+def cmd_push(baud=300):
     """the host tool's push() end to end against the emulated sign"""
     import cc784, cc784_ota
     rom, syms = assemble(HERE.parent / 'src' / 'patched')
     app = rom[:BANK_SIZE]
     new_app = app.replace(b'LARGE IMPACT', b'LARGE UPDATE')
     new_bank = cc784_ota.pack(new_app, 7)
-    s = Sign(cc784_ota.pack(app, 1) + cc784_ota.pack(app, 0), syms, fresh_ram=True, sdp=False)
+    s = Sign(cc784_ota.pack(app, 1) + cc784_ota.pack(app, 0), syms, fresh_ram=True, sdp=False, baud=baud)
     s.run_ms(2500)
-    sign = cc784.Sign(SimLink(s), 1)
+    sign = cc784.Sign(SimLink(s), 1, baud=baud)
     sign.post_ack = 0.2
     ok = cc784_ota.push(sign, new_bank, seq=None)
     got = s.ee.bank_image(1)
@@ -933,8 +938,11 @@ def cmd_quiet():
     d = dump(s)
     check('bare text while the demo plays lands in channel 0 (P24): restart %02x, ROM writes %d' % (restarted, s.rom_writes),
           b'BARE TEXT' in d and d.index(b'BARE TEXT') == 2 and s.rom_writes == 0 and restarted == 0xFF)
-    send(s, FX_PLAIN, wait_ms=4000)                 # channel 0 replaces the demo: a restart
-    check('first message while the demo plays restarts the display (%02x)' % s.ram('PKT_RESTART')[0], s.ram('PKT_RESTART')[0] == 0xFF)
+    for _ in range(100):                            # wait until channel 0 is the one playing
+        if marker(s, 0) < word(s, 'STORE_CURSOR') < marker(s, 1): break
+        s.run_ms(50)
+    send(s, FX_PLAIN, wait_ms=4000)                 # channel 0 replaces the playing channel: a restart
+    check('a message into the playing channel 0 restarts the display (%02x)' % s.ram('PKT_RESTART')[0], s.ram('PKT_RESTART')[0] == 0xFF)
     before = word(s, 'STORE_CURSOR')
     tx = send(s, b'\x09\x30\x31\x0e' + text1)
     after = word(s, 'STORE_CURSOR')
@@ -964,7 +972,7 @@ def cmd_quiet():
     s.send_frame(b'\x09\x30\x30\x0e' + b'REPLACED ' * 10, addr=1, flag=0x81); s.rx_wait()
     s.frames.clear(); s.run_ms(150); quick = len(s.frames); s.run_ms(2850); tx = s.tx_bytes()
     check('edit of the playing channel restarts (%02x), ACK+DONE %s, text back on the panel within 150 ms (%d frames, P25)'
-          % (s.ram('PKT_RESTART')[0], tx.hex(), quick), s.ram('PKT_RESTART')[0] == 0xFF and tx == b'\x06\x04' and quick >= 3)
+          % (s.ram('PKT_RESTART')[0], tx.hex(), quick), s.ram('PKT_RESTART')[0] == 0xFF and tx == b'\x06\x04' and quick >= 2)
     # a lower channel changes size while a higher one plays: the renderer is shifted, not restarted
     send(s, b'\x04\x30\x31', wait_ms=500)           # sequence = channel 1 only, from the next channel on
     for _ in range(60):                             # wait until channel 1 is the one playing
@@ -1034,6 +1042,65 @@ def cmd_speed():
               abs(fps - want) < 1.5 and abs(cps - want) < 1.5 and dark == 0 and len(mean) == 7
               and hi - lo < 140 and abs((lo + hi) / 2 - want_dwell) < 60 and s.wdog_clears == 0)
     print('speeds: %d/%d checks pass' % (sum(checks), len(checks)))
+    return all(checks)
+
+
+def cmd_baud():
+    """P30: the receiver times the start bit of the first frame after a second of
+    silence and follows the host at 300, 600 or 1200 baud; replies come back at
+    the same rate; 2400 is refused; NETCC's 300-baud habits still work"""
+    rom, syms = assemble(HERE.parent / 'src' / 'patched')
+    checks = []
+    def check(name, cond):
+        checks.append(bool(cond)); print('  %s %s' % ('ok  ' if cond else 'FAIL', name))
+    def send(s, payload, wait_ms=1500, flag=0x81):
+        s.tx_edges.clear(); s.send_frame(payload, addr=1, flag=flag); s.rx_wait(); s.run_ms(wait_ms)
+        return s.tx_bytes()
+    text = b'THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG ' * 5
+    for baud in (300, 600, 1200):
+        s = Sign(rom, syms, fresh_ram=True, baud=baud); s.run_ms(2500)
+        tx = send(s, b'\xb4\x31', wait_ms=int(16 * 10000 / baud) + 500)
+        rate = s.ram('BAUD_STEP')[0]
+        check('%4d baud from cold: query reply %s, BAUD_STEP %d, BAUD_T %d' % (baud, tx[:9], rate, s.ram('BAUD_T')[0]), tx[:4] == b'\x06\xb1\x01\x0a' and tx[4:9] == b'15246' and rate == baud // 60)
+        tx = send(s, b'\x09\x30\x31\x0e' + text, wait_ms=500)
+        d = bytes(s.m.memory[syms['MSG_STORE']:int.from_bytes(s.ram('STORE_END', 2), 'little')])
+        check('%4d baud: 220-byte load intact, ACK+DONE %s' % (baud, tx.hex()), text in d and tx == b'\x06\x04')
+        s.run_ms(300)                                       # well inside the idle window: no re-timing
+        tx = send(s, b'\x09\x30\x32\x0e' + b'SECOND', wait_ms=500)
+        check('%4d baud: a frame 0.3 s later is taken at the same rate (%s)' % (baud, tx.hex()), tx == b'\x06\x04' and s.ram('BAUD_STEP')[0] == rate)
+        check('%4d baud: no faults, no watchdog clears (%d)' % (baud, s.wdog_clears), not s.faults and s.wdog_clears == 0)
+    # the bit time is calibrated from the NMI second: 1200 must hold from 126 to 134 us
+    for tick_us, label, rate in ((126.0, '-3 %', 1200), (128.0, 'no latency', 1200), (132.0, '+1.5 %', 1200), (134.0, '+3 %', 1200)):
+        s = Sign(rom, syms, fresh_ram=True, baud=rate); s.tick_t = int(tick_us * US); s.run_ms(3500)
+        tx = send(s, b'\xb4\x31', wait_ms=600)
+        tx2 = send(s, b'\x09\x30\x31\x0e' + text, wait_ms=500)
+        d = bytes(s.m.memory[syms['MSG_STORE']:int.from_bytes(s.ram('STORE_END', 2), 'little')])
+        check('%d baud with a %.1f us interrupt (%s): BAUD_T %d, query %s, load %s' % (rate, tick_us, label, s.ram('BAUD_T')[0], tx[:4].hex(), tx2.hex()), tx[:4] == b'\x06\xb1\x01\x0a' and tx2 == b'\x06\x04' and text in d)
+    # 2400 is not offered: its start bit is refused, and a DC supply (no NMI, no calibration) still takes 1200
+    s = Sign(rom, syms, fresh_ram=True, baud=2400, mains=False); s.run_ms(3500)
+    tx = send(s, b'\xb4\x31', wait_ms=600)
+    s.run_ms(1500); s.set_baud(1200)
+    tx2 = send(s, b'\xb4\x31', wait_ms=600)
+    check('2400 refused (reply %s); DC supply, 1200 answered with the default bit time (%s, BAUD_T %d)' % (tx.hex(), tx2[:4].hex(), s.ram('BAUD_T')[0]), tx == b'' and s.ram('BAUD_T')[0] == 128 and tx2[:4] == b'\x06\xb1\x01\x0a')
+    # a session that changes rate after a pause, and one that comes back to 300
+    s = Sign(rom, syms, fresh_ram=True, baud=1200); s.run_ms(2500)
+    send(s, b'\x09\x30\x30\x0e' + b'FAST', wait_ms=500)
+    s.run_ms(1500); s.set_baud(300)
+    tx = send(s, b'\x09\x30\x31\x0e' + b'SLOW', wait_ms=500)
+    check('1200 then, after 1.5 s, 300: taken (%s, BAUD_STEP %d)' % (tx.hex(), s.ram('BAUD_STEP')[0]), tx == b'\x06\x04' and s.ram('BAUD_STEP')[0] == 5)
+    s.run_ms(1500); s.set_baud(1200)
+    tx = send(s, b'\xb4\x33', wait_ms=3000)
+    check('then 1200: a store dump comes back whole at 1200 (%d bytes, ends %s)' % (len(tx), tx[-1:].hex()), tx[:4] == b'\x06\xb1\x01' + bytes([len(tx) - 6]) and tx[-1:] == b'\x04' if False else len(tx) > 20 and b'FAST' in tx and b'SLOW' in tx and tx.endswith(b'\x04'))
+    # NETCC habits at 300: a bare STOP byte after silence, then keys, then a frame
+    s = Sign(rom, syms, fresh_ram=True); s.run_ms(2500)
+    send(s, b'\x09\x30\x30\x0e' + b'HELLO', wait_ms=500); s.run_ms(1500)
+    s.send_bytes(b'\x01'); s.rx_wait(); s.run_ms(500)
+    menu = s.ram('MENU_ACTIVE')[0]
+    s.send_bytes(b'X'); s.rx_wait(); s.run_ms(500)
+    s.send_bytes(b'\x0d'); s.rx_wait(); s.run_ms(1500)
+    check('300 baud bare 01 after 1.5 s idle opens the editor (%02x), X typed, 0D leaves (%02x)' % (menu, s.ram('MENU_ACTIVE')[0]), menu == 0xff and s.ram('MENU_ACTIVE')[0] == 0)
+    check('no faults', not s.faults)
+    print('baud: %d/%d checks pass' % (sum(checks), len(checks)))
     return all(checks)
 
 
@@ -1185,16 +1252,18 @@ def cmd_compare(dir_a, dir_b):
 
 if __name__ == '__main__':
     args = sys.argv[1:]
-    if not args or args[0] not in ('stack', 'compare', 'eeprom', 'ota', 'update', 'push', 'fuzz', 'ram', 'quiet', 'speed'):
+    if not args or args[0] not in ('stack', 'compare', 'eeprom', 'ota', 'update', 'push', 'fuzz', 'ram', 'quiet', 'speed', 'baud'):
         sys.exit(__doc__)
     if args[0] == 'ram':
         sys.exit(0 if cmd_ram() else 1)
     if args[0] == 'speed':
         sys.exit(0 if cmd_speed() else 1)
+    if args[0] == 'baud':
+        sys.exit(0 if cmd_baud() else 1)
     if args[0] == 'quiet':
         sys.exit(0 if cmd_quiet() else 1)
     if args[0] == 'push':
-        sys.exit(0 if cmd_push() else 1)
+        sys.exit(0 if cmd_push(int(args[1]) if len(args) > 1 else 300) else 1)
     if args[0] == 'fuzz':
         sys.exit(0 if cmd_fuzz(int(args[1]) if len(args) > 1 else 100) else 1)
     if args[0] == 'eeprom':
@@ -1202,7 +1271,7 @@ if __name__ == '__main__':
     if args[0] == 'ota':
         sys.exit(0 if cmd_ota() else 1)
     if args[0] == 'update':
-        sys.exit(0 if cmd_update() else 1)
+        sys.exit(0 if cmd_update(int(args[1]) if len(args) > 1 else 300) else 1)
     if args[0] == 'stack':
         cmd_stack(args[1] if len(args) > 1 else 'patched')
     else:

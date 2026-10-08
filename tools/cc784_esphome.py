@@ -16,8 +16,9 @@ Transport options (everything else is identical to cc784.py):
     -i INSTANCE  serial_proxy instance: its configured name, or its index (default 0)
     --list       list the device's serial_proxy instances and exit
 
-The proxy UART is reconfigured to 300 baud, 8 data bits, no parity, 2 stop bits
-on connect (serial_proxy_configure), so the YAML baud_rate does not matter.
+The proxy UART is reconfigured to the chosen rate (-b, default 300), 8 data bits,
+no parity, 2 stop bits on connect (serial_proxy_configure), so the YAML baud_rate
+does not matter.
 Writes are fed to the proxy in 32-byte pieces at the line rate: handing it a
 whole 259-byte frame at once lost bytes and dropped the API connection.
 """
@@ -38,7 +39,8 @@ class ESPHomeLink:
     The asyncio loop runs on a background thread; the command code in cc784.py
     stays synchronous and pulls received bytes from a thread-safe queue."""
 
-    def __init__(self, host, key, port=6053, instance=None, verbose=False, list_only=False, chunk=32):
+    def __init__(self, host, key, port=6053, instance=None, verbose=False, list_only=False, chunk=32, baud=300):
+        self.baud = baud
         self.host, self.key, self.port, self.verbose = host, key, port, verbose
         self.chunk = chunk
         self.instance_sel, self.list_only = instance, list_only
@@ -86,7 +88,7 @@ class ESPHomeLink:
         if r is not None and r.status is not None and r.status.name not in ('OK', 'ASSUMED_SUCCESS'):
             raise SystemExit("subscribe failed: %s %s" % (r.status.name, r.error_message))
         r = await self.cli.serial_proxy_configure_await_response(
-            self.instance, 300, flow_control=False, parity=SerialProxyParity.NONE,
+            self.instance, self.baud, flow_control=False, parity=SerialProxyParity.NONE,
             stop_bits=2, data_size=8)
         if r is not None and r.status is not None and r.status.name not in ('OK', 'ASSUMED_SUCCESS'):
             raise SystemExit("configure failed: %s %s" % (r.status.name, r.error_message))
@@ -120,7 +122,7 @@ class ESPHomeLink:
             piece = data[i:i + self.chunk]
             self._run(self._write(piece))
             if i + self.chunk < len(data):
-                time.sleep(len(piece) * 10 / 300.0)
+                time.sleep(len(piece) * 10.0 / self.baud)
 
     def read(self, n: int, timeout: float) -> bytes:
         out = bytearray(); end = time.time() + timeout
@@ -160,7 +162,7 @@ def main():
     a = ap.parse_args()
     if not a.key:
         ap.error("an encryption key is required (-k or $ESPHOME_KEY)")
-    link = ESPHomeLink(a.host, a.key, a.api_port, a.instance, a.verbose, a.list, a.chunk)
+    link = ESPHomeLink(a.host, a.key, a.api_port, a.instance, a.verbose, a.list, a.chunk, baud=a.baud)
     try:
         cc784.run(link, a, ap)
     finally:

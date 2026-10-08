@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-cc784.py - talk to a Color Cells CC784 LED sign (300 baud, bit-banged protocol).
+cc784.py - talk to a Color Cells CC784 LED sign (bit-banged protocol; 300 baud, or up to 1200 with the patched firmware).
 
     pip install pyserial
 
@@ -9,6 +9,7 @@ Examples
     cc784.py --unsafe id                # ROM ID string (B4 '0')   -- see --unsafe!
     cc784.py --unsafe mem               # memory figures (B4 '1')
     cc784.py --unsafe dump              # dump the message store (B4 '3')
+    cc784.py --unsafe timing            # patched firmware: serial bit time and calibration state (B4 '4')
     cc784.py msg 0 "HELLO WORLD"        # load channel 0 and display it
     cc784.py msg 1 "@B BOLD @F FLASH @R RED"  # single-letter escapes, see ESC
     cc784.py msg 2 "@{lime}LIME @{d-red}DIM RED @{bg yellow}@{black}ON YELLOW"
@@ -121,8 +122,8 @@ def printable(b: bytes) -> str:
 # short/empty on timeout), reset_input(). cc784_esphome.py supplies one that
 # talks through an ESPHome serial_proxy instead of a local port.
 class SerialLink:
-    def __init__(self, port):
-        self.ser = serial.Serial(port, baudrate=300, bytesize=8, parity='N',
+    def __init__(self, port, baud=300):
+        self.ser = serial.Serial(port, baudrate=baud, bytesize=8, parity='N',
                                  stopbits=2, timeout=0.2, rtscts=False, dsrdtr=False)
     def write(self, data: bytes):
         self.ser.write(data); self.ser.flush()
@@ -135,9 +136,10 @@ class SerialLink:
         self.ser.close()
 
 class Sign:
-    def __init__(self, link, addr, gap=0.0, timeout=3.0, verbose=False):
+    def __init__(self, link, addr, gap=0.0, timeout=3.0, verbose=False, baud=300):
         self.link = link
         self.addr, self.gap, self.timeout, self.verbose = addr, gap, timeout, verbose
+        self.baud = baud             # for the wire-time arithmetic; the link itself runs at this rate
         self.post_ack = 1.0          # pause after each frame: the sign is deaf while it processes
         self.quiet = False           # suppress the per-frame ACK line (bulk senders)
         self.done = False            # patched firmware: flag 81, wait for the DONE byte instead of sleeping
@@ -161,12 +163,12 @@ class Sign:
                 self.link.write(f)
             if not expect_ack:
                 if not reply_follows:
-                    time.sleep(len(f) * 10 / 300.0 + self.post_ack)   # no ACK to wait for: wire time, then the deaf window
+                    time.sleep(len(f) * 10.0 / self.baud + self.post_ack)   # no ACK to wait for: wire time, then the deaf window
                 return True
             # the ACK follows the last byte, and 300 baud moves ~27 bytes/s: a long
             # frame is still on the wire when a fixed timeout would expire, and a
             # retry mid-frame is what desyncs the parser
-            r = self.read_bytes(1, self.timeout + len(f) * 10 / 300.0)
+            r = self.read_bytes(1, self.timeout + len(f) * 10.0 / self.baud)
             if r == bytes([ACK]):
                 if not self.quiet: print("  ACK")
                 # the ACK goes out BEFORE the packet is processed, and processing
@@ -229,7 +231,7 @@ class Sign:
                     elif not dump and len(f) >= 3:
                         expected = len(buf) - len(f) + 4 + f[2]
                 if expected:
-                    end = max(end, time.time() + (expected - len(buf)) * 10 / 300.0 + 2.0)
+                    end = max(end, time.time() + (expected - len(buf)) * 10.0 / self.baud + 2.0)
             if expected and len(buf) >= expected:
                 break
         if self.verbose and buf: print("  RX:", hexs(buf))
@@ -285,9 +287,15 @@ def parse_reply(raw: bytes, kind: str):
               (raw[1], ln, "OK" if ok else "BAD/short", printable(data)))
         if kind == 'mem' and len(data) == 10:
             print("  total %s bytes, free %s bytes" % (data[:5].decode(), data[5:].decode()))
+        if kind == 'timing' and len(data) == 4:
+            t300, step, last, nmi = data
+            print("  300-baud bit %d fifths of an interrupt (a %.2f us interrupt), step %d (%d baud), last second's count low byte %d, NMI %s"
+                  % (t300, 3333.3 / (t300 / 5.0), step, step * 60, last, 'seen' if nmi else 'none (DC supply: no calibration)'))
 
 def add_common_args(ap):
     ap.add_argument('-a', '--addr', default='*', help="sign address 0-255 or '*' (broadcast; a broadcast frame gets no ACK and no DONE)")
+    ap.add_argument('-b', '--baud', type=int, default=300, choices=(300, 600, 1200),
+                    help='line rate; the patched firmware (patch 30) follows the host, stock is 300 only')
     ap.add_argument('-g', '--gap', type=float, default=0.0, help='gap between bytes (s)')
     ap.add_argument('-t', '--timeout', type=float, default=3.0, help='reply timeout (s)')
     ap.add_argument('-v', '--verbose', action='store_true')
@@ -303,23 +311,23 @@ def add_common_args(ap):
 def run(link, a, ap):
     """Execute command a.cmd with a.args over the given link. Shared by both front-ends."""
     addr = 0x2A if a.addr == '*' else int(a.addr, 0)
-    s = Sign(link, addr, a.gap, a.timeout, a.verbose)
+    s = Sign(link, addr, a.gap, a.timeout, a.verbose, baud=a.baud)
     s.done = a.done
     c, args = a.cmd, a.args
 
     if c == 'sniff':
-        print("listening (300 8N2)... ctrl-C to stop")
+        print("listening (%d 8N2)... ctrl-C to stop" % a.baud)
         try:
             while True:
                 b = link.read(64, 0.5)
                 if b: print(hexs(b), " ", printable(b))
         except KeyboardInterrupt: pass
 
-    elif c in ('id', 'mem', 'dump'):
+    elif c in ('id', 'mem', 'dump', 'timing'):
         if not a.unsafe:
             sys.exit("'%s' sends a B4 query, which crashes/corrupts the stock CC784NIR firmware "
                      "(stack overflow). Add --unsafe if you really want to." % c)
-        parse_reply(s.query({'id': '0', 'mem': '1', 'dump': '3'}[c]), c)
+        parse_reply(s.query({'id': '0', 'mem': '1', 'dump': '3', 'timing': '4'}[c]), c)
 
     elif c == 'msg':
         ch = int(args[0]); text = encode_text(' '.join(args[1:]))
@@ -393,7 +401,7 @@ def main():
     a = ap.parse_args()
     if serial is None:
         sys.exit("pyserial is required:  pip install pyserial")
-    link = SerialLink(a.port)
+    link = SerialLink(a.port, a.baud)
     try:
         run(link, a, ap)
     finally:
