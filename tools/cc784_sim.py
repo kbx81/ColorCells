@@ -184,10 +184,12 @@ def assemble(src_dir):
 
 
 class Sign:
-    def __init__(self, rom, syms, fresh_ram=True, seed=1, sdp=True, ram8k=False, mains=True, baud=300):
+    def __init__(self, rom, syms, fresh_ram=True, seed=1, sdp=True, ram8k=False, mains=True, baud=300, crystal=False):
         # rom: one 16 K bank (the rest of the chip erased) or the whole chip image
         # ram8k: the stock 6264, which mirrors 4000-5FFF at 6000-7FFF
-        # mains=False: a DC supply, no NMI ever
+        # mains=False: a DC supply, no NMI from the zero-cross detector
+        # crystal=True: the IR+clock add-in board is fitted: 64 Hz on the NMI while BANK_REG bit 7 selects it
+        self.mains, self.crystal = mains, crystal
         image = bytes(rom) + b'\xff' * (2 * BANK_SIZE - len(rom)) if len(rom) <= BANK_SIZE else bytes(rom)
         self.faults = []
         self.ee = Eeprom(image, sdp=sdp, faults=self.faults)
@@ -215,7 +217,7 @@ class Sign:
         m.set_input_callback(self._on_input)
         m.set_output_callback(self._on_output)
         self.t = 0
-        self.next_int, self.next_nmi = TICK_T, (NMI_T if mains else 1 << 62)
+        self.next_int, self.next_nmi = TICK_T, (NMI_T if mains else 1 << 62)   # bank_reg is 0: the mains, if any
         self.last_inta = 0
         self.min_stack, self.min_stack_pc = self.stack_top, None
         self.rom_writes = 0
@@ -242,9 +244,21 @@ class Sign:
     def _chip_addr(self, addr):
         return ((self.bank_reg % self.ee.banks) << 14) | addr
 
+    def _nmi_period(self):
+        """what drives the NMI for the current bank register: the '151 on the add-in
+        board picks the crystal (64 Hz) with bit 7 set, the mains (60 Hz) with it clear"""
+        if self.bank_reg & 0x80:
+            return CPU_HZ // 64 if self.crystal else None
+        return NMI_T if self.mains else None
+
     def _set_bank_reg(self, value):
         self.bank_reg = value
         self._ee_sync(force=True)
+        p = self._nmi_period()
+        if p is None:
+            self.next_nmi = 1 << 62
+        elif self.next_nmi > self.t + p:
+            self.next_nmi = self.t + p
 
     def _ee_sync(self, force=False):
         """mirror the chip into 0000-3FFF: the selected bank when idle, the status
@@ -356,7 +370,8 @@ class Sign:
                     self.last_inta = self.t
                 if self.t >= self.next_nmi:
                     self._nmi()
-                    self.next_nmi += NMI_T
+                    p = self._nmi_period()
+                    self.next_nmi = self.next_nmi + p if p else 1 << 62
             # watchdog: Q13 of the free-running HC4020 clears CTRL_LATCH while high
             if ((self.t - self.last_inta) // WDOG_T) & 1 and self.latch:
                 self._set_latch(0); self.wdog_clears += 1
@@ -1104,6 +1119,67 @@ def cmd_baud():
     return all(checks)
 
 
+def cmd_clock():
+    """P31: the NMI source. With no mains NMI through the boot the firmware selects the
+    add-in board's 64 Hz through BANK_REG bit 1 and counts 64 a second; the bit is
+    put back after the OTA library drops it. P32: the 24-hour clock."""
+    import cc784_ota
+    rom, syms = assemble(HERE.parent / 'src' / 'patched')
+    checks = []
+    def check(name, cond):
+        checks.append(bool(cond)); print('  %s %s' % ('ok  ' if cond else 'FAIL', name))
+    def settime(s, hhmm, mode):
+        s.send_frame(b'\x17' + hhmm + mode, addr=1, flag=0x81); s.rx_wait(); s.run_ms(300)
+    def clock(s):
+        d = s.ram('CLK_H10', 6)
+        return '%d%d:%d%d:%02d pm=%02x' % (d[0], d[1], d[2], d[3], d[4], d[5])
+    # AC: as before, 12-hour
+    s = Sign(rom, syms, fresh_ram=True); s.run_ms(3000)
+    check('AC: 60 a second, bank bit clear, NMI seen (%d, %02x, %s)' % (s.ram('NMI_PER_SEC')[0], s.bank_reg, s.ram('NMI_SEEN').hex()),
+          s.ram('NMI_PER_SEC')[0] == 60 and not s.bank_reg & 0x80 and s.ram('NMI_SEEN')[0] == 0xFF)
+    settime(s, b'1159', b'N'); s.run_ms(61000)
+    check('AC: 11:59 PM + 61 s -> %s (12:00 AM)' % clock(s), s.ram('CLK_H10', 4) == bytes([1, 2, 0, 0]) and s.ram('CLK_PM')[0] == 0)
+    settime(s, b'0959', b'Y'); s.run_ms(61000)
+    check('AC: 09:59 AM + 61 s -> %s (10:00 AM, no leading zero at 9)' % clock(s), s.ram('CLK_H10', 4) == bytes([1, 0, 0, 0]) and s.ram('CLK_PM')[0] == 0)
+    # 24-hour
+    settime(s, b'2359', b'H'); s.run_ms(61000)
+    check('24-hour: 23:59 + 61 s -> %s (00:00, mode kept)' % clock(s), s.ram('CLK_H10', 4) == bytes([0, 0, 0, 0]) and s.ram('CLK_PM')[0] == 2)
+    settime(s, b'0959', b'H'); s.run_ms(61000)
+    check('24-hour: 09:59 + 61 s -> %s (10:00)' % clock(s), s.ram('CLK_H10', 4) == bytes([1, 0, 0, 0]) and s.ram('CLK_PM')[0] == 2)
+    settime(s, b'1259', b'H'); s.run_ms(61000)
+    check('24-hour: 12:59 + 61 s -> %s (13:00, no flip)' % clock(s), s.ram('CLK_H10', 4) == bytes([1, 3, 0, 0]) and s.ram('CLK_PM')[0] == 2)
+    s.send_frame(b'\x09\x30\x30\x0e' + b'IT IS \x5f NOW', addr=1, flag=0x81); s.rx_wait(); s.frames.clear(); s.run_ms(4000)
+    lit = sum(1 for f in s.frames if any(f[1:]))
+    check('24-hour: a message with the clock renders (%d lit frames, no faults)' % lit, lit > 50 and not s.faults)
+    # DC with the add-in board
+    s = Sign(rom, syms, fresh_ram=True, mains=False, crystal=True); s.run_ms(3000)
+    check('DC + board: 64 a second, bank bit set, NMI seen (%d, %02x, %s)' % (s.ram('NMI_PER_SEC')[0], s.bank_reg, s.ram('NMI_SEEN').hex()),
+          s.ram('NMI_PER_SEC')[0] == 64 and s.bank_reg & 0x80 and s.ram('NMI_SEEN')[0] == 0xFF)
+    settime(s, b'0100', b'H'); s.run_ms(10200)
+    check('DC + board: the clock runs at one second per 64 NMIs (%s)' % clock(s), s.ram('CLK_SEC')[0] == 10)
+    check('DC + board: the bit time is calibrated from the crystal second (BAUD_T %d, last %d)' % (s.ram('BAUD_T')[0], s.ram('BAUD_CAL_LAST')[0]), s.ram('BAUD_CAL_LAST')[0] != 0x7f)
+    s.set_baud(1200); s.run_ms(1500); s.tx_edges.clear()
+    s.send_frame(b'\x09\x30\x31\x0e' + b'FAST ' * 44, addr=1, flag=0x81); s.rx_wait(); s.run_ms(500)
+    check('DC + board: a 220-byte frame at 1200 (%s)' % s.tx_bytes().hex(), s.tx_bytes() == b'\x06\x04')
+    # an OTA page write on DC with the board: the writer's NMI sync must find the source on
+    app = rom[:BANK_SIZE]
+    img = cc784_ota.pack(app, 1) + cc784_ota.pack(app, 0)
+    s = Sign(img, syms, fresh_ram=True, sdp=False, mains=False, crystal=True); s.run_ms(3000)
+    r = ota_cmd(s, b'\xb5B'); r2 = ota_cmd(s, b'\xb5W' + bytes([200]) + cc784_ota.crc16(bytes(64)).to_bytes(2, 'little') + bytes(64))
+    sec0 = s.ram('CLK_SEC')[0]; s.run_ms(3200)
+    check('DC + board: B %s, W %s, bit back (%02x), clock still running (%d -> %d)' % (r, r2, s.bank_reg, sec0, s.ram('CLK_SEC')[0]),
+          r == b'\x00' and r2 == b'\x00' and s.bank_reg & 0x80 and s.ram('CLK_SEC')[0] >= sec0 + 3)
+    # DC without the board: the bit is set but nothing answers; nothing may hang
+    s = Sign(img, syms, fresh_ram=True, sdp=False, mains=False, crystal=False); s.run_ms(3000)
+    r = ota_cmd(s, b'\xb5B'); r2 = ota_cmd(s, b'\xb5W' + bytes([200]) + cc784_ota.crc16(bytes(64)).to_bytes(2, 'little') + bytes(64))
+    s.run_ms(3000)
+    check('DC, no board: 64 selected (%d, %02x), no NMI (%s), clock stands (%s), page write still answers (%s %s)' % (s.ram('NMI_PER_SEC')[0], s.bank_reg, s.ram('NMI_SEEN').hex(), clock(s), r, r2),
+          s.ram('NMI_PER_SEC')[0] == 64 and s.bank_reg & 0x80 and s.ram('NMI_SEEN')[0] == 0 and s.ram('CLK_SEC')[0] == 0 and r == b'\x00' and r2 == b'\x00')
+    check('no faults', not s.faults)
+    print('clock: %d/%d checks pass' % (sum(checks), len(checks)))
+    return all(checks)
+
+
 def cmd_eeprom():
     """exercise the chip model against the AT28C256 datasheet rules"""
     us = lambda n: int(n * US)
@@ -1252,7 +1328,7 @@ def cmd_compare(dir_a, dir_b):
 
 if __name__ == '__main__':
     args = sys.argv[1:]
-    if not args or args[0] not in ('stack', 'compare', 'eeprom', 'ota', 'update', 'push', 'fuzz', 'ram', 'quiet', 'speed', 'baud'):
+    if not args or args[0] not in ('stack', 'compare', 'eeprom', 'ota', 'update', 'push', 'fuzz', 'ram', 'quiet', 'speed', 'baud', 'clock'):
         sys.exit(__doc__)
     if args[0] == 'ram':
         sys.exit(0 if cmd_ram() else 1)
@@ -1260,6 +1336,8 @@ if __name__ == '__main__':
         sys.exit(0 if cmd_speed() else 1)
     if args[0] == 'baud':
         sys.exit(0 if cmd_baud() else 1)
+    if args[0] == 'clock':
+        sys.exit(0 if cmd_clock() else 1)
     if args[0] == 'quiet':
         sys.exit(0 if cmd_quiet() else 1)
     if args[0] == 'push':

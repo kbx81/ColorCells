@@ -45,7 +45,7 @@ The bank register is a second 74LS273 piggybacked on U5, the `8000` control latc
 | 11 (clock) | yes | **U4 pin 9** (LS139 `2Y3`, `C000–FFFF`, unused) |
 | 1 (`/MR`) | yes | **Z80 pin 26 (`/RESET`)**: bank 0 at every power-up |
 | 2 (Q0) | yes | EEPROM pin 1 |
-| 5, 6, 9, 12, 15, 16, 19 (Q1–Q7) | yes, leave free and insulated | spare (Q1/Q2 reserved for A15/A16 of a bigger chip) |
+| 5, 6, 9, 12, 15, 16, 19 (Q1–Q7) | yes, leave free and insulated | spare (Q1/Q2 reserved for A15/A16 of a bigger chip; Q7 is the IR and clock add-in board's clock-source select) |
 
 ### Program the chip — 5 min
 

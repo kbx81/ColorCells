@@ -117,10 +117,11 @@ Everything above is modelled in `tools/cc784_sim.py` (AT28C256 with banks, page 
 | `uv run tools/cc784_sim.py ram` | the build on the 6264 and on a 62256: sizes, fill, dump; a set clock survives a reset |
 | `uv run tools/cc784_sim.py quiet` | packets arriving mid-scroll: no restart, no watchdog clear, replies and DONE in the background, early frames dropped whole, cursor fix-up; the demo's lock survives a packet and a SEQ change is acted on |
 | `uv run tools/cc784_sim.py speed` | each scroll speed steps columns at stock's rate with no dark frames, and the seven rows get the same dwell |
+| `uv run tools/cc784_sim.py clock` | the NMI source: mains on AC, the add-in board's 64 Hz on DC, neither on a bare DC supply, with the clock, the calibration and an OTA page write in each; 12 and 24-hour rollovers |
 | `uv run tools/cc784_sim.py baud` | a cold sign follows the host at 300, 600 and 1200; replies come back at that rate; a rate change after a pause is followed; 1200 holds over interrupt periods from 126 to 134 µs thanks to the calibration and on a DC supply; 300-baud bare bytes still work. `update 1200` and `push 1200` run those gates at a rate |
 | `uv run tools/cc784_sim.py fuzz [N]` | N power cuts at random instants of an update; every reboot must land in a verified bank (1000/1000 when last run) |
 
-The `OTA: emulator regression` task runs the eight fast ones.
+The `OTA: emulator regression` task runs the nine fast ones.
 
 ## 7. Not built
 

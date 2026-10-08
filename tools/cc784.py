@@ -18,7 +18,8 @@ Examples
     cc784.py clear 0 1 2                # clear channels
     cc784.py clearall
     cc784.py seq 0 1 2                  # display sequence
-    cc784.py time                       # set clock from the PC
+    cc784.py time                       # set clock from the PC (12-hour)
+    cc784.py time24                     # patched firmware: 24-hour clock, no AM/PM
     cc784.py raw 09 30 30 0e 48 49      # send an arbitrary payload
     cc784.py stop                       # bare 0x01: stop the display, enter the editor
     cc784.py start                      # bare 0x0D: resume running (only if stopped)
@@ -349,7 +350,7 @@ def run(link, a, ap):
         s.send_frame(b'\x03')
     elif c == 'seq':
         s.send_frame(b'\x04' + b''.join(chan(int(x)) for x in args))
-    elif c == 'time':
+    elif c in ('time', 'time24'):
         # the protocol carries no seconds, and the sign starts the new minute at
         # :00 (patch 23), so the frame is timed to be processed on the minute:
         # 7 bytes on the wire take 0.23 s
@@ -358,9 +359,13 @@ def run(link, a, ap):
         wait = (target - now).total_seconds() - 0.3
         if wait > 0:
             print("  waiting %.0f s for the top of the minute" % wait); time.sleep(wait)
-        h = target.hour % 12 or 12
-        s.send_frame(b'\x17' + b'%02d%02d' % (h, target.minute) + (b'Y' if target.hour < 12 else b'N'))
-        print("  set to %02d:%02d %s" % (h, target.minute, 'AM' if target.hour < 12 else 'PM'))
+        if c == 'time24':                       # patch 32: 'H' = 24-hour, hours 00..23
+            s.send_frame(b'\x17' + b'%02d%02d' % (target.hour, target.minute) + b'H')
+            print("  set to %02d:%02d (24-hour)" % (target.hour, target.minute))
+        else:
+            h = target.hour % 12 or 12
+            s.send_frame(b'\x17' + b'%02d%02d' % (h, target.minute) + (b'Y' if target.hour < 12 else b'N'))
+            print("  set to %02d:%02d %s" % (h, target.minute, 'AM' if target.hour < 12 else 'PM'))
     elif c == 'raw':
         s.send_frame(bytes(int(x, 16) for x in args))
         r = s.read_reply(1.5)

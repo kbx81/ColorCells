@@ -259,6 +259,12 @@ BAUD_STEP_300        equ 5
 BAUD_STEP_600        equ 10
 BAUD_STEP_1200       equ 20
 BAUD_CAL_LIMIT       equ 60          ; |s| beyond this (4.7 %) is a partial second or a stall: ignored
+; P31: the NMI is the mains zero-cross on AC, or the add-in board's HC4060 Q9
+; when BANK_REG bit 7 selects it through the board's '151 (CC784_hardware.md)
+NMI_PER_SEC_MAINS    equ 60
+NMI_PER_SEC_XTAL     equ 64
+BANK_CLOCK_XTAL      equ 0x80        ; BANK_REG bit 7, its top bit; bits 0-2 are kept for a larger EEPROM's A14-A16
+CLK_24H              equ 0x02        ; P32: CLK_PM bit 1 = 24-hour clock; bit 0 = PM
 BAUD_IDLE_FRAMES     equ 62          ; display frames, about a second
 IR_CODE_STOP         equ 0xa4        ; 0x80 | remote key 36, STOP/START
 IR_CODE_SPACE        equ 0xa5        ; 0x80 | remote key 37, SPACE
@@ -1022,6 +1028,7 @@ row_advance:
         DEC (HL)
 
 frame_idle_held:
+        CALL clock_bank         ; P31: the OTA library may have dropped the clock bit
         LD A,(FRAME_DELAY)
         AND A
         JR z,frame_speed
@@ -1647,9 +1654,25 @@ addend_next:
 
 ; ---- init_nmi_rate: NMI_PER_SEC = 60 -> NMI is a 60 Hz (mains) tick
 init_nmi_rate:
-        LD A,0x3c
+        LD BC,12000             ; P31: about 75 ms, four mains cycles. No NMI in
+                                ; that time means no mains: take the add-in
+init_nmi_wait:                  ; board's 64 Hz. Without the board the bit does
+        LD A,(NMI_SEEN)         ; nothing and the clock stands, as before.
+        OR A                    ; (NMI is not maskable, so this works under DI.)
+        JR nz,init_nmi_mains
+        DEC BC
+        LD A,B
+        OR C
+        JR nz,init_nmi_wait
+        LD A,NMI_PER_SEC_XTAL
+        JR init_nmi_store
+
+init_nmi_mains:
+        LD A,NMI_PER_SEC_MAINS
+
+init_nmi_store:
         LD (NMI_PER_SEC),A
-        RET
+        JP clock_bank
 
 ; ---- init_vars: Power-on RAM init: copies the blocks out of INIT_DATA,
 ;      validates MY_ADDRESS/MY_ADDRESS_INV (resets it if corrupt)
@@ -4563,6 +4586,25 @@ cal_done:
         LD (BAUD_T),A
         RET
 
+; ---- clock_bank (P31): BANK_REG = the running bank, plus the clock-source bit
+;      when the add-in board's crystal is the NMI. The OTA library writes the
+;      bank alone, so this is repeated at every frame end and before each page
+;      write, whose NMI sync would otherwise wait on a source that is off.
+clock_bank:
+        PUSH AF
+        PUSH HL
+        LD A,(ROM_BANK)
+        LD HL,NMI_PER_SEC
+        BIT 6,(HL)              ; 64 has it, 60 does not
+        JR z,clock_bank_set
+        OR BANK_CLOCK_XTAL
+
+clock_bank_set:
+        LD (BANK_REG),A
+        POP HL
+        POP AF
+        RET
+
 ; ---- latch_blank / latch_row (P30): CTRL_LATCH read-modify-writes, closed to
 ;      the ISR, whose transmitter owns bit 4. latch_blank parks the rows (code
 ;      15); latch_row selects the row in C, which carries the blink bit.
@@ -4825,21 +4867,21 @@ clock_tick:
         CP 6
         RET nz
         LD (HL),0
-        DEC HL
+        DEC HL                  ; CLK_H1
         INC (HL)
+        LD A,(CLK_PM)
+        AND CLK_24H
+        JR nz,clk_hours_24
         LD A,(HL)
         CP 10
         JR nz,clk_check_12h
-        LD (HL),0
+        LD (HL),0               ; 9 -> 10
         DEC HL
-        LD A,(HL)
-        INC A
-        AND 1
-        LD (HL),A
+        LD (HL),1
         RET
 
 clk_check_12h:
-        DEC HL
+        DEC HL                  ; CLK_H10
         CP 3
         JP z,clk_wrap_13
         CP 2
@@ -4847,9 +4889,8 @@ clk_check_12h:
         LD A,(HL)
         AND A
         RET z
-        LD A,(CLK_PM)
-        INC A
-        AND 1
+        LD A,(CLK_PM)           ; 11:59 -> 12:00 flips AM/PM; the mode bit stays
+        XOR 1
         LD (CLK_PM),A
         RET
 
@@ -4858,10 +4899,31 @@ clk_wrap_13:
         AND A
         RET z
         XOR A
-        LD (HL),A
+        LD (HL),A               ; 13 -> 1
         INC A
         INC HL
         LD (HL),A
+        RET
+
+clk_hours_24:                   ; P32: 00..23
+        LD A,(HL)
+        CP 10
+        JR z,clk_h1_wrap
+        CP 4
+        RET nz
+        DEC HL
+        LD A,(HL)
+        CP 2
+        RET nz
+        LD (HL),0               ; 24:00 -> 00:00
+        INC HL
+        LD (HL),0
+        RET
+
+clk_h1_wrap:
+        LD (HL),0
+        DEC HL
+        INC (HL)
         RET
 
 ; ---- scroll_off_text: push the displayed text off by rendering 14 spaces
@@ -5420,7 +5482,7 @@ time_get_ampm:
 time_check_n:
         CP 'N'
         JR nz,time_get_ampm
-        LD A,0xff
+        LD A,1                  ; P32: PM; the editor sets the 12-hour mode
 
 time_store_pm:
         LD (CLK_PM),A
@@ -5447,8 +5509,9 @@ clock_step:
         AND A
         JR nz,clock_next_step
         LD HL,CLK_H10
-        LD A,(HL)
-        AND A
+        LD A,(CLK_PM)
+        AND CLK_24H             ; P32: 24-hour keeps the leading zero
+        OR (HL)
         LD A,(CLK_RENDER_STEP)
         JR nz,clock_next_step
         LD A,(CLK_RENDER_STEP)
@@ -5502,6 +5565,11 @@ clock_digit:
         INC HL
         LD A,(CLK_RENDER_STEP)
         LD (CLK_RENDER_PTR),HL
+        CP 5
+        JR nz,clock_emit
+        LD A,(CLK_PM)
+        AND CLK_24H             ; P32: 24-hour ends at the last minute digit:
+        JR nz,clock_emit_last   ; no space, no AM or PM
 
 clock_emit:
         CALL unfetch_char
@@ -7856,6 +7924,7 @@ ota_confirm:
         LD DE,TRAILER
         LD A,(ROM_BANK)
         LD B,A
+        CALL clock_bank         ; P31: the writer's NMI sync needs the source on
         CALL lib_page_writer
         JP ota_status
 
@@ -7878,6 +7947,7 @@ ota_write_trailer:
         LD DE,TRAILER
         LD A,(OTA_IDLE)
         LD B,A
+        CALL clock_bank         ; P31
         CALL lib_page_writer
         JP ota_status
 
@@ -7937,6 +8007,7 @@ ota_write_loop:
         LD A,(OTA_IDLE)
         LD B,A
         PUSH BC
+        CALL clock_bank         ; P31
         CALL lib_page_writer    ; HL, DE preserved
         POP BC
         OR A
@@ -8076,12 +8147,16 @@ settime_digits:
         DJNZ settime_digits
         CALL pkt_next_byte
         AND 0x5f
+        LD C,CLK_24H
+        CP 'H'                  ; P32: 24-hour, hours 00..23
+        JR z,settime_store_pm
+        LD C,0                  ; 'Y': AM
         CP 'Y'
-        LD A,0xff
-        JR nz,settime_store_pm
-        XOR A
+        JR z,settime_store_pm
+        LD C,1                  ; anything else: PM
 
 settime_store_pm:
+        LD A,C
         LD (CLK_PM),A
         XOR A                   ; P23: the new minute starts at :00, like the
         LD (CLK_SEC),A          ; host tool times the frame to land

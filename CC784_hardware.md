@@ -58,7 +58,7 @@ Substitutes, given the above:
 
 **As designed (the CC784NET board):** 4 MHz crystal, and U10 NANDs Q11 with Q12 (pin 1, the trace the NIR cuts), so `/INT` asserts 3072 clocks = 768 µs after the acknowledge: 1302 Hz, the rate the NET firmware runs its serial engines and row scan at directly. The NIR's 8 MHz crystal and the Q11-only bodge give the 7812.5 Hz tick its IR decoder needs; its firmware divides by 6 to get the same 1302 Hz for everything else. A NET board needs both the crystal and the bodge before it can run the NIR firmware. The converted board here runs the patched firmware on its original Z8400A, a 4 MHz grade part, at 8 MHz; that is one sample outside its rating, so expect to need a Z84C0008 if yours does not.
 
-NMI: 60 Hz from the AC input via a zero-cross detector (`NMI_PER_SEC = 60`). With a DC supply the clock would not run; the supplied PSU is AC, so it does.
+NMI: 60 Hz from the AC input via a zero-cross detector (`NMI_PER_SEC = 60`), U18 pin 4. With a DC supply the clock would not run; the supplied PSU is AC, so it does. The IR and clock add-in board ([hardware/CC784NIR_IR+Clock/](hardware/CC784NIR_IR+Clock/)) cuts that trace and puts a 74LS151 between U18 and the Z80: input 0 is the mains pulse, input 1 a 64 Hz square wave from an HC4060 on a 32.768 kHz crystal, and the select is the bank register '273's Q7 (pin 19), its top bit; Q1 and Q2 stay free for a larger EEPROM. The patched firmware picks the crystal when no mains cycle arrives at boot ([CC784_patched.md](CC784_patched.md#2-patches), patch 31). The board also carries the TSOP38230 receiver for both signs; its 7-pin connector is GND, AC_IN, CLOCK_OUT, +5 V, CLOCK_SEL, IR_RX, GND.
 
 ## 4. Serial port [H]
 
