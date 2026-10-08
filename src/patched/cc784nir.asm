@@ -39,7 +39,7 @@ MENU_MSG_PTR         equ RAM_VARS+0x06c   ; message the editor is showing (set w
 CUR_COLOUR           equ RAM_VARS+0x06e
 SCROLLING            equ RAM_VARS+0x06f   ; FF while the output window is catching up with FB_COLPTR
 CUR_CHAR             equ RAM_VARS+0x070
-TEST_MODE            equ RAM_VARS+0x071   ; FF = display the ROM-checksum test message (SEQ MSG? then MAGIC, C)
+TEST_MODE            equ RAM_VARS+0x071   ; FF = display TEST_MSG_BUF instead of the sequence; P29: only the OTA parked message sets it
 FB_OUT_PTR           equ RAM_VARS+0x072   ; first column sent to the panel (start of the output window)
 DISP_ON              equ RAM_VARS+0x074   ; 0 suppresses row output (effects rewrite FRAMEBUF meanwhile)
 CLK_RENDER_STEP      equ RAM_VARS+0x075   ; clock (5F) render step 0..8; FF = finished
@@ -147,7 +147,7 @@ FLASH_PENDING        equ RAM_VARS+0x1c8   ; 0x10 after FLASH until the next prin
 TEXT_DRAWN           equ RAM_VARS+0x1c9   ; FF once a printable char has been drawn since init_render
 RAINBOW_IDX          equ RAM_VARS+0x1ca   ; RAINBOW per-char colour index 1..5, 0 = off; bit 7 = P28 reverse
 RAINBOW_REVERSE      equ 0x80
-TEST_MSG_BUF         equ RAM_VARS+0x1cb   ; RAM copy of TEST_MESSAGE plus the ROM checksum, 28 bytes
+TEST_MSG_BUF         equ RAM_VARS+0x1cb   ; the message shown in TEST_MODE, 28 bytes (stock: the test pattern plus the ROM checksum)
 MENU_ENTRY_BUF       equ RAM_VARS+0x1e7
 FUNC_PENDING         equ RAM_VARS+0x1ec   ; editor: FUNC (B7) pressed, next key picks the second function
 MY_ADDRESS           equ RAM_VARS+0x1ed
@@ -5971,7 +5971,7 @@ seqmenu_first:
 seqmenu_result:
         POP BC
         CP 0x98
-        JR z,seqmenu_test_prompt
+        JR z,seqmenu_done       ; P29: MAGIC used to open the factory test prompt
         CP 0x97
         JR z,seqmenu_done
         CP 0x99
@@ -5999,60 +5999,6 @@ seqmenu_done:
         CP MARK_HI+1
         JP nc,editor_loop
         JP show_top_of_msg
-
-seqmenu_test_prompt:
-        CALL menu_getchar
-        CP ATTR_BOLD
-        JR z,seqmenu_test_prompt
-        CP 0x43
-        JR z,test_mode_enter
-        CP 0x63
-        JP nz,seqmenu_done
-
-; ---- test_mode_enter: SEQ MSG? then MAGIC then C: TEST_MSG_BUF = "CURRENT
-;      TEST" + sum of ROM 0000-3FFF as 4 hex digits, shown in TEST_MODE
-test_mode_enter:
-        LD A,0xff
-        LD (TEST_MODE),A
-        LD HL,TEST_MESSAGE
-        LD DE,TEST_MSG_BUF
-
-test_copy_loop:
-        LD A,(HL)
-        LD (DE),A
-        CP 3
-        JR z,test_rom_sum
-        INC HL
-        INC DE
-        JR test_copy_loop
-
-test_rom_sum:
-        PUSH DE
-        LD DE,0
-        LD BC,0x4000
-        LD HL,0
-
-test_sum_loop:
-        LD A,(DE)
-        PUSH DE
-        LD D,0
-        LD E,A
-        ADD HL,DE
-        POP DE
-        INC DE
-        DEC BC
-        LD A,C
-        OR B
-        JR nz,test_sum_loop
-        POP DE
-        CALL word_to_hex4
-        INC DE
-        INC DE
-        INC DE
-        INC DE
-        LD A,3
-        LD (DE),A
-        JP editor_exit
 
 seqmenu_all:
         LD HL,SEQ_LIST
@@ -7047,39 +6993,6 @@ rewind_ret:
 ; ---- pkt_process_end
 pkt_process_end:
         JP RESET
-
-; ---- word_to_hex4: HL -> 4 ASCII hex digits at (DE)
-word_to_hex4:
-        PUSH DE
-        LD B,2
-        LD C,H
-
-hex_byte_loop:
-        LD A,C
-        SRL A
-        SRL A
-        SRL A
-        SRL A
-        CALL nibble_to_hex
-        LD (DE),A
-        INC DE
-        LD A,C
-        AND 15
-        CALL nibble_to_hex
-        LD (DE),A
-        INC DE
-        LD C,L
-        DJNZ hex_byte_loop
-        POP DE
-        RET
-
-; ---- nibble_to_hex: A = ASCII hex digit for low nibble
-nibble_to_hex:
-        OR '0'
-        CP '9'+1
-        RET c
-        ADD A,7
-        RET
 
 ; ---- pkt_process: Process a received packet: walk PKT_BUF byte by byte. Bytes in IGNORE_TABLE are skipped; command bytes dispatch (02 speed,03 clear all,04 sequence,09 channel,0D end,0E delete channel text,15 fg idx,16 bg idx,17 time,1E A0-colour,B3 append,B4 query,B5 OTA); anything else is inserted as message text
 pkt_process:
@@ -8732,12 +8645,6 @@ CHARSET_EURO:
 DEMO_MESSAGE:
         db 0x12,"COLOR CELLS ",0x13,0x8c,"CC784 ",0x11,0xbc,0x14,"MULTI-COLOR DISPLAY"
         db 0xbe,"TINY PRICE",0x10,"LARGE IMPACT",0x03,0xdb
-
-; ---- TEST_MESSAGE: built-in test pattern (test_mode_enter). Sits inside the demo
-;      text block but is a separate message with its own 0x03 terminator.
-TEST_MESSAGE:
-        db "CURRENT TEST  "
-        db 0x10,0x17,0x17,0x17,0x17,0x17,0x17,0x17," ",0x03
 
 ; ---- ota_updating_msg: what the panel shows from B5 'B' to the reboot, via the
 ;      test-mode buffer (28 bytes max). PAUSE, THIN, the word, WAIT: parked until

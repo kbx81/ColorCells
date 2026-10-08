@@ -270,7 +270,7 @@ Consumer (`editor_getkey 233F`): `code & 0x3F` → **`IR_KEY_TABLE` gives a glyp
 > [!NOTE]
 > **Did you know?...**
 > 
-> There is an undocumented test mode: `SEQ` (`SEQ MSG?`), `MAGIC` then `C` copies `TEST_MESSAGE` to `TEST_MSG_BUF`, appends the 16-bit sum of ROM `0000–3FFF` as four hex digits and displays that instead of the sequence (`TEST_MODE`) until the next key — a factory ROM-checksum check.
+> There is an undocumented test mode: `SEQ` (`SEQ MSG?`), `MAGIC` then `C` copies `TEST_MESSAGE` to `TEST_MSG_BUF`, appends the 16-bit sum of ROM `0000–3FFF` as four hex digits and displays that instead of the sequence (`TEST_MODE`) until the next key — a factory ROM-checksum check. The patched build removes it ([CC784_patched.md](CC784_patched.md#2-patches), patch 29) and reuses `TEST_MODE` for the OTA parked display.
 
 ### Key layers [H]
 
