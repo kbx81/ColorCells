@@ -3366,6 +3366,17 @@
 				)
 			)
 		)
+		(property "MPN1" "CC0805KRX7R9BB104"
+			(at 179.07 39.37 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "33f1f83e-69a3-4867-9731-4a06765269a1")
 		)
@@ -3435,6 +3446,17 @@
 			)
 		)
 		(property "Description" "Two pin crystal"
+			(at 81.28 46.99 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN1" "ECS-.327-12.5-13X-C"
 			(at 81.28 46.99 0)
 			(hide yes)
 			(show_name no)
@@ -3526,6 +3548,17 @@
 				)
 			)
 		)
+		(property "MPN1" "C2012X5R1C106M085AC"
+			(at 50.8 46.99 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "ea396354-b404-4b76-8941-0f7ba6ea547e")
 		)
@@ -3597,6 +3630,17 @@
 			)
 		)
 		(property "Description" "Resistor"
+			(at 170.18 46.99 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN1" "RC0805FR-07470RL"
 			(at 170.18 46.99 0)
 			(hide yes)
 			(show_name no)
@@ -3765,6 +3809,17 @@
 				)
 			)
 		)
+		(property "MPN1" "885012007002"
+			(at 85.09 55.88 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "424b2d5c-3565-48b8-b0dc-a9400bd13745")
 		)
@@ -3836,6 +3891,17 @@
 			)
 		)
 		(property "Description" "Unpolarized capacitor"
+			(at 50.8 90.17 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN1" "C2012X7R1H475K125AE"
 			(at 50.8 90.17 0)
 			(hide yes)
 			(show_name no)
@@ -4235,6 +4301,17 @@
 				)
 			)
 		)
+		(property "MPN1" "TSOP38230"
+			(at 45.72 76.2 90)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "c6db3ee2-59b2-48bf-902a-f6afc5a69599")
 		)
@@ -4396,6 +4473,17 @@
 				)
 			)
 		)
+		(property "MPN1" "RC0805FR-07330KL"
+			(at 77.47 39.37 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "1c84865a-b143-4ecd-871a-4d61b38b05d5")
 		)
@@ -4477,6 +4565,17 @@
 				)
 			)
 		)
+		(property "MPN1" "885012007002"
+			(at 77.47 55.88 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "6aaf6962-3fec-4267-a1b0-fbd9e1917547")
 		)
@@ -4548,6 +4647,17 @@
 			)
 		)
 		(property "Description" "Resistor"
+			(at 85.09 39.37 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN1" "RC0805FR-0710ML"
 			(at 85.09 39.37 0)
 			(hide yes)
 			(show_name no)
@@ -4716,6 +4826,17 @@
 				)
 			)
 		)
+		(property "MPN1" "CC0805KRX7R9BB104"
+			(at 127 29.21 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "f6e40240-aa1b-451b-8c8c-601435e3ee87")
 		)
@@ -4787,6 +4908,17 @@
 			)
 		)
 		(property "Description" "Binary counter (14-stages) and oscillator"
+			(at 106.68 45.72 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN1" "CD74HC4060E"
 			(at 106.68 45.72 0)
 			(hide yes)
 			(show_name no)
@@ -4995,6 +5127,17 @@
 				)
 			)
 		)
+		(property "MPN1" ""
+			(at 27.94 43.18 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "7"
 			(uuid "3c21ab54-9b58-402a-9fcf-b1805d820dba")
 		)
@@ -5047,7 +5190,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "74LS151"
+		(property "Value" "74HC151"
 			(at 152.654 39.37 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -5081,6 +5224,17 @@
 			)
 		)
 		(property "Description" "Multiplexer 8 to 1"
+			(at 152.4 58.42 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN1" "SN74HC151N"
 			(at 152.4 58.42 0)
 			(hide yes)
 			(show_name no)
@@ -5204,6 +5358,17 @@
 			)
 		)
 		(property "Description" "Resistor"
+			(at 33.02 82.55 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN1" "RC0805FR-07470RL"
 			(at 33.02 82.55 0)
 			(hide yes)
 			(show_name no)
@@ -5362,6 +5527,17 @@
 			)
 		)
 		(property "Description" "Resistor"
+			(at 57.15 82.55 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN1" "RC0805JR-07120RL"
 			(at 57.15 82.55 0)
 			(hide yes)
 			(show_name no)
