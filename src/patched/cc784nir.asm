@@ -696,7 +696,7 @@ stub_lib_end:
 ; ============================================================================
 ;  APPLICATION. The stub enters through this jump table and nowhere else.
 ; ============================================================================
-        JP app_start
+        JP app_start            ; three-byte entries: the stub uses STUB_END+3 and +6
         JP int_timer
         JP nmi_entry
 
@@ -718,7 +718,7 @@ restart_display:
         CALL store_repair
         CALL init_sequence
         EI
-        JP main_loop
+        JR main_loop
 
 ; ---- nmi_entry: NMI = real-time clock tick (mains frequency); calls clock_tick
 nmi_entry:
@@ -924,7 +924,7 @@ row_output:
         CALL latch_blank
         LD A,(DISP_ON)
         AND A
-        JP z,row_phase_step
+        JR z,row_phase_step
         LD HL,(FB_OUT_PTR)
         LD A,(FB_OUT_LEN)
         LD B,A
@@ -1077,14 +1077,14 @@ frame_scroll:
 frame_scroll_stop:
         XOR A
         LD (SCROLLING),A
-        JP frame_colour
+        JR frame_colour
 
 frame_check_still:
         LD HL,(FB_OUT_PTR)
         LD DE,(FB_COL)
         OR A
         SBC HL,DE
-        JP z,frame_bit7_tick
+        JR z,frame_bit7_tick
 
 frame_colour:
         LD HL,(FB_COL)
@@ -1114,9 +1114,9 @@ frame_set_window:
         LD (FB_OUT_LEN),HL
         EX DE,HL
         SBC HL,DE
-        JP z,frame_window_wrap
-        JP c,frame_window_wrap
-        JP frame_set_extra
+        JR z,frame_window_wrap
+        JR c,frame_window_wrap
+        JR frame_set_extra
 
 frame_window_wrap:
         LD HL,FRAME_COLS
@@ -1152,17 +1152,17 @@ frame_done:
 rx_consume:
         LD A,(MENU_ACTIVE)
         AND A
-        JP nz,tick6_exit
+        JR nz,tick6_exit
         CALL rx_fifo_get
-        JP nc,rx_have_byte
+        JR nc,rx_have_byte
         LD A,(IR_CODE)
         CP IR_CODE_STOP
-        JP z,rx_ir_stop_key
+        JR z,rx_ir_stop_key
         CP IR_CODE_SPACE
-        JP nz,tick6_exit
+        JR nz,tick6_exit
         LD A,' '
         LD (RX_BYTE),A
-        JP tick6_exit
+        JR tick6_exit
 
 rx_ir_stop_key:
         LD (IR_KEY),A
@@ -1175,7 +1175,7 @@ rx_have_byte:
         CALL pkt_feed_byte
         XOR A                   ; B12: a payload byte is not a key; a 0x20 left
         LD (RX_BYTE),A          ; here would release a WAIT (wait_poll)
-        JP rx_consume
+        JR rx_consume
 
 rx_idle_byte:
         ; P21: while a packet waits, is processed or is being answered, a new
@@ -1189,7 +1189,7 @@ rx_idle_byte:
         JR z,rx_idle_free
         LD A,(HL)
         CP FRAME_START
-        JP nz,rx_consume
+        JR nz,rx_consume
         JR rx_frame_start
 
 rx_idle_free:
@@ -1202,13 +1202,13 @@ rx_frame_start:
         LD (PKT_STATE),A
         LD HL,pkt_st_addr
         LD (PKT_VECTOR),HL
-        JP rx_consume
+        JR rx_consume
 
 rx_not_start:
         LD A,(RX_BYTE)
         CP 1
         JP z,key_handler
-        JP rx_consume
+        JR rx_consume
 
 ; ---- tick6_exit
 tick6_exit:
@@ -1256,7 +1256,7 @@ seq_scan:
         DJNZ seq_scan
         DEC HL
         LD (HL),0xff
-        JP seq_check_first
+        JR seq_check_first
 
 seq_scan_end:
         CP 0xff
@@ -1296,7 +1296,7 @@ seq_check_loop:
         CP TEXT_END
         POP HL
         RET nz
-        JP seq_check_loop
+        JR seq_check_loop
 
 seq_all_empty:
         POP HL
@@ -1313,12 +1313,12 @@ seq_next_channel:
         JP z,seq_test_message
         LD A,(NEXT_CHAN)
         CP CHAN_DEMO
-        JP nc,seq_from_list
+        JR nc,seq_from_list
         LD E,A
         LD A,0xff
         LD (NEXT_CHAN),A
         LD A,E
-        JP seq_open_channel
+        JR seq_open_channel
 
 seq_from_list:
         LD A,(SEQ_ALL_EMPTY)
@@ -1332,7 +1332,7 @@ seq_from_list:
         JR nz,seq_clamp_entry
         LD HL,SEQ_LIST
         LD (SEQ_PTR),HL
-        JP seq_next_channel
+        JR seq_next_channel
 
 seq_clamp_entry:
         CP CHAN_DEMO+1
@@ -1369,7 +1369,7 @@ seq_skip_attrs:
         CP TEXT_END
         JR nz,seq_skip_attrs_next
         POP HL
-        JP seq_chan_empty
+        JR seq_chan_empty
 
 seq_skip_attrs_next:
         LD B,0
@@ -1404,7 +1404,7 @@ seq_chan_empty:
         SBC HL,DE
         JP nz,seq_next_channel
         LD A,CHAN_DEMO
-        JP seq_open_channel
+        JR seq_open_channel
 
 seq_test_message:
         LD HL,TEST_MSG_BUF
@@ -1423,7 +1423,7 @@ chan_select:
         CP CHAN_DEMO
         JR nz,chan_marker
         LD HL,DEMO_MESSAGE
-        JP chan_ok
+        JR chan_ok
 
 chan_marker:
         LD DE,MARK_LO*256+MARK_LO
@@ -1462,7 +1462,7 @@ chan_scan_loop:
         LD A,C
         OR B
         JR nz,chan_scan_loop
-        JP z,chan_error
+        JR z,chan_error
 
 chan_found:
         INC IX
@@ -1522,7 +1522,7 @@ repair_check_units:
         CP E
         JR nz,repair_fix_pair
         DEC HL
-        JP repair_terminate
+        JR repair_terminate
 
 repair_fix_pair:
         DEC HL
@@ -1533,9 +1533,9 @@ repair_fix_pair:
         INC HL
         LD A,(HL)
         CP MARK_LO
-        JP c,repair_next
+        JR c,repair_next
         CP MARK_HI+1
-        JP nc,repair_next
+        JR nc,repair_next
         LD (HL),' '
 
 repair_next:
@@ -1544,9 +1544,9 @@ repair_next:
 repair_scan:
         LD A,(HL)
         CP MARK_LO
-        JP c,repair_scan_next
+        JR c,repair_scan_next
         CP MARK_HI+1
-        JP nc,repair_scan_next
+        JR nc,repair_scan_next
         JR repair_marker
 
 repair_scan_next:
@@ -1555,7 +1555,7 @@ repair_scan_next:
         LD A,C
         OR B
         JR z,repair_append_rest
-        JP repair_scan
+        JR repair_scan
 
 repair_append_rest:
         LD A,MARK_HI
@@ -1634,9 +1634,9 @@ store_add_ends:
 addend_loop:
         LD A,(IX+0)
         CP MARK_LO
-        JP c,addend_next
+        JR c,addend_next
         CP MARK_HI+1
-        JP nc,addend_next
+        JR nc,addend_next
         LD (IX-1),TEXT_END
         INC IX
         DEC BC
@@ -1985,14 +1985,14 @@ class_not_a0:
         CP 0x17
         JR z,glyph_lookup
         BIT 7,A
-        JP nz,class_high
+        JR nz,class_high
         AND 0x60
         JP z,attr_control
         LD A,(CUR_CHAR)
         CP ATTR_TIME
         JP z,render_clock
         BIT 7,A
-        JP z,glyph_lookup
+        JR z,glyph_lookup
 
 class_high:
         CP 0x94
@@ -2064,7 +2064,7 @@ glyph_double_width:
         LD A,(GLYPH_WIDTH)
         SLA A
         CP 0x20
-        JP c,glyph_set_width
+        JR c,glyph_set_width
         LD A,0x1f
 
 glyph_set_width:
@@ -2413,7 +2413,7 @@ wait_poll:
 
 wait_check_pkt:
         CALL pkt_poll
-        JP wait_poll
+        JR wait_poll
 
 ; ---- attr_thin_check: B9 THIN
 attr_thin_check:
@@ -2482,7 +2482,7 @@ draw_finish:
         LD (GLYPH_PTR_ORIG),HL
         LD A,C
         AND A
-        JP nz,draw_set_width
+        JR nz,draw_set_width
         XOR A
         LD (DRAW_NO_GAP),A
         LD A,' '
@@ -2513,19 +2513,19 @@ draw_bad_hex:
 draw_abort:
         LD A,'*'
         LD (CUR_CHAR),A
-        JP draw_finish
+        JR draw_finish
 
 ; ---- hex_digit_value: A = value of ASCII hex digit, FF if not one
 hex_digit_value:
         CP '0'
-        JP c,hexval_bad
+        JR c,hexval_bad
         CP '9'+1
-        JP c,hexval_ok
+        JR c,hexval_ok
         AND 0xdf
         CP 0x41
-        JP c,hexval_bad
+        JR c,hexval_bad
         CP 0x47
-        JP nc,hexval_bad
+        JR nc,hexval_bad
         AND 15
         ADD A,9
 
@@ -2629,10 +2629,10 @@ magic_other:
         LD (MAGIC_FX_PREV),A
         LD A,(CUR_CHAR)
         CP ATTR_DRAW
-        JP z,magic_printable
+        JR z,magic_printable
         AND 0xf0
         CP GRAPH_BASE
-        JP z,magic_printable
+        JR z,magic_printable
         CP 0x20
         JP c,magic_ret
         CP COLOUR_BASE
@@ -2656,7 +2656,7 @@ magic_word_start:
 magic_pick_font:
         AND 0xf0
         CP GRAPH_BASE
-        JP z,magic_colour_check
+        JR z,magic_colour_check
         LD A,(MAGIC_FONT_SET)
         AND A
         LD A,0
@@ -2669,17 +2669,17 @@ magic_scan_word:
         LD A,(HL)
         AND 0x5f
         CP 0x41
-        JP c,magic_short_word
+        JR c,magic_short_word
         CP 0x5b
-        JP nc,magic_short_word
+        JR nc,magic_short_word
         INC HL
         DJNZ magic_scan_word
-        JP magic_font_normal
+        JR magic_font_normal
 
 magic_short_word:
         LD A,B
         CP 6
-        JP nc,magic_font_normal
+        JR nc,magic_font_normal
         LD A,(RND_SEED)
         ADD A,(HL)
         LD HL,(NMI_COUNT)
@@ -2703,12 +2703,12 @@ magic_font_normal:
 magic_count_words:
         LD A,(MAGIC_WORD_COUNT)
         CP 3
-        JP nc,magic_colour_check
+        JR nc,magic_colour_check
         LD A,(RND_VAL)
         AND A
-        JP z,magic_reseed
+        JR z,magic_reseed
         DEC A
-        JP z,magic_reseed
+        JR z,magic_reseed
         LD (RND_VAL),A
         LD A,(MAGIC_COLOUR_SET)
         AND A
@@ -2716,7 +2716,7 @@ magic_count_words:
         XOR A
         LD (MAGIC_COLOUR_SET),A
         LD (RND_VAL),A
-        JP magic_reset_words
+        JR magic_reset_words
 
 magic_reseed:
         LD A,(NMI_COUNT)
@@ -2732,7 +2732,7 @@ magic_colour_check:
         XOR A
         LD (MAGIC_COLOUR_SET),A
         LD (RND_VAL),A
-        JP magic_reset_words
+        JR magic_reset_words
 
 magic_next_colour:
         XOR A
@@ -2765,7 +2765,7 @@ magic_colour_try:
         LD BC,6
         OR A
         CPIR
-        JP nz,magic_colour_apply
+        JR nz,magic_colour_apply
         LD A,E
         LD (CUR_COLOUR),A
 
@@ -3008,7 +3008,7 @@ fb_ptr_inc:
         LD DE,FB_COLPTR
         XOR A
         SBC HL,DE
-        JP c,fbinc_nowrap
+        JR c,fbinc_nowrap
         LD HL,FRAMEBUF
         POP DE
         JR fbinc_ret
@@ -3117,27 +3117,27 @@ attr_control:
 ;      through fx_attr: 06 HALT,07 BEEP,03 END,18 LEFT,19 PAUSE,1A UP,1B DOWN,0F RIGHT,BB HOLD
 attr_dispatch:
         CP ATTR_NORM
-        JP nz,attr_not_norm
+        JR nz,attr_not_norm
         XOR A
         LD (FLASH_BIT),A
         LD (FONT_MODE),A
-        JP attr_set_font
+        JR attr_set_font
 
 attr_not_norm:
         CP ATTR_BOLD
-        JP nz,attr_not_bold
+        JR nz,attr_not_bold
         LD A,2
-        JP attr_set_font
+        JR attr_set_font
 
 attr_not_bold:
         CP ATTR_ITALIC
-        JP nz,attr_not_italic
+        JR nz,attr_not_italic
         LD A,6
-        JP attr_set_font
+        JR attr_set_font
 
 attr_not_italic:
         CP ATTR_FLASH
-        JP nz,attr_not_flash
+        JR nz,attr_not_flash
         LD A,COLOUR_FLASH
         LD (FLASH_PENDING),A
         JP render_next_char
@@ -3180,21 +3180,21 @@ fx_dispatch:
         CP 6
         JP z,fx_halt
         CP 7
-        JP z,fx_beep
+        JR z,fx_beep
         CP 3
-        JP z,fx_end_of_channel
+        JR z,fx_end_of_channel
         CP ATTR_LEFT
-        JP z,fx_left
+        JR z,fx_left
         CP ATTR_PAUSE
-        JP z,fx_pause
+        JR z,fx_pause
         CP ATTR_UP
-        JP z,fx_up
+        JR z,fx_up
         CP ATTR_DOWN
-        JP z,fx_down
+        JR z,fx_down
         CP 15
-        JP z,fx_right
+        JR z,fx_right
         CP ATTR_HOLD
-        JP z,fx_hold
+        JR z,fx_hold
         JP render_next_char
 
 ; ---- fx_beep
@@ -3228,14 +3228,14 @@ fx_right:
         LD (COL_COUNT),A
         LD A,4
         LD HL,fxv_right
-        JP set_effect_vector
+        JR set_effect_vector
 
 ; ---- fx_left: 18: plain crawl, no staging
 fx_left:
         XOR A
         LD (COL_COUNT),A
         LD HL,fxv_none
-        JP set_effect_vector
+        JR set_effect_vector
 
 ; ---- fx_hold: BB: blank, then reveal the staged text right to left
 fx_hold:
@@ -3244,7 +3244,7 @@ fx_hold:
         LD (COL_COUNT),A
         LD A,5
         LD HL,fxv_hold
-        JP set_effect_vector
+        JR set_effect_vector
 
 ; ---- fx_pause: 19: show the staged text at once and hold HOLD_FRAMES frames
 fx_pause:
@@ -3254,7 +3254,7 @@ fx_pause:
         LD (COL_COUNT),A
         LD A,1
         LD HL,fxv_pause
-        JP set_effect_vector
+        JR set_effect_vector
 
 ; ---- fx_up: 1A: reveal the staged text row by row from the top
 fx_up:
@@ -3264,7 +3264,7 @@ fx_up:
         LD (COL_COUNT),A
         LD A,2
         LD HL,fxv_wipe_updown
-        JP set_effect_vector
+        JR set_effect_vector
 
 ; ---- fx_down: 1B: reveal the staged text row by row from the bottom
 fx_down:
@@ -3274,7 +3274,7 @@ fx_down:
         LD (COL_COUNT),A
         LD A,3
         LD HL,fxv_wipe_updown
-        JP set_effect_vector
+        JR set_effect_vector
 
 ; ---- set_effect_vector: HL -> EFFECT_VECTOR, A -> effect id
 set_effect_vector:
@@ -3402,11 +3402,11 @@ attr_colour_speed:
         LD A,(CUR_CHAR)
         AND 0xf0
         CP COLOUR_BASE
-        JP z,attr_fore_colour
+        JR z,attr_fore_colour
         CP BGRND_BASE
-        JP z,attr_back_colour
+        JR z,attr_back_colour
         CP SPEED_BASE
-        JP z,attr_speed
+        JR z,attr_speed
         LD A,(CUR_CHAR)
         CP ATTR_MAGIC_OFF
         JP z,attr_magic_off
@@ -3543,21 +3543,21 @@ tiny_get_glyph:
 tinyg_check:
         LD A,(CUR_CHAR)
         AND 0x60
-        JP z,tinyg_stop
+        JR z,tinyg_stop
         LD A,(CUR_CHAR)
         CP ATTR_TIME
-        JP z,tinyg_stop
+        JR z,tinyg_stop
         BIT 7,A
-        JP z,tinyg_lookup
+        JR z,tinyg_lookup
         CP 0x94
-        JP c,tinyg_stop
+        JR c,tinyg_stop
         CP 0x9e
         JR c,tinyg_lookup
         AND 0xf0
         CP 0xc0
         JR z,tinyg_lookup
         CP 0xe0
-        JP nz,tinyg_stop
+        JR nz,tinyg_stop
 
 tinyg_lookup:
         LD HL,FONT
@@ -3660,7 +3660,7 @@ tiny_refresh:
 tiny_row_out:
         LD A,(ROW_OUT_PENDING)
         AND A
-        JP z,disp_next_row
+        JR z,disp_next_row
         CALL latch_blank
 
 ; ---- disp_blank_row: Send 0x8F (all off) to the current row
@@ -4039,10 +4039,10 @@ ir_st_idle:
         PUSH AF
         IN A,(PORT_IN)
         BIT 1,A
-        JP nz,ir_reset
+        JR nz,ir_reset
         LD A,(IR_STATE_CNT)
         DEC A
-        JP nz,ir_idle_count
+        JR nz,ir_idle_count
         PUSH HL
         LD HL,ir_st_leader
         LD (TICK_VECTOR),HL
@@ -4058,7 +4058,7 @@ ir_st_leader:
         PUSH AF
         IN A,(PORT_IN)
         BIT 1,A
-        JP z,ir_leader_ret
+        JR z,ir_leader_ret
         PUSH HL
         LD HL,ir_st_leader2
         LD (TICK_VECTOR),HL
@@ -4075,7 +4075,7 @@ ir_st_leader2:
         PUSH AF
         IN A,(PORT_IN)
         BIT 1,A
-        JP nz,ir_leader2_ret
+        JR nz,ir_leader2_ret
         PUSH HL
         LD HL,ir_st_leader3
         LD (TICK_VECTOR),HL
@@ -4095,7 +4095,7 @@ ir_st_leader3:
         JR nz,ir_leader3_count
         IN A,(PORT_IN)
         BIT 1,A
-        JP z,ir_reset
+        JR z,ir_reset
         PUSH HL
         LD HL,ir_st_start
         LD (TICK_VECTOR),HL
@@ -4112,7 +4112,7 @@ ir_st_start:
         PUSH AF
         LD A,(IR_STATE_CNT)
         DEC A
-        JP nz,ir_start_count
+        JR nz,ir_start_count
         IN A,(PORT_IN)
         BIT 1,A
         JP nz,ir_reset
@@ -4132,9 +4132,9 @@ ir_st_bits:
         PUSH AF
         LD A,(IR_STATE_CNT)
         DEC A
-        JP z,ir_bit_verify
+        JR z,ir_bit_verify
         CP 4
-        JP nz,ir_bit_count
+        JR nz,ir_bit_count
         LD (IR_STATE_CNT),A
         PUSH HL
         LD HL,IR_SHIFT
@@ -4161,7 +4161,7 @@ ir_bit_verify:
         LD A,(IR_BITCNT)
         DEC A
         LD (IR_BITCNT),A
-        JP z,ir_frame_done
+        JR z,ir_frame_done
         LD A,8
 
 ir_bit_count:
@@ -4267,7 +4267,7 @@ tx_idle:
         RES 0,(HL)
         BIT 1,(HL)
         RET nz                  ; a queued byte starts on the next interrupt
-        JP tx_stream_next       ; else the background reply's next byte, now
+        JR tx_stream_next       ; else the background reply's next byte, now
 
 ; ---- tx_start_byte: TX_PENDING goes out; TX_STATUS is set last so the ISR
 ;      only sees a byte whose timing is in place
@@ -4312,7 +4312,7 @@ tx_stream_queue:
         LD (TX_PENDING),A
         LD HL,TX_STATUS
         SET 1,(HL)
-        JP tx_start_byte
+        JR tx_start_byte
 
 tx_stream_end:
         LD HL,TX_SEG0+4
@@ -4395,7 +4395,7 @@ rx_start_timed:
 ; ---- rx_phase_run (P30, ISR): A = RX_PHASE, 1 or 2
 rx_phase_run:
         DEC A
-        JP nz,rx_sample_tick
+        JR nz,rx_sample_tick
         IN A,(PORT_IN)          ; phase 1: how long is the start pulse
         BIT 3,A
         JR z,rx_measured
@@ -4883,7 +4883,7 @@ clock_tick:
 clk_check_12h:
         DEC HL                  ; CLK_H10
         CP 3
-        JP z,clk_wrap_13
+        JR z,clk_wrap_13
         CP 2
         RET nz
         LD A,(HL)
@@ -5046,19 +5046,19 @@ editor_find_marker:
         LD HL,(STORE_CURSOR)
         LD A,(HL)
         CP MARK_LO
-        JP c,editor_scan_back
+        JR c,editor_scan_back
         CP MARK_HI+1
-        JP nc,editor_scan_back
+        JR nc,editor_scan_back
         DEC HL
         DEC HL
         LD A,(HL)
         CP MARK_LO
-        JP c,editor_cursor_set
+        JR c,editor_cursor_set
         CP MARK_HI+1
-        JP nc,editor_cursor_set
+        JR nc,editor_cursor_set
         DEC HL
         LD (STORE_CURSOR),HL
-        JP editor_marker_skip
+        JR editor_marker_skip
 
 editor_cursor_set:
         LD (STORE_CURSOR),HL
@@ -5076,9 +5076,9 @@ editor_scan_back:
 editor_scan_loop:
         LD A,(HL)
         CP MARK_LO
-        JP c,editor_scan_next
+        JR c,editor_scan_next
         CP MARK_HI+1
-        JP nc,editor_scan_next
+        JR nc,editor_scan_next
         JR editor_set_ins
 
 editor_scan_next:
@@ -5135,7 +5135,7 @@ editor_dispatch:
         LD (EDITOR_FIRST_KEY),A
         LD A,(EDIT_KEY)
         CP 1
-        JP z,editor_next_key
+        JR z,editor_next_key
         CP 3
         JP z,menu_clear_all
         CP 5
@@ -5191,7 +5191,7 @@ editor_dispatch:
 magic_new_message:
         LD A,(CHAN_LOCK)
         OR A
-        JP nz,newmsg_from_0
+        JR nz,newmsg_from_0
         LD A,(EDITOR_FIRST_KEY)
         AND A
         RET z
@@ -5222,7 +5222,7 @@ newmsg_skip_attrs:
         CP TEXT_END
         JR nz,newmsg_skip_next
         LD A,E
-        JP newmsg_select
+        JR newmsg_select
 
 newmsg_skip_next:
         LD B,0
@@ -5246,7 +5246,7 @@ newmsg_ask_full:
         LD HL,MENU_STR_MSG_FULL
         CALL menu_ask_chan
         CP CHAN_DEMO
-        JP nc,newmsg_ask_full
+        JR nc,newmsg_ask_full
 
 newmsg_select:
         LD (NEW_MSG_CHAN),A
@@ -5261,7 +5261,7 @@ newmsg_select:
         LD (EDIT_KEY),A
         LD A,(NEW_MSG_CHAN)
         LD E,A
-        JP newmsg_set_seq
+        JR newmsg_set_seq
 
 newmsg_empty_found:
         LD (INS_PTR),HL
@@ -5322,7 +5322,7 @@ editor_exit:
         AND A
         JR z,exit_wait_release
         CALL tx_send_byte
-        JP exit_add_to_seq
+        JR exit_add_to_seq
 
 exit_wait_release:
         LD A,(IR_CODE)
@@ -5357,7 +5357,7 @@ exit_add_to_seq:
         LD (NEXT_CHAN),A
         LD A,(SEQ_SET)
         AND A
-        JP nz,exit_to_display
+        JR nz,exit_to_display
         LD HL,(INS_PTR)
         DEC HL
         DEC HL
@@ -5366,12 +5366,12 @@ exit_add_to_seq:
         LD E,A
         LD HL,SEQ_LIST
         CP (HL)
-        JP z,exit_to_display
+        JR z,exit_to_display
         LD A,CHAN_DEMO
         CP (HL)
-        JP nz,exit_seq_search
+        JR nz,exit_seq_search
         LD A,E
-        JP exit_seq_first
+        JR exit_seq_first
 
 exit_seq_search:
         LD B,SEQ_LIST_LEN
@@ -5379,7 +5379,7 @@ exit_seq_search:
 exit_seq_loop:
         LD A,(HL)
         CP E
-        JP z,exit_seq_found
+        JR z,exit_seq_found
         CP 0xff
         JR z,exit_seq_insert
         INC HL
@@ -5396,7 +5396,7 @@ exit_seq_insert:
 exit_seq_first:
         LD HL,SEQ_LIST
         LD (HL),A
-        JP exit_to_display
+        JR exit_to_display
 
 exit_seq_found:
         LD E,A
@@ -5528,14 +5528,14 @@ clock_next_step:
         JR nz,clock_not_colon
         LD A,':'
         LD (CUR_CHAR),A
-        JP clock_emit
+        JR clock_emit
 
 clock_not_colon:
         CP 6
         JR nz,clock_not_space
         LD A,' '
         LD (CUR_CHAR),A
-        JP clock_emit
+        JR clock_emit
 
 clock_not_space:
         CP 7
@@ -5682,13 +5682,13 @@ askchan_key:
         JR z,askchan_demo
         LD A,(CUR_CHAR)
         CALL is_digit
-        JP nc,askchan_key
+        JR nc,askchan_key
         LD IX,CHAN_D10
         LD A,(IX+1)
         LD (IX+0),A
         LD A,(CUR_CHAR)
         LD (IX+1),A
-        JP askchan_show
+        JR askchan_show
 
 askchan_backspace:
         LD IX,CHAN_D10
@@ -5789,7 +5789,7 @@ addr_skip_zeros:
 addr_show_loop:
         LD A,(HL)
         CALL is_digit
-        JP c,addr_show_digit
+        JR c,addr_show_digit
         LD A,'0'
         LD (HL),A
 
@@ -5822,7 +5822,7 @@ addr_key:
         INC B
         LD A,(CUR_CHAR)
         CALL is_digit
-        JP nc,menu_addr_invalid
+        JR nc,menu_addr_invalid
         LD (HL),A
         INC HL
         PUSH HL
@@ -5839,7 +5839,7 @@ addr_key:
 
 addr_echo_digit:
         CALL glyph_lookup
-        JP addr_key
+        JR addr_key
 
 addr_enter:
         LD A,B
@@ -5850,11 +5850,11 @@ addr_enter:
 addr_convert:
         LD HL,MENU_ENTRY_BUF
         CALL ascii_dec_to_bin
-        JP c,menu_addr_invalid
+        JR c,menu_addr_invalid
         CP ADDR_BROADCAST
-        JP z,menu_addr_invalid
+        JR z,menu_addr_invalid
         CP 0
-        JP z,menu_addr_invalid
+        JR z,menu_addr_invalid
         LD (MY_ADDRESS),A
         CPL
         LD (MY_ADDRESS_INV),A
@@ -5946,7 +5946,7 @@ gotoend_back:
         JP nc,editor_loop
         DEC HL
         LD (STORE_CURSOR),HL
-        JP show_top_of_msg
+        JR show_top_of_msg
 
 editor_reshow:
         LD HL,(STORE_CURSOR)
@@ -5955,7 +5955,7 @@ editor_reshow:
         JP c,editor_loop
         CP MARK_HI+1
         JP nc,editor_loop
-        JP show_top_of_msg
+        JR show_top_of_msg
 
 ; ---- show_top_of_msg: 05 and after most edits: "TOP OF MSG nn"
 show_top_of_msg:
@@ -5979,7 +5979,7 @@ top_digit:
         AND 15
         OR '0'
         CALL is_digit
-        JP c,top_emit
+        JR c,top_emit
         LD A,'0'
         LD (HL),A
 
@@ -6014,9 +6014,9 @@ menu_clear_all:
 editor_clear_msg:
         LD A,(CHAN_LOCK)
         OR A
-        JP nz,editor_reshow
+        JR nz,editor_reshow
         CALL delete_chan_text
-        JP show_top_of_msg
+        JR show_top_of_msg
 
 ; ---- delete_chan_text: remove the selected channel's text up to its 03
 delete_chan_text:
@@ -6032,9 +6032,9 @@ delete_chan_text:
 deltext_find_marker:
         LD A,(HL)
         CP MARK_LO
-        JP c,deltext_back
+        JR c,deltext_back
         CP MARK_HI+1
-        JP nc,deltext_back
+        JR nc,deltext_back
         JR deltext_marker_end
 
 deltext_back:
@@ -6043,15 +6043,15 @@ deltext_back:
         LD A,B
         OR C
         JP z,pkt_process_end
-        JP deltext_find_marker
+        JR deltext_find_marker
 
 deltext_marker_end:
         INC HL
         LD A,(HL)
         CP MARK_LO
-        JP c,deltext_one_byte
+        JR c,deltext_one_byte
         CP MARK_HI+1
-        JP nc,deltext_one_byte
+        JR nc,deltext_one_byte
         JR deltext_move
 
 deltext_one_byte:
@@ -6176,7 +6176,7 @@ menu_prog_msg:
         LD HL,MENU_STR_PROG_MSG
         CALL menu_ask_chan_cur
         CP CHAN_DEMO+1
-        JP nc,menu_prog_msg
+        JR nc,menu_prog_msg
         LD E,A
 
 editor_select_chan:
@@ -6297,7 +6297,7 @@ editor_getkey:
 
 getkey_serial:
         CALL rx_fifo_get
-        JP c,getkey_ir
+        JR c,getkey_ir
         AND A
         JR z,getkey_ir
         XOR A
@@ -6333,7 +6333,7 @@ getkey_ir:
         JR nz,getkey_none
         LD HL,IR_REPEAT_TICKS
         LD (GEN_COUNTDOWN),HL
-        JP getkey_check_shift
+        JR getkey_check_shift
 
 getkey_released:
         XOR A
@@ -6376,7 +6376,7 @@ getkey_check_shift:
 
 getkey_shift_code:
         LD (IR_KEY_CHAR),A
-        JP getkey_history
+        JR getkey_history
 
 getkey_translate:
         LD HL,IR_KEY_TABLE
@@ -6464,9 +6464,9 @@ editor_delete:
         CP TEXT_END
         JP z,editor_loop
         CP MARK_LO
-        JP c,delete_do
+        JR c,delete_do
         CP MARK_HI+1
-        JP nc,delete_do
+        JR nc,delete_do
         JP show_top_of_msg
 
 delete_do:
@@ -6511,9 +6511,9 @@ cursor_right:
         INC HL
         LD A,(HL)
         CP MARK_LO
-        JP c,cursor_right_set
+        JR c,cursor_right_set
         CP MARK_HI+1
-        JP nc,cursor_right_set
+        JR nc,cursor_right_set
         INC HL
 
 cursor_right_set:
@@ -6543,9 +6543,9 @@ cursor_left:
         LD IX,(STORE_CURSOR)
         LD A,(IX+0)
         CP MARK_LO
-        JP c,cursor_left_do
+        JR c,cursor_left_do
         CP MARK_HI+1
-        JP nc,cursor_left_do
+        JR nc,cursor_left_do
         JP show_top_of_msg
 
 cursor_left_do:
@@ -6566,9 +6566,9 @@ cursor_left_8:
         LD HL,(STORE_CURSOR)
         LD A,(HL)
         CP MARK_LO
-        JP c,left8_step
+        JR c,left8_step
         CP MARK_HI+1
-        JP nc,left8_step
+        JR nc,left8_step
         JP show_top_of_msg
 
 left8_step:
@@ -6576,9 +6576,9 @@ left8_step:
         LD (STORE_CURSOR),HL
         LD A,(HL)
         CP MARK_LO
-        JP c,cursor_left_8
+        JR c,cursor_left_8
         CP MARK_HI+1
-        JP nc,cursor_left_8
+        JR nc,cursor_left_8
         DEC HL
         LD (STORE_CURSOR),HL
         JP show_top_of_msg
@@ -6592,11 +6592,11 @@ editor_insert:
         LD HL,(STORE_CURSOR)
         LD A,(HL)
         CP TEXT_END
-        JP z,insert_done
+        JR z,insert_done
         CP MARK_LO
-        JP c,insert_do
+        JR c,insert_do
         CP MARK_HI+1
-        JP nc,insert_do
+        JR nc,insert_do
         INC HL
         LD (STORE_CURSOR),HL
 
@@ -6831,9 +6831,9 @@ editor_redraw:
         LD HL,(STORE_CURSOR)
         LD A,(HL)
         CP MARK_LO
-        JP c,redraw_window
+        JR c,redraw_window
         CP MARK_HI+1
-        JP nc,redraw_window
+        JR nc,redraw_window
         JP redraw_status
 
 redraw_window:
@@ -6871,7 +6871,7 @@ redraw_loop:
 
 redraw_classify:
         BIT 7,A
-        JP nz,redraw_high
+        JR nz,redraw_high
         AND 0x60
         JR z,redraw_attr
         JP redraw_char_check
@@ -6879,7 +6879,7 @@ redraw_classify:
 redraw_high:
         LD A,(CUR_CHAR)
         CP 0x94
-        JP c,redraw_attr
+        JR c,redraw_attr
         CP 0x9f
         JP c,redraw_char_check
         AND 0xf0
@@ -6906,17 +6906,17 @@ redraw_attr:
 
 redraw_attr2:
         CP 15
-        JP z,redraw_fx_attr
+        JR z,redraw_fx_attr
         CP ATTR_PAUSE
-        JP z,redraw_fx_attr
+        JR z,redraw_fx_attr
         CP ATTR_UP
-        JP z,redraw_fx_attr
+        JR z,redraw_fx_attr
         CP ATTR_DOWN
-        JP z,redraw_fx_attr
+        JR z,redraw_fx_attr
         CP ATTR_LEFT
-        JP z,redraw_left_attr
+        JR z,redraw_left_attr
         CP ATTR_NORM
-        JP nz,redraw_not_norm
+        JR nz,redraw_not_norm
         XOR A
         LD (FLASH_BIT),A
         LD (FONT_MODE),A
@@ -6924,21 +6924,21 @@ redraw_attr2:
 
 redraw_not_norm:
         CP ATTR_FLASH
-        JP nz,redraw_not_flash
+        JR nz,redraw_not_flash
         LD A,COLOUR_FLASH
         LD (FLASH_PENDING),A
         JR redraw_label_check
 
 redraw_not_flash:
         CP ATTR_ITALIC
-        JP nz,redraw_not_italic
+        JR nz,redraw_not_italic
         LD A,CHAN_DEMO
         LD (FONT_MODE),A
         JR redraw_label_check
 
 redraw_not_italic:
         CP ATTR_BOLD
-        JP nz,redraw_not_bold
+        JR nz,redraw_not_bold
         XOR A
         SET 1,A
         LD (FONT_MODE),A
@@ -6946,38 +6946,38 @@ redraw_not_italic:
 
 redraw_not_bold:
         CP ATTR_BIG
-        JP nz,redraw_not_big
+        JR nz,redraw_not_big
         XOR A
         SET 1,A
         SET 3,A
         LD (FONT_MODE),A
-        JP redraw_label_check
+        JR redraw_label_check
 
 redraw_not_big:
         CP ATTR_THIN
-        JP nz,redraw_not_thin
+        JR nz,redraw_not_thin
         LD A,0xff
         LD (THIN_MODE),A
         XOR A
         LD (FORCE_BOLD),A
-        JP redraw_label_check
+        JR redraw_label_check
 
 redraw_not_thin:
         CP ATTR_MAGIC
-        JP nz,redraw_label_check
+        JR nz,redraw_label_check
         XOR A
         LD (FONT_MODE),A
         LD A,0xff
         LD (REDRAW_MAGIC),A
-        JP redraw_label_check
+        JR redraw_label_check
 
 redraw_fx_attr:
         LD A,(THIN_MODE)
         AND A
-        JP nz,redraw_label_check
+        JR nz,redraw_label_check
         LD A,0xff
         LD (FORCE_BOLD),A
-        JP redraw_label_check
+        JR redraw_label_check
 
 redraw_left_attr:
         LD A,0
@@ -6990,9 +6990,9 @@ redraw_label_check:
         EX DE,HL
         SBC HL,DE
         EX DE,HL
-        JP c,redraw_show_label
-        JP z,redraw_show_label
-        JP redraw_next
+        JR c,redraw_show_label
+        JR z,redraw_show_label
+        JR redraw_next
 
 redraw_show_label:
         LD HL,ATTR_LABEL_TABLE
@@ -7008,7 +7008,7 @@ redraw_show_label:
         LD (MENU_TEXT_PTR),DE
         CALL menu_show_text
         LD A,(CUR_CHAR)
-        JP redraw_next
+        JR redraw_next
 
 redraw_char_check:
         LD HL,(REDRAW_PTR)
@@ -7017,9 +7017,9 @@ redraw_char_check:
         EX DE,HL
         SBC HL,DE
         EX DE,HL
-        JP c,redraw_char
-        JP z,redraw_char
-        JP redraw_next
+        JR c,redraw_char
+        JR z,redraw_char
+        JR redraw_next
 
 redraw_char:
         XOR A
@@ -7054,47 +7054,47 @@ redraw_status:
         AND A
         JR z,status_not_graph
         LD HL,STR_GRAPH
-        JP status_show
+        JR status_show
 
 status_not_graph:
         LD A,(COLOR_PENDING)
         OR A
         JR z,status_not_color
         LD HL,STR_COLOR
-        JP status_show
+        JR status_show
 
 status_not_color:
         LD A,(BGRND_PENDING)
         OR A
         JR z,status_not_bgrnd
         LD HL,STR_BGRND
-        JP status_show
+        JR status_show
 
 status_not_bgrnd:
         LD A,(FUNC_PENDING)
         OR A
         JR z,status_not_func
         LD HL,STR_FUNC
-        JP status_show
+        JR status_show
 
 status_not_func:
         LD A,(EURO_STATE)
         OR A
         JR z,status_not_euro
         LD HL,STR_EURO
-        JP status_show
+        JR status_show
 
 status_not_euro:
         LD A,(SPEED_PENDING)
         OR A
-        JP z,status_not_speed
+        JR z,status_not_speed
         LD HL,STR_SPEED
-        JP status_show
+        JR status_show
 
 status_not_speed:
         LD A,(MAGIC_MSG_CHAN)
         OR A
-        JP z,status_shift_msg
+        JR z,status_shift_msg
         XOR A
         LD (MAGIC_MSG_CHAN),A
         CALL init_render
@@ -7158,9 +7158,9 @@ redraw_finish:
         LD HL,(STORE_CURSOR)
         LD A,(HL)
         CP MARK_LO
-        JP c,redraw_again
+        JR c,redraw_again
         CP MARK_HI+1
-        JP nc,redraw_again
+        JR nc,redraw_again
         POP HL
         JP show_top_of_msg
 
@@ -7215,7 +7215,7 @@ showtext_loop:
         PUSH HL
         CALL glyph_lookup
         POP HL
-        JP showtext_loop
+        JR showtext_loop
 
 showtext_done:
         POP AF
@@ -7234,7 +7234,7 @@ fb_rewind_window:
         LD DE,FRAMEBUF
         XOR A
         SBC HL,DE
-        JP nc,rewind_ret
+        JR nc,rewind_ret
         LD DE,FB_COLPTR
         ADD HL,DE
         LD (FB_COL),HL
@@ -7290,15 +7290,15 @@ pkt_entry_nodone:
         JR nc,pkt_cursor_in_store
         CALL clear_chan_lock    ; P24: the renderer is in ROM (demo) or the test
         LD HL,MSG_STORE+1       ; buffer, and the demo channel's lock is on: take
-        JP pkt_set_ins          ; channel 0, seated as 09 30 30 0E leaves it
+        JR pkt_set_ins          ; channel 0, seated as 09 30 30 0E leaves it
 
 pkt_cursor_in_store:
         LD HL,(STORE_CURSOR)
         LD A,(HL)
         CP MARK_LO
-        JP c,pkt_find_marker
+        JR c,pkt_find_marker
         CP MARK_HI+1
-        JP nc,pkt_find_marker
+        JR nc,pkt_find_marker
         DEC HL
         LD (STORE_CURSOR),HL
 
@@ -7315,9 +7315,9 @@ pkt_find_marker:
 pkt_marker_loop:
         LD A,(HL)
         CP MARK_LO
-        JP c,pkt_marker_back
+        JR c,pkt_marker_back
         CP MARK_HI+1
-        JP nc,pkt_marker_back
+        JR nc,pkt_marker_back
         JR pkt_set_ins
 
 pkt_marker_back:
@@ -7412,7 +7412,7 @@ pkt_insert_one:
 pkt_insert_run:
         LD A,(CHAN_LOCK)
         OR A
-        JP nz,pkt_next
+        JR nz,pkt_next
         PUSH BC                 ; the whole run: the payload skips it even if
         PUSH HL                 ; the store takes less (a full store refuses)
         LD HL,(STORE_CURSOR)
@@ -7479,7 +7479,7 @@ pkt_ins_advance:
         LD D,A
         PUSH HL
         PUSH DE
-        JP pkt_next
+        JR pkt_next
 
 ; ---- pkt_note_edit: HL = store address this packet edits; PKT_LOW_EDIT keeps
 ;      the lowest, which decides whether the renderer can carry on
@@ -7769,9 +7769,9 @@ cmd_B5_ota:
         JR nz,ota_bad_args
         LD A,(PKT_BUF+1)
         CP 'I'
-        JP z,ota_info
+        JR z,ota_info
         CP 'C'
-        JP z,ota_crc
+        JR z,ota_crc
         CP 'B'
         JP z,ota_begin
         CP 'W'
@@ -7830,7 +7830,7 @@ ota_info:
         AND 2
         OR OTA_FEATURES
         LD (DE),A
-        JP ota_reply
+        JR ota_reply
 
 ; ---- ota_trailer_copy: A = bank, DE = destination for 10 bytes; DE advances
 ota_trailer_copy:
@@ -7862,7 +7862,7 @@ ota_crc_loop:
         INC IX
         INC C
         DJNZ ota_crc_loop
-        JP ota_reply
+        JR ota_reply
 
 ; ---- ota_page_crc: A = page of the idle bank -> DE = its CRC-16 (BC kept)
 ota_page_crc:
