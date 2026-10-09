@@ -1019,7 +1019,7 @@ row_advance:
         LD (ROW_INDEX),A
         CP 7
         JP c,tick6_arm_row
-        LD A,0
+        XOR A
         LD (ROW_INDEX),A
         LD (DISP_STRETCH),A     ; P26: full rate unless the plain crawl below asks
         LD HL,RX_IDLE           ; P30: frames since the last start bit, held at 255
@@ -1264,7 +1264,7 @@ seq_scan_end:
 
 seq_reset_default:
         LD HL,SEQ_LIST
-        LD A,0
+        XOR A
         LD B,CHANNELS
 
 seq_fill:
@@ -1387,7 +1387,7 @@ seq_set_cursor:
         POP DE
         LD A,E
         CP CHAN_DEMO
-        JR nz,seq_ret
+        RET nz
         LD (CHAN_LOCK),A
 
 seq_ret:
@@ -1409,8 +1409,7 @@ seq_chan_empty:
 seq_test_message:
         LD HL,TEST_MSG_BUF
         LD (STORE_CURSOR),HL
-        CALL clear_chan_lock
-        RET
+        JP clear_chan_lock
 
 ; ---- clear_chan_lock
 clear_chan_lock:
@@ -1462,7 +1461,9 @@ chan_scan_loop:
         LD A,C
         OR B
         JR nz,chan_scan_loop
-        JR z,chan_error
+chan_error:
+        LD A,0xff
+        RET
 
 chan_found:
         INC IX
@@ -1472,10 +1473,6 @@ chan_found:
 
 chan_ok:
         XOR A
-        RET
-
-chan_error:
-        LD A,0xff
         RET
 
 ; ---- store_repair: every boot: bad bytes -> ?, stray 03 -> space, then re-sequence
@@ -1924,12 +1921,12 @@ track_flash_space:
         LD HL,CHAR_FLAGS
         ADD HL,DE
         BIT 1,(HL)
-        JR nz,track_done
+        RET nz
         LD A,0xff
         LD (TEXT_DRAWN),A
         LD A,(FLASH_PENDING)
         AND A
-        JR z,track_done
+        RET z
         LD (FLASH_BIT),A
         XOR A
         LD (FLASH_PENDING),A
@@ -1948,7 +1945,7 @@ space_seen:
 double_space:
         LD A,(TEST_MODE)
         INC A
-        JR z,track_done
+        RET z
         LD A,(CUR_COLOUR)
         AND 15
         LD (CUR_COLOUR),A
@@ -2200,8 +2197,7 @@ stage_centre:
         SRL H
         RR L
         LD (STAGE_OFFSET),HL
-        CALL unfetch_char
-        RET
+        JP unfetch_char
 
 ; ---- char_to_glyph: Map a character code to a font glyph index
 ;      (CHARSET_LOWER..CHARSET_EURO select upper/lower/tiny fonts)
@@ -2433,7 +2429,7 @@ attr_draw_check:
 attr_draw:
         CP ATTR_DRAW
         JR z,draw_begin
-        LD A,0
+        XOR A
         LD (DRAW_PREV),A
         LD A,(CUR_CHAR)
         RET
@@ -2634,9 +2630,9 @@ magic_other:
         CP GRAPH_BASE
         JR z,magic_printable
         CP 0x20
-        JP c,magic_ret
+        RET c
         CP COLOUR_BASE
-        JP nc,magic_ret
+        RET nc
 
 magic_printable:
         LD A,(MAGIC_LAST_CHAR)
@@ -2803,7 +2799,7 @@ unfetch_char:
         LD DE,MSG_STORE
         OR A
         SBC HL,DE
-        JR z,unfetch_ret
+        RET z
         LD HL,(STORE_CURSOR)
         DEC HL
         LD (STORE_CURSOR),HL
@@ -2841,7 +2837,7 @@ glyph_bold:
 bold_check_mode:
         LD A,(FONT_MODE)
         BIT 1,A
-        JR z,bold_ret
+        RET z
 
 bold_expand:
         LD A,(GLYPH_WIDTH)
@@ -2917,7 +2913,7 @@ bold_ret:
 glyph_italic:
         LD A,(FONT_MODE)
         BIT 2,A
-        JR z,italic_ret
+        RET z
         LD HL,(GLYPH_PTR)
         LD A,(GLYPH_WIDTH)
         LD C,A
@@ -2962,7 +2958,7 @@ italic_ret:
 glyph_big:
         LD A,(FONT_MODE)
         BIT 3,A
-        JR z,big_ret
+        RET z
         LD A,(GLYPH_WIDTH)
         LD B,A
         LD HL,(GLYPH_PTR)
@@ -3274,7 +3270,6 @@ fx_down:
         LD (COL_COUNT),A
         LD A,3
         LD HL,fxv_wipe_updown
-        JR set_effect_vector
 
 ; ---- set_effect_vector: HL -> EFFECT_VECTOR, A -> effect id
 set_effect_vector:
@@ -3705,7 +3700,7 @@ disp_next_row:
         LD (ROW_INDEX),A
         CP 7
         JP c,tick6_arm_row
-        LD A,0
+        XOR A
         LD (ROW_INDEX),A
         LD (TINY_FRAME_READY),A
         JP rx_consume
@@ -3837,7 +3832,7 @@ fxv_pause:
 ; ---- fxv_wipe_updown: effects 2 (UP) and 3 (DOWN): eight passes copying the
 ;      stage through a row mask that grows one row per pass
 fxv_wipe_updown:
-        LD A,0
+        XOR A
         LD (DISP_ON),A
         CALL fxv_prepare
         LD A,(COL_COUNT)
@@ -4846,7 +4841,7 @@ clock_tick:
         LD HL,NMI_PER_SEC
         CP (HL)
         RET nz
-        LD A,0
+        XOR A
         LD (NMI_COUNT),A
         CALL baud_calibrate     ; P30: a second of NMIs has passed
         LD HL,CLK_SEC
@@ -5197,7 +5192,7 @@ magic_new_message:
         RET z
 
 newmsg_from_0:
-        LD A,0
+        XOR A
 
 newmsg_try_chan:
         LD E,A
@@ -5476,7 +5471,7 @@ time_get_ampm:
         RES 5,A
         CP 'Y'
         JR nz,time_check_n
-        LD A,0
+        XOR A
         JR time_store_pm
 
 time_check_n:
@@ -5486,7 +5481,7 @@ time_check_n:
 
 time_store_pm:
         LD (CLK_PM),A
-        LD A,0
+        XOR A
         LD (NMI_COUNT),A
         LD A,0xff
         LD (CLK_RUN),A
@@ -5955,7 +5950,6 @@ editor_reshow:
         JP c,editor_loop
         CP MARK_HI+1
         JP nc,editor_loop
-        JR show_top_of_msg
 
 ; ---- show_top_of_msg: 05 and after most edits: "TOP OF MSG nn"
 show_top_of_msg:
@@ -6008,7 +6002,7 @@ menu_clear_all:
         JP nz,editor_loop
         CALL store_clear_all
         CALL store_finalize
-        LD A,0
+        XOR A
         JP editor_select_chan
 
 editor_clear_msg:
@@ -6251,7 +6245,7 @@ seqmenu_result:
         CALL fb_rewind_window
 
 seqmenu_done:
-        LD A,0
+        XOR A
         LD (SEQ_MENU_ACTIVE),A
         LD HL,(STORE_CURSOR)
         LD A,(HL)
@@ -6263,7 +6257,7 @@ seqmenu_done:
 
 seqmenu_all:
         LD HL,SEQ_LIST
-        LD A,0
+        XOR A
         LD B,CHANNELS
 
 seqmenu_all_fill:
@@ -6413,7 +6407,7 @@ getkey_lookup:
         ADD HL,DE
         LD A,(HL)
         LD (IR_KEY_CHAR),A
-        LD A,0
+        XOR A
         LD (SHIFT_STATE),A
         CALL beep_start
 
@@ -6470,7 +6464,7 @@ editor_delete:
         JP show_top_of_msg
 
 delete_do:
-        LD A,0
+        XOR A
         LD (DISP_ON),A
         LD HL,(STORE_END)
         DEC HL
@@ -6602,7 +6596,7 @@ editor_insert:
 
 insert_do:
         CALL latch_blank
-        LD A,0
+        XOR A
         LD (DISP_ON),A
         LD HL,(STORE_END)
         INC HL
@@ -6660,10 +6654,10 @@ store_make_room:
         LD (STORE_CURSOR),HL
         OR A
         SBC HL,DE
-        JR nz,makeroom_ret
+        RET nz
         LD A,(MENU_ACTIVE)
         AND A
-        JR nz,makeroom_ret
+        RET nz
         LD HL,MSG_STORE
         LD (STORE_CURSOR),HL
 
@@ -6675,8 +6669,7 @@ editor_translate_key:
         CALL apply_graph_prefix
         CALL apply_colour_prefix
         CALL apply_speed_prefix
-        CALL editor_key_to_attr
-        RET
+        JP editor_key_to_attr
 
 ; ---- apply_graph_prefix: GRAPH n -> A0|n
 apply_graph_prefix:
@@ -6687,7 +6680,7 @@ apply_graph_prefix:
         AND 15
         OR GRAPH_BASE
         LD (EDIT_KEY),A
-        LD A,0
+        XOR A
         LD (GRAPH_PENDING),A
         RET
 
@@ -6980,7 +6973,7 @@ redraw_fx_attr:
         JR redraw_label_check
 
 redraw_left_attr:
-        LD A,0
+        XOR A
         LD (FORCE_BOLD),A
 
 redraw_label_check:
@@ -7153,7 +7146,7 @@ redraw_finish:
         OR A
         JR z,redraw_ret
         CALL redraw_hold
-        LD A,0
+        XOR A
         LD (MENU_MSG_FLAG),A
         LD HL,(STORE_CURSOR)
         LD A,(HL)
@@ -7234,7 +7227,7 @@ fb_rewind_window:
         LD DE,FRAMEBUF
         XOR A
         SBC HL,DE
-        JR nc,rewind_ret
+        RET nc
         LD DE,FB_COLPTR
         ADD HL,DE
         LD (FB_COL),HL
@@ -8242,7 +8235,7 @@ cmd_04_sequence:
         LD A,0xff
         LD (PKT_SEQ_CHANGED),A  ; P27: pkt_done_continue recounts the empty channels
         LD HL,SEQ_LIST
-        LD A,0
+        XOR A
         LD B,CHANNELS
 
 seq_default_fill:
