@@ -41,11 +41,11 @@ Data blocks in ROM:
 | `1654` | `TX_TIMING` | serial TX bit intervals (§3) |
 | `18E8` | `DEC_TABLE` | decimal conversion |
 | `2427` | `IR_KEY_TABLE` | IR code → key number (§8) |
-| `2718` | `FG_IDX_TABLE` | `15 n` foreground colour bytes (§5) |
-| `2722` | `BG_IDX_TABLE` | `16 n` background colour bytes (§5) |
+| `2718` | `FG_IDX_TABLE` | `15 n` foreground color bytes (§5) |
+| `2722` | `BG_IDX_TABLE` | `16 n` background color bytes (§5) |
 | `2D57` | `IGNORE_TABLE` | packet bytes skipped by `pkt_process` (§5) |
 | `2D62–2FF2` | `ATTR_LABEL_TABLE` and its strings | the editor's name for each attribute byte (§7) |
-| `2FF3` | `MENU_STRINGS` | menu prompts and colour names |
+| `2FF3` | `MENU_STRINGS` | menu prompts and color names |
 | `3135` | `FONT` | 8 bytes per glyph: 7 columns + width; glyphs 0–190 only |
 | `372D` | `CHAR_FLAGS` | 256 flag bytes indexed by character code (below) |
 | `382D–396E` | `CHARSET_*` | the five key layers (§9) |
@@ -66,7 +66,7 @@ Data blocks in ROM:
 
 Timing: one display row refresh is an `OTIR` of 86 bytes (~1,900 T). Serial bit = 4.33 tick6 = 3.33 ms.
 
-**Row refresh cadence [H]:** a row takes three tick6 periods. The 86 bytes are written twice with identical data, first to port `40+row` and then to `48+row` (`ROW_PORT` selects the group; `ROW_OUT_PENDING` marks the row as still owed), and the third tick advances `ROW_INDEX`. 21 ticks per frame gives a **62 Hz frame rate**. In plain LEFT crawl `SCROLL_SPEED` (0–7, from `F0`–`F7`) adds that many *blanked* ticks after each frame via `BLANK_TIMER`, which is the entire speed mechanism; effects and the editor skip it. Each row is preceded by one colour byte (`ROW_COLOUR`) on the same port, and bit 5 of the port address is set while `BEEP_TICKS` is non-zero, so the beeper is an I/O decode, not a latch bit. `CTRL_LATCH` bit 7 (`LATCH_BIT7`) is toggled by the firmware every 13 frames (≈210 ms, a 2.4 Hz square wave): **it is the FLASH blink clock** [H — a build with 7 instead of 13 blinked at ~5 Hz on the sign]. The patched source exposes the count as `FLASH_HALF_PERIOD`.
+**Row refresh cadence [H]:** a row takes three tick6 periods. The 86 bytes are written twice with identical data, first to port `40+row` and then to `48+row` (`ROW_PORT` selects the group; `ROW_OUT_PENDING` marks the row as still owed), and the third tick advances `ROW_INDEX`. 21 ticks per frame gives a **62 Hz frame rate**. In plain LEFT crawl `SCROLL_SPEED` (0–7, from `F0`–`F7`) adds that many *blanked* ticks after each frame via `BLANK_TIMER`, which is the entire speed mechanism; effects and the editor skip it. Each row is preceded by one color byte (`ROW_COLOR`) on the same port, and bit 5 of the port address is set while `BEEP_TICKS` is non-zero, so the beeper is an I/O decode, not a latch bit. `CTRL_LATCH` bit 7 (`LATCH_BIT7`) is toggled by the firmware every 13 frames (≈210 ms, a 2.4 Hz square wave): **it is the FLASH blink clock** [H — a build with 7 instead of 13 blinked at ~5 Hz on the sign]. The patched source exposes the count as `FLASH_HALF_PERIOD`.
 
 **The CPU runs at 8 MHz [H: by arithmetic, in emulation, and on the scope].** Per tick the ISR costs ~190 T and the IR handler ~100 T; six of those plus one row refresh (OTIR 86 bytes, ~2200 T) come to ~3900 T per `tick6_service` period. At 4 MHz that period is 3072 T, so the service could never finish before the next one was scheduled — the emulator shows exactly that runaway nesting at 4 MHz and a stable ~40-byte stack at 8 MHz. Hardware question H1 is settled from the firmware side.
 
@@ -111,7 +111,7 @@ The command bytes are named in the source (`CMD_*`); the docs use those names, w
 | FORE_IDX | `15 n` | `cmd_15_fore_idx` | insert `FG_IDX_TABLE[n]` (`8C 8D 8F 87 83 84 8E 80 8B 81`) |
 | BACK_IDX | `16 n` | `cmd_16_back_idx` | insert `BG_IDX_TABLE[n]` (`91 93 93 93 92 90`) |
 | SET_TIME | `17 hhmm a` | `cmd_17_set_time` | 4 ASCII digits → `CLK_H10..CLK_M1`; `a`=`Y`/`y` AM else PM (patched: `H` = 24-hour, [CC784_patched.md](CC784_patched.md#2-patches) patch 32) |
-| COLOUR_A0 | `1E n` | `cmd_1E_colour_A0` | insert `A0 \| (n&15)` |
+| COLOR_A0 | `1E n` | `cmd_1E_color_A0` | insert `A0 \| (n&15)` |
 | APPEND | `B3` | `cmd_B3_append` | insertion point → end of selected channel |
 | QUERY | `B4 c` | `cmd_B4_query` | `c` = ROMID `'0'`, MEMORY `'1'`, NOP `'2'`, DUMP `'3'` — **see bug B1** |
 | (text) | other | `pkt_insert_text` | insert byte into the store at the cursor |
@@ -144,7 +144,7 @@ D0 D0 <text ch 0> 03   D0 D1 <text ch 1> 03  …  D9 D9 <text ch 99> 03   DA
 
 - Channel marker = **two bytes `D0+tens`, `D0+units`** (channel 42 → `D4 D2`). `03` terminates a channel's text, `DA` the store.
 - `store_clear_all` writes 100 empty channels + `DA` = 301 bytes of framing, leaving **6625 bytes of text shared by all channels** (`0x19E1`); there is no per-channel limit. `STORE_SIZE` (`0x1B0E` = 6926) is what `B4 '1'` reports; `0x5E8B` = limit − 100 triggers the "100 KEYS LEFT" warning.
-- Attribute/colour bytes are stored inline exactly as received.
+- Attribute/color bytes are stored inline exactly as received.
 - **Channel 100 (`0x64`) is the ROM demo message**: `chan_select` returns `DEMO_MESSAGE` and `cmd_09` sets `CHAN_LOCK` so inserts are refused. The default sequence plays channel 100, hence the demo after a clear.
 - `store_finalize` (`1C38`) is what maintains `STORE_END`: it `CPIR`s from `MSG_STORE` for the `DA` and stores its address. `STORE_END` is therefore the position of the store terminator, not one past the last text byte.
 - `pkt_insert_text`: `store_make_room` advances `STORE_CURSOR`, then `LDDR` shifts everything from the cursor **up to `STORE_LIMIT`** (not just to `STORE_END`) by one byte and writes the character. ~6900 byte moves per inserted byte with interrupts off (≈20–40 ms); a 250-byte chunk takes seconds. See bug B8 — fixed by a two-byte operand change.
@@ -170,25 +170,25 @@ D0 D0 <text ch 0> 03   D0 D1 <text ch 1> 03  …  D9 D9 <text ch 99> 03   DA
 | `11` | NORM | `1D` | **SHIFT** | `BE` | TINY |
 | `12` | BOLD | `1E` | **GRAPH** | | |
 
-Related tables in the same block: `COLOUR_NAME_TABLE` (`2E62`) gives the 16 foreground names then the four background names repeated four times; `SPEED_STR_TABLE` (`2F42`) gives `S0`–`S7`; `MSG_TOP_TABLE` (`2F02`) gives "TOP OF MSG 1–10" and "TOP DEMO MSG".
+Related tables in the same block: `COLOR_NAME_TABLE` (`2E62`) gives the 16 foreground names then the four background names repeated four times; `SPEED_STR_TABLE` (`2F42`) gives `S0`–`S7`; `MSG_TOP_TABLE` (`2F02`) gives "TOP OF MSG 1–10" and "TOP DEMO MSG".
 
 **`B8` DRAW vs `1E` GRAPH [H — from the sign's owner]:** GRAPH selects a *built-in* graphic (apparently just further glyphs); DRAW takes user-defined artwork as a string of hex values and paints it **column by column**.
 
 **The model name is the geometry:** the panel is **7 rows × 84 columns** — CC**784**. The firmware carries 86 bytes per row, not 84 (`FRAMEBUF` is 4 × 86 = 344, the `0x0158` constant; one row refresh is an `OTIR` of 86), and `shift_chain_clear` clocks 85 zeros to flush the LS164 chain. So there are one or two positions of slack beyond the visible 84.
 
-### Behaviour [H — watched on the sign]
+### Behavior [H — watched on the sign]
 
 `render_next_char` walks the store from `STORE_CURSOR`; `attr_dispatch` dispatches on the bytes above, the single attributes in the table above and these ranges:
 
 | Bytes | Meaning |
 |---|---|
-| `80–8F` | foreground colour: `0x80 \| red<<2 \| green`, two bits of each |
+| `80–8F` | foreground color: `0x80 \| red<<2 \| green`, two bits of each |
 | `90–93` | background: black, red, green, yellow (`94–9F` draw none [H — owner]) |
 | `94–9E`, `C0–CF`, `DC–DF`, `E0–EF` | the 47 European accented characters [H]: the count matches the demo text's "PROGRAMS 47 EUROPEAN CHARACTERS", the glyphs render as Á á Ç ç Ë É é ä ö ü å, and the editor shows "EURO" while that layer is active (`2928`). Not graphics: built-in graphics are `1E` GRAPH, user-drawn ones `B8` DRAW |
 | `A0–AF` | the sixteen built-in graphics |
 | `F0–F7` | scroll speed, 0 fastest |
 
-The sixteen foreground colours, as `MENU_STRINGS` names them, indexed by the low nibble:
+The sixteen foreground colors, as `MENU_STRINGS` names them, indexed by the low nibble:
 
 | | 0 | 1 | 2 | 3 |
 |---|---|---|---|---|
@@ -201,12 +201,12 @@ Glyphs: `char_to_glyph` → index → `FONT + 8*idx`. Movement effects are state
 
 ### Engine internals [H]
 
-- **Fetch/render pipeline.** `fetch_char` reads one store byte into `CUR_CHAR`; `render_next_char` runs the attribute checks (`attr_*_check`), then `glyph_lookup` → `glyph_bold`/`glyph_italic`/`glyph_big` build the styled glyph in `GLYPH_BUF*` and `glyph_blit` writes a colour byte plus the columns into the 344-byte `FRAMEBUF` ring at `FB_COLPTR`. The panel is fed from the output window `FB_OUT_PTR`/`FB_OUT_LEN` (+`FB_EXTRA_LEN` after the wrap); `SCROLLING` is set until the window has caught up with `FB_COLPTR`, one column per frame, and `effect_step` waits for that.
-- **Effects stage through `TXBUF`.** With any `EFFECT_ID` other than 0 (LEFT), glyphs are staged into `TXBUF` via `STAGE_PTR` instead of the frame buffer. When the stage fills (`COL_COUNT` reaches 0) or a movement attribute arrives, the handler in `EFFECT_VECTOR` moves the staged frame onto the panel: `fxv_pause` (19) copies it at once and holds `FRAME_DELAY` = 0x50 frames (~1.3 s); `fxv_right` (0F) copies one column per frame left to right; `fxv_hold` (BB) blanks and copies right to left; `fxv_wipe_updown` (1A/1B) makes eight passes through a growing row mask. The text is centred by `STAGE_OFFSET` = free columns / 2. `FLUSH_PENDING` defers an attribute until the stage has been shown. `06` HALT is `fx_halt`: hold `HOLD_FRAMES` frames with every frame-buffer colour byte reset to `8F` by `fb_colours_default`, so held text turns yellow and loses its background; WAIT does the same [H — owner].
-- **Holds and wipes.** `BB` HOLD blanks the display and wipes the held text in from right to left; `18` LEFT is the plain scroll, the effect to name after a PAUSE, HOLD, UP, DOWN or RIGHT section to get scrolling text back. `BD` MAGIC OFF ends MAGIC's automatic colouring and fonts; `B9` THIN goes with PAUSE, UP, DOWN, LEFT or RIGHT to keep text that stops on the display in the normal font, since held text is otherwise drawn bold [H — owner] [H — owner].
-- **FLASH is per word.** `14` sets `FLASH_PENDING`; the next printable byte moves it into `FLASH_BIT` (0x10), which is OR-ed into the colour bytes until the next space. Two spaces in a row clear the background colour bits.
-- **MAGIC mode** (`MAGIC_MODE`, 1F…BD) is `magic_preprocess`: each word gets a random font (words of six or more letters stay NORM), the colour changes every 2–5 words or at `. ! ? : ,`, walking `MAGIC_COLOUR_CYCLE` while skipping the too-similar pairs in `MAGIC_CLASH_PAIRS`; spaces are 9 columns wide (`WIDE_SPACE_GLYPH`); a word starting with `$` flashes; text is pushed off (`scroll_off_text`) before each movement attribute.
-- **RAINBOW** (`BC`) cycles red, orange, yellow, lime, green per character (`RAINBOW_COLOURS`, `RAINBOW_IDX`) until a colour attribute.
+- **Fetch/render pipeline.** `fetch_char` reads one store byte into `CUR_CHAR`; `render_next_char` runs the attribute checks (`attr_*_check`), then `glyph_lookup` → `glyph_bold`/`glyph_italic`/`glyph_big` build the styled glyph in `GLYPH_BUF*` and `glyph_blit` writes a color byte plus the columns into the 344-byte `FRAMEBUF` ring at `FB_COLPTR`. The panel is fed from the output window `FB_OUT_PTR`/`FB_OUT_LEN` (+`FB_EXTRA_LEN` after the wrap); `SCROLLING` is set until the window has caught up with `FB_COLPTR`, one column per frame, and `effect_step` waits for that.
+- **Effects stage through `TXBUF`.** With any `EFFECT_ID` other than 0 (LEFT), glyphs are staged into `TXBUF` via `STAGE_PTR` instead of the frame buffer. When the stage fills (`COL_COUNT` reaches 0) or a movement attribute arrives, the handler in `EFFECT_VECTOR` moves the staged frame onto the panel: `fxv_pause` (19) copies it at once and holds `FRAME_DELAY` = 0x50 frames (~1.3 s); `fxv_right` (0F) copies one column per frame left to right; `fxv_hold` (BB) blanks and copies right to left; `fxv_wipe_updown` (1A/1B) makes eight passes through a growing row mask. The text is centered by `STAGE_OFFSET` = free columns / 2. `FLUSH_PENDING` defers an attribute until the stage has been shown. `06` HALT is `fx_halt`: hold `HOLD_FRAMES` frames with every frame-buffer color byte reset to `8F` by `fb_colors_default`, so held text turns yellow and loses its background; WAIT does the same [H — owner].
+- **Holds and wipes.** `BB` HOLD blanks the display and wipes the held text in from right to left; `18` LEFT is the plain scroll, the effect to name after a PAUSE, HOLD, UP, DOWN or RIGHT section to get scrolling text back. `BD` MAGIC OFF ends MAGIC's automatic coloring and fonts; `B9` THIN goes with PAUSE, UP, DOWN, LEFT or RIGHT to keep text that stops on the display in the normal font, since held text is otherwise drawn bold [H — owner] [H — owner].
+- **FLASH is per word.** `14` sets `FLASH_PENDING`; the next printable byte moves it into `FLASH_BIT` (0x10), which is OR-ed into the color bytes until the next space. Two spaces in a row clear the background color bits.
+- **MAGIC mode** (`MAGIC_MODE`, 1F…BD) is `magic_preprocess`: each word gets a random font (words of six or more letters stay NORM), the color changes every 2–5 words or at `. ! ? : ,`, walking `MAGIC_COLOR_CYCLE` while skipping the too-similar pairs in `MAGIC_CLASH_PAIRS`; spaces are 9 columns wide (`WIDE_SPACE_GLYPH`); a word starting with `$` flashes; text is pushed off (`scroll_off_text`) before each movement attribute.
+- **RAINBOW** (`BC`) cycles red, orange, yellow, lime, green per character (`RAINBOW_COLORS`, `RAINBOW_IDX`) until a color attribute.
 - **DRAW** (`B8`): hex digit pairs are packed by `RRD` into `DRAW_BUF`, up to 16 columns, ended by the first non-hex byte (a `03` there is pushed back). Consecutive DRAW items butt together with no gap column (`DRAW_NO_GAP`).
 - **Glyphs `00`–`0F` are 14-column pairs:** `glyph_lookup` doubles their width so the second glyph slot is read as the right half.
 - **The clock** (`5F`) is `render_clock`: it re-enters `glyph_lookup` once per character for `H:MM AM/PM` (leading zero suppressed) using `CLK_RENDER_STEP`/`CLK_RENDER_PTR`, and afterwards forces a LEFT crawl (`CLK_RENDERED`).
@@ -286,7 +286,7 @@ Consumer (`editor_getkey 233F`): `code & 0x3F` → **`IR_KEY_TABLE` gives a glyp
 
 So SHIFT selects the alternate *function* layer **and** flips case, while `CAPS_LOCK` (`4358`, toggled at `216C`, defaults to `FF`) flips case alone. `SHIFT_STATE` (`4337`) and `EURO_STATE` (`4364`, toggled at `2184`) are both one-shot — cleared after every key.
 
-Both toggles live on **one physical key**, confirmed against the remote: it is labelled **UPPER/LOWER**, with **EUROPE** as its shifted function. Unshifted (key 41, IR code `95`, byte `1C`) it toggles `CAPS_LOCK`; shifted (byte `B6`) it toggles `EURO_STATE`. The EUROPE layer is not a graphics mode: it selects the 47 accented characters of §7, and the firmware displays "EURO" for it.
+Both toggles live on **one physical key**, confirmed against the remote: it is labeled **UPPER/LOWER**, with **EUROPE** as its shifted function. Unshifted (key 41, IR code `95`, byte `1C`) it toggles `CAPS_LOCK`; shifted (byte `B6`) it toggles `EURO_STATE`. The EUROPE layer is not a graphics mode: it selects the 47 accented characters of §7, and the firmware displays "EURO" for it.
 
 The tables are laid out 8 keys per row in the source with each entry glossed, so the full map is readable there. It cross-checks the attribute names from §7 independently: key 2 is BOLD unshifted and LEFT shifted, key 18 is MAGIC/MAGIC OFF, key 55 is COLOR/BGRND. Key 25 is SHIFT in every layer.
 

@@ -227,13 +227,13 @@ These are single bytes embedded in the message body. The editor letter is what y
 | A | Rainbow | `0xBC` (188) |
 | E, K, O, Q, V | Sync, sync&crawl, var. space, blank, date | **not supported on CC6x7** (listed "(LK)" = later models only) |
 
-### 5.5 Colours
+### 5.5 Colors
 
 The editor keys are `R O Y L G B` (foreground) and `r g y b` (background).
 
 Foreground: `0x80 | (red<<2) | green`, red/green intensity 0–3:
 
-| Editor | Colour | Byte |
+| Editor | Color | Byte |
 |---|---|---|
 | B | Black (off) | `0x80` |
 | R | Red | `0x8C` |
@@ -244,7 +244,7 @@ Foreground: `0x80 | (red<<2) | green`, red/green intensity 0–3:
 
 Background `0x90 | n`:
 
-| Editor | Colour | Byte |
+| Editor | Color | Byte |
 |---|---|---|
 | b | Black | `0x90` |
 | r | Red | `0x91` |
@@ -312,7 +312,7 @@ The sign's side of this protocol is read from the firmware itself, and lives in 
 | The patched firmware's 300 to 1200 baud, set by the first frame after a second of silence | [CC784_patched.md](CC784_patched.md#2-patches), patch 30 |
 | The frame parser state by state, ACK, NAK and the silent discard of other addresses | [firmware notes §4](CC784_firmware.md#4-packet-parser-pkt_st_-16ef178c-h) |
 | The complete command list, including the ones NETCC never sends, and the exact reply and dump frame formats | [firmware notes §5](CC784_firmware.md#5-packet-processing-and-command-set-pkt_process-2a68-h) |
-| Every attribute byte with the sign's own name for it, the colour codes, the graphics and the European characters | [firmware notes §7](CC784_firmware.md#7-rendering-h) |
+| Every attribute byte with the sign's own name for it, the color codes, the graphics and the European characters | [firmware notes §7](CC784_firmware.md#7-rendering-h) |
 | The board, the DB9 and the serial levels | [hardware notes §4](CC784_hardware.md#4-serial-port-h) |
 
 Two consequences for a host, both covered in detail there: the NETCC-style status query (`17 32`) is a truncated set-time that does nothing useful (and stops the stock firmware's clock), so use QUERY MEMORY and QUERY DUMP instead; and after a RAM loss the stock firmware answers only at address 0 (the patched firmware at 1) until an address is set, so `0x2A` broadcast is the way to reach an unknown sign.

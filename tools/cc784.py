@@ -13,7 +13,7 @@ Examples
     cc784.py msg 0 "HELLO WORLD"        # load channel 0 and display it
     cc784.py msg 1 "@B BOLD @F FLASH @R RED"  # single-letter escapes, see ESC
     cc784.py msg 2 "@{lime}LIME @{d-red}DIM RED @{bg yellow}@{black}ON YELLOW"
-                                         # braced: 16 firmware colour names, "bg <colour>",
+                                         # braced: 16 firmware color names, "bg <color>",
                                          # "speed N", attribute names, or a raw hex byte @{9f}
     cc784.py clear 0 1 2                # clear channels
     cc784.py clearall
@@ -53,7 +53,7 @@ ACK, NAK, START, DONE = 0x06, 0x15, 0xB1, 0x04   # DONE: patched firmware, after
 # ---- message escapes -------------------------------------------------------
 # Single-letter form:  @B bold, @R red ...   (see ESC)
 # Braced form:         @{lime} @{d-red} @{bg red} @{bg yellow} @{9f} @{speed 3}
-#   colour names are the firmware's own (menu strings), code = 0x80 + index:
+#   color names are the firmware's own (menu strings), code = 0x80 + index:
 FORE = ['black', 'd-gre', 'm-gre', 'green', 'd-red', 'd-yel', 'd-lim', 'lime',
         'm-red', 'd-ora', 'm-yel', 'lemon', 'red', 'orange', 'gold', 'yellow']
 #   i.e. 0x80 | red<<2 | green with red/green intensity 0..3.
@@ -88,7 +88,7 @@ def encode_text(s: str) -> bytes:
             elif len(name) == 2 and all(ch in '0123456789abcdef' for ch in name):
                 out.append(int(name, 16))                    # raw byte, e.g. @{9f}
             else:
-                sys.exit("unknown escape @{%s}. Colours: %s; backgrounds: %s"
+                sys.exit("unknown escape @{%s}. Colors: %s; backgrounds: %s"
                          % (name, ', '.join(FORE), ', '.join('bg ' + b for b in BACK)))
             i = j + 1
         elif c == '@' and i + 1 < len(s) and s[i + 1] in ESC:

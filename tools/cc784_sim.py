@@ -15,7 +15,7 @@ cc784_sim.py - run the CC784NIR ROM under emulation (kosarev's z80 core) with a 
     uv run tools/cc784_sim.py compare SRC_DIR_A SRC_DIR_B
         Assemble both, run the same scripted session with zeroed RAM, and compare the
         sequence of distinct frames the panel was sent plus every serial reply. A few
-        frames caught one scroll step apart are timing, not behaviour.
+        frames caught one scroll step apart are timing, not behavior.
 
     uv run tools/cc784_sim.py eeprom
         Self-test of the banked EEPROM model below (no firmware involved).
@@ -46,7 +46,7 @@ The ROM is an AT28C256 with the OTA bodges (CC784_ota.md §2): /WE on Z80 /WR,
 /OE on /RD, A14..A16 from BANK_REG, a '273 written at C000 and zero at reset.
 Page writes, the 150 us byte-load timer, the 10 ms write cycle (every ROM read
 returns the status byte; an instruction fetch then is a fault) and software
-data protection are modelled; so is the board's watchdog, which zeroes
+data protection are modeled; so is the board's watchdog, which zeroes
 CTRL_LATCH 512 us after the last interrupt acknowledge. Faults are collected in
 Sign.faults rather than raised, so a session can report them at the end.
 """
@@ -325,7 +325,7 @@ class Sign:
             if self.t - self.last_out_t > 3000:    # a burst pauses for the engines, bursts are a tick apart
                 self.row_starts.append((self.t, port & 0x0f))
             self.last_out_t = self.t
-        if port & 0xff == 0x4e:           # ROW_INDEX 0, second pass: colour byte + 86 columns
+        if port & 0xff == 0x4e:           # ROW_INDEX 0, second pass: color byte + 86 columns
             self.burst.append(value)
             if len(self.burst) == 87:
                 f = bytes(self.burst); self.burst = []
@@ -1257,7 +1257,7 @@ def session(rom, syms):
 
 def _transient(f):
     """a frame the panel only sees because the row-0 pass fell inside an effect's
-    rewrite: blank after clear_framebuf, or a fill in progress (run of colour bytes)"""
+    rewrite: blank after clear_framebuf, or a fill in progress (run of color bytes)"""
     d = f[1:]
     if all(c == 0x80 for c in d):
         return True
@@ -1279,7 +1279,7 @@ def _phase_artefact(fa, fb):
 
 
 def _extra_is_phase(f, own, idx):
-    """an inserted/deleted frame is timing if it is a scroll step of its neighbour"""
+    """an inserted/deleted frame is timing if it is a scroll step of its neighbor"""
     if _transient(f):
         return True
     for n in (idx - 1, idx + 1):
@@ -1323,7 +1323,7 @@ def cmd_compare(dir_a, dir_b):
         if ta != tb:
             print('    A', ta[:70]); print('    B', tb[:70])
         clean &= real == 0 and (ta == tb or name == "B4 '1'")   # B4 '1' reports the store size
-    print('OK: same behaviour' if clean else 'CHECK: real frame differences or reply mismatch')
+    print('OK: same behavior' if clean else 'CHECK: real frame differences or reply mismatch')
 
 
 if __name__ == '__main__':

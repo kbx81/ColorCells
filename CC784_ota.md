@@ -104,7 +104,7 @@ uv run tools/cc784_ota.py push src/patched/cc784nir_bank.bin -p <port>          
 
 ## 6. Testing
 
-Everything above is modelled in `tools/cc784_sim.py` (AT28C256 with banks, page timing, SDP and the watchdog). Before pushing a firmware change, run:
+Everything above is modeled in `tools/cc784_sim.py` (AT28C256 with banks, page timing, SDP and the watchdog). Before pushing a firmware change, run:
 
 | Command | Proves |
 |---|---|

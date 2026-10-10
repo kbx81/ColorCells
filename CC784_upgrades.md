@@ -95,7 +95,7 @@ EEPROM out of its socket for its three checks.
 
 ### Power on — 5 min
 
-With no battery, RAM comes up invalid and the patched firmware re-initialises: empty store, default sequence, address 1.
+With no battery, RAM comes up invalid and the patched firmware re-initializes: empty store, default sequence, address 1.
 
 - [ ] Sign powers up, no heat, no smell.
 - [ ] About a second of dark before anything shows: the stub CRCs the bank before running it.

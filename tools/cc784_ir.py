@@ -61,7 +61,7 @@ KEYS = {
 # Special handling in the firmware:
 #   36 (STOP/START): in display mode stops the display and enters the editor/menu; never auto-repeats
 #   44 (CLEAR): shifted = CLEAR ALL (prompts CLR ALL Y/N)
-#   37 (SPACE): code 0xA5 is also recognised directly by rx_consume
+#   37 (SPACE): code 0xA5 is also recognized directly by rx_consume
 #   29 (SHIFT): toggles the shifted charset; not passed through the table
 #   47 ('A')  : code 0xAF is also treated like STOP/START when leaving the editor (editor_exit)
 

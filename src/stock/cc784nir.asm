@@ -5,6 +5,10 @@
 ;      md5 c021af146a50b93a22d13535201b7eaa
 ;  FROZEN. Annotations may be added; code must not change. The patched
 ;  variant is ../patched/cc784nir.asm.
+;
+;  The firmware is copyright its original owner (Color Cells / Innovative Sign
+;  Technology, 1993, and successors); reconstructed for preservation and
+;  interoperability. The labels and comments are MIT, see ../../LICENSE.
 ; ============================================================================
         DEVICE NONE
         OUTPUT "cc784nir.bin"
@@ -18,10 +22,10 @@ FRAMEBUF_TINY        equ FRAMEBUF+0xab   ; TINY line buffer inside the ring
 RAM_VARS             equ FRAMEBUF+FRAMEBUF_SIZE
 FB_COLPTR            equ RAM_VARS+0x000   ; frame-buffer write pointer (next glyph column)
 FB_COL               equ RAM_VARS+0x003   ; scroll position: the column the output window is moving toward
-BGRND_PENDING        equ RAM_VARS+0x009   ; editor: BGRND key pressed, next key is the colour digit
+BGRND_PENDING        equ RAM_VARS+0x009   ; editor: BGRND key pressed, next key is the color digit
 TXBUF                equ RAM_VARS+0x00a   ; reply frames, and the effect staging frame (86 columns)
 STAGE_PTR            equ RAM_VARS+0x060   ; next free column in TXBUF while an effect stages text
-STAGE_OFFSET         equ RAM_VARS+0x063   ; centring offset of the staged text (free columns / 2)
+STAGE_OFFSET         equ RAM_VARS+0x063   ; centering offset of the staged text (free columns / 2)
 ROW_PORT             equ RAM_VARS+0x065   ; port group for the row data: 40 first pass, 48 second
 BEEP_TICKS           equ RAM_VARS+0x066   ; beeper on while non-zero (port bit 5); beep_start loads BEEP_LEN
 CLK_H10              equ RAM_VARS+0x068
@@ -33,7 +37,7 @@ CLK_PM               equ RAM_VARS+0x06d
 CLK_RUN              equ RAM_VARS+0x06e
 GLYPH_WIDTH          equ RAM_VARS+0x06f
 GLYPH_PTR            equ RAM_VARS+0x070
-CUR_COLOUR           equ RAM_VARS+0x074
+CUR_COLOR            equ RAM_VARS+0x074
 SCROLLING            equ RAM_VARS+0x075   ; FF while the output window is catching up with FB_COLPTR
 CUR_CHAR             equ RAM_VARS+0x076
 FB_OUT_PTR           equ RAM_VARS+0x078   ; first column sent to the panel (start of the output window)
@@ -42,7 +46,7 @@ MENU_ACTIVE          equ RAM_VARS+0x07f
 INS_PTR              equ RAM_VARS+0x080
 MAGIC_MODE           equ RAM_VARS+0x082   ; FF between MAGIC (1F) and MAGIC OFF (BD)
 COL_COUNT            equ RAM_VARS+0x084   ; columns still free in the staging frame; 0 = no staging (LEFT)
-ROW_COLOUR           equ RAM_VARS+0x08a   ; colour byte sent ahead of each row
+ROW_COLOR            equ RAM_VARS+0x08a   ; color byte sent ahead of each row
 QUERIES_ENABLED      equ RAM_VARS+0x08b   ; FF after boot; gates query_dispatch
 EDIT_KEY             equ RAM_VARS+0x08d   ; key/character the editor is processing (0 = none)
 RX_BYTE              equ RAM_VARS+0x090
@@ -95,10 +99,10 @@ IR_SHIFT             equ RAM_VARS+0x1ed
 IR_CODE              equ RAM_VARS+0x1ee
 TICK_VECTOR          equ RAM_VARS+0x1f0
 MAGIC_LAST_CHAR      equ RAM_VARS+0x1fb   ; magic mode: last char of the current word (punctuation check)
-MAGIC_COLOUR_SET     equ RAM_VARS+0x1fc   ; magic mode: colour set by an attribute, skip the auto change
+MAGIC_COLOR_SET      equ RAM_VARS+0x1fc   ; magic mode: color set by an attribute, skip the auto change
 RND_SEED             equ RAM_VARS+0x1fe
 MAGIC_FONT_SET       equ RAM_VARS+0x1ff   ; magic mode: font set by an attribute, skip the random pick
-RND_VAL              equ RAM_VARS+0x200   ; magic mode: words until the next colour change
+RND_VAL              equ RAM_VARS+0x200   ; magic mode: words until the next color change
 CHAN_D10             equ RAM_VARS+0x204
 CHAN_D1              equ RAM_VARS+0x205
 MENU_ENTRY_BUF       equ RAM_VARS+0x22d
@@ -132,11 +136,11 @@ MENU_MSG_PTR         equ RAM_VARS+0x072   ; message the editor is showing (set w
 TEST_MODE            equ RAM_VARS+0x077   ; FF = display the ROM-checksum test message (SEQ MSG? then MAGIC, C)
 CLK_RENDER_STEP      equ RAM_VARS+0x07b   ; clock (5F) render step 0..8; FF = finished
 CLK_RENDER_PTR       equ RAM_VARS+0x07c   ; clock render: next CLK_ digit to emit
-WINDOW_COLOUR        equ RAM_VARS+0x083   ; last colour byte at the output window start (bit 4 = flash)
+WINDOW_COLOR         equ RAM_VARS+0x083   ; last color byte at the output window start (bit 4 = flash)
 FRAME_COUNT          equ RAM_VARS+0x085   ; frames since LATCH_BIT7 last toggled (mod 13)
-FLASH_BIT            equ RAM_VARS+0x086   ; 0x10 while the current word flashes; OR-ed into colour bytes
+FLASH_BIT            equ RAM_VARS+0x086   ; 0x10 while the current word flashes; OR-ed into color bytes
 LATCH_BIT7           equ RAM_VARS+0x087   ; 00/80 toggled every 13 frames, OR-ed into CTRL_LATCH bit 7
-COLOR_PENDING        equ RAM_VARS+0x088   ; editor: COLOR key pressed, next key is the colour digit
+COLOR_PENDING        equ RAM_VARS+0x088   ; editor: COLOR key pressed, next key is the color digit
 GRAPH_PENDING        equ RAM_VARS+0x089   ; editor: GRAPH key pressed, next key selects A0-AF
 MENU_MSG_FLAG        equ RAM_VARS+0x08c   ; FF = editor has a message to display
 PREV_KEY             equ RAM_VARS+0x08e   ; editor key history (written, never read)
@@ -163,7 +167,7 @@ CAPS_LOCK            equ RAM_VARS+0x1c0
 SEQ_SET              equ RAM_VARS+0x1c2   ; FF = sequence set by hand; do not auto-add the edited channel
 DRAW_PREV            equ RAM_VARS+0x1c8   ; FF = previous item was a DRAW graphic
 CLK_RENDERED         equ RAM_VARS+0x1c9   ; FF just after a clock display; forces LEFT in an effect
-MAGIC_COLOUR_IDX     equ RAM_VARS+0x1ca   ; index into MAGIC_COLOUR_CYCLE
+MAGIC_COLOR_IDX      equ RAM_VARS+0x1ca   ; index into MAGIC_COLOR_CYCLE
 STORE_BAD_COUNT      equ RAM_VARS+0x1cb   ; bytes replaced by ? in store_fix_bad_bytes (never read)
 EURO_STATE           equ RAM_VARS+0x1cc
 DRAW_BUF             equ RAM_VARS+0x1cd   ; 16 packed hex columns of a DRAW graphic
@@ -174,13 +178,13 @@ NEW_MSG_CHAN         equ RAM_VARS+0x1f7   ; channel chosen for a new MAGIC messa
 MAGIC_FX_PREV        equ RAM_VARS+0x1f8   ; FF = last byte was a movement attribute (magic mode)
 MAGIC_FLASH_WORD     equ RAM_VARS+0x1f9   ; '$' = flash the word that starts with $ (magic mode)
 EDITOR_FIRST_KEY     equ RAM_VARS+0x1fa   ; FF until the first key in the editor is processed
-MAGIC_WORD_COUNT     equ RAM_VARS+0x1fd   ; words since the last colour change (magic mode)
+MAGIC_WORD_COUNT     equ RAM_VARS+0x1fd   ; words since the last color change (magic mode)
 MAGIC_MSG_CHAN       equ RAM_VARS+0x201   ; channel to announce as MAGIC MSG nn on redraw (0 = none)
 REDRAW_MAGIC         equ RAM_VARS+0x202   ; editor redraw: MAGIC seen, font resets at each word
 DRAW_NO_GAP          equ RAM_VARS+0x203   ; FF = butt this DRAW graphic against the previous one
 FLASH_PENDING        equ RAM_VARS+0x20a   ; 0x10 after FLASH until the next printable char
 TEXT_DRAWN           equ RAM_VARS+0x20b   ; FF once a printable char has been drawn since init_render
-RAINBOW_IDX          equ RAM_VARS+0x20c   ; RAINBOW per-char colour index, 0 = off
+RAINBOW_IDX          equ RAM_VARS+0x20c   ; RAINBOW per-char color index, 0 = off
 TEST_MSG_BUF         equ RAM_VARS+0x20d   ; RAM copy of TEST_MESSAGE plus the ROM checksum, 28 bytes
 FUNC_PENDING         equ RAM_VARS+0x232   ; editor: FUNC (B7) pressed, next key picks the second function
 SCROLL_SPEED         equ RAM_VARS+0x235   ; 0..7 from F0-F7; blank ticks inserted after every frame
@@ -206,7 +210,7 @@ CMD_DELETE_TEXT      equ 0x0e
 CMD_FORE_IDX         equ 0x15        ; 15 n
 CMD_BACK_IDX         equ 0x16        ; 16 n
 CMD_SET_TIME         equ 0x17        ; 17 hhmm a
-CMD_COLOUR_A0        equ 0x1e        ; 1E n
+CMD_COLOR_A0         equ 0x1e        ; 1E n
 CMD_APPEND           equ 0xb3
 CMD_QUERY            equ 0xb4        ; B4 c
 QUERY_ROMID          equ '0'
@@ -260,9 +264,9 @@ ATTR_HOLD            equ 0xbb
 ATTR_RAINBOW         equ 0xbc
 ATTR_MAGIC_OFF       equ 0xbd
 ATTR_TINY            equ 0xbe
-COLOUR_BASE          equ 0x80        ; 80-8F foreground: bits 0-1 green, 2-3 red intensity
-COLOUR_DEFAULT       equ 0x8f        ; yellow, full
-COLOUR_FLASH         equ 0x10        ; the FLASH bit in a frame-buffer colour byte
+COLOR_BASE           equ 0x80        ; 80-8F foreground: bits 0-1 green, 2-3 red intensity
+COLOR_DEFAULT        equ 0x8f        ; yellow, full
+COLOR_FLASH          equ 0x10        ; the FLASH bit in a frame-buffer color byte
 BGRND_BASE           equ 0x90        ; 90-93 background
 GRAPH_BASE           equ 0xa0        ; A0-AF built-in graphics
 SPEED_BASE           equ 0xf0        ; F0-F7 scroll speed
@@ -458,11 +462,11 @@ row_output:
         LD A,(IX+0)
         OR (IX+1)
         POP IX
-        JR z,row_out_colour
+        JR z,row_out_color
         SET 5,C
 
-row_out_colour:
-        LD A,(ROW_COLOUR)
+row_out_color:
+        LD A,(ROW_COLOR)
         OUT (C),A
         LD A,B
         AND A
@@ -568,12 +572,12 @@ frame_scroll:
         LD DE,(FB_COLPTR)
         OR A
         SBC HL,DE
-        JR nz,frame_colour
+        JR nz,frame_color
 
 frame_scroll_stop:
         XOR A
         LD (SCROLLING),A
-        JP frame_colour
+        JP frame_color
 
 frame_check_still:
         LD HL,(FB_OUT_PTR)
@@ -582,23 +586,23 @@ frame_check_still:
         SBC HL,DE
         JP z,frame_bit7_tick
 
-frame_colour:
+frame_color:
         LD HL,(FB_COL)
         BIT 7,(HL)
-        JR z,frame_latch_colour
+        JR z,frame_latch_color
         LD A,(HL)
-        LD (WINDOW_COLOUR),A
+        LD (WINDOW_COLOR),A
 
-frame_latch_colour:
+frame_latch_color:
         LD A,(EFFECT_ID)
         AND A
-        LD A,(WINDOW_COLOUR)
+        LD A,(WINDOW_COLOR)
         JR z,frame_set_window
-        AND COLOUR_FLASH
-        OR COLOUR_DEFAULT
+        AND COLOR_FLASH
+        OR COLOR_DEFAULT
 
 frame_set_window:
-        LD (ROW_COLOUR),A
+        LD (ROW_COLOR),A
         LD HL,(FB_COL)
         LD (FB_OUT_PTR),HL
         LD HL,FB_COLPTR
@@ -1145,7 +1149,7 @@ init_clear_addrbuf:
         LD (CLK_RENDERED),A
         LD (FLASH_PENDING),A
         LD (MAGIC_FONT_SET),A
-        LD (MAGIC_COLOUR_SET),A
+        LD (MAGIC_COLOR_SET),A
         LD (RAINBOW_IDX),A
         LD (REDRAW_MAGIC),A
         LD (MAGIC_MSG_CHAN),A
@@ -1231,7 +1235,7 @@ INIT_DATA:
         db 0x00               ; 4207 GLYPH_WIDTH
         dw 0x0000             ; 4208 GLYPH_PTR
         dw 0x0000             ; 420a MENU_MSG_PTR
-        db 0x0f               ; 420c CUR_COLOUR
+        db 0x0f               ; 420c CUR_COLOR
         db 0x00               ; 420d SCROLLING
         db 0x00               ; 420e CUR_CHAR
         db 0x00               ; 420f TEST_MODE
@@ -1243,14 +1247,14 @@ INIT_DATA:
         db 0x00               ; 4217 MENU_ACTIVE
         dw 0x0000             ; 4218 INS_PTR
         db 0x00               ; 421a MAGIC_MODE
-        db 0x00               ; 421b WINDOW_COLOUR
+        db 0x00               ; 421b WINDOW_COLOR
         db 0x0f               ; 421c COL_COUNT
         db 0x00               ; 421d FRAME_COUNT
         db 0x00               ; 421e FLASH_BIT
         db 0x0a               ; 421f LATCH_BIT7
         db 0x00               ; 4220 COLOR_PENDING
         db 0x00               ; 4221 GRAPH_PENDING
-        db 0x00               ; 4222 ROW_COLOUR
+        db 0x00               ; 4222 ROW_COLOR
         db 0x0f               ; 4223 QUERIES_ENABLED
         db 0x00               ; 4224 MENU_MSG_FLAG
         db 0x00               ; 4225 EDIT_KEY
@@ -1353,7 +1357,7 @@ init_render:
         LD (CLK_RENDER_STEP),A
         LD (MAGIC_MODE),A
         LD (FLASH_BIT),A
-        LD (MAGIC_COLOUR_SET),A
+        LD (MAGIC_COLOR_SET),A
         LD (REDRAW_MAGIC),A
         LD (MAGIC_FONT_SET),A
         LD (RND_VAL),A
@@ -1367,10 +1371,10 @@ init_render:
         LD (TINY_MODE),A
         LD (FONT_MODE),A
         LD (THIN_MODE),A
-        LD A,COLOUR_DEFAULT
-        LD (WINDOW_COLOUR),A
-        LD (ROW_COLOUR),A
-        LD (CUR_COLOUR),A
+        LD A,COLOR_DEFAULT
+        LD (WINDOW_COLOR),A
+        LD (ROW_COLOR),A
+        LD (CUR_COLOR),A
         LD HL,fxv_none
         LD (EFFECT_VECTOR),HL
         LD HL,FRAMEBUF_ROW1
@@ -1384,7 +1388,7 @@ init_render:
         RET
 
 ; ---- track_flash_space: FLASH takes effect at the next printable char and ends
-;      at the next space; two spaces in a row clear the background colour
+;      at the next space; two spaces in a row clear the background color
 track_flash_space:
         LD A,(CUR_CHAR)
         CP ' '
@@ -1422,9 +1426,9 @@ double_space:
         LD A,(TEST_MODE)
         INC A
         JR z,track_done
-        LD A,(CUR_COLOUR)
+        LD A,(CUR_COLOR)
         AND 15
-        LD (CUR_COLOUR),A
+        LD (CUR_COLOR),A
 
 track_done:
         RET
@@ -1469,7 +1473,7 @@ class_not_a0:
 
 class_high:
         CP 0x94
-        JP c,attr_colour_speed
+        JP c,attr_color_speed
         CP GRAPH_BASE
         JR c,glyph_lookup
         AND 0xf0
@@ -1478,7 +1482,7 @@ class_high:
         CP 0xe0
         JR z,glyph_lookup
         CP 0xd0
-        JP nz,attr_colour_speed
+        JP nz,attr_color_speed
 
 ; ---- glyph_lookup: HL = FONT + 8*glyph_index(CUR_CHAR); GLYPH_WIDTH = byte 7 of the glyph
 glyph_lookup:
@@ -1555,7 +1559,7 @@ glyph_direct:
         LD A,0
         LD (EFFECT_ID_COPY),A
 
-; ---- glyph_blit: write colour byte + glyph columns at FB_COLPTR
+; ---- glyph_blit: write color byte + glyph columns at FB_COLPTR
 glyph_blit:
         LD A,(MAGIC_MODE)
         AND A
@@ -1577,11 +1581,11 @@ blit_setup:
         AND A
         JR z,blit_flash_bit
         LD A,15
-        LD (CUR_COLOUR),A
+        LD (CUR_COLOR),A
         LD A,(TINY_MODE)
         AND A
         LD C,0
-        JR nz,blit_colour
+        JR nz,blit_color
 
 blit_flash_bit:
         LD A,(MAGIC_FLASH_WORD)
@@ -1598,16 +1602,16 @@ blit_use_flash:
 blit_set_c:
         LD C,A
 
-blit_colour:
+blit_color:
         PUSH BC
         LD A,(CUR_CHAR)
         CP ' '
         LD C,0xf0
-        JR z,blit_write_colour
+        JR z,blit_write_color
         LD C,0xff
 
-blit_write_colour:
-        LD A,(CUR_COLOUR)
+blit_write_color:
+        LD A,(CUR_COLOR)
         AND C
         POP BC
         OR C
@@ -1653,7 +1657,7 @@ glyph_stage:
         JP nc,fx_flush_stage
         LD DE,(STAGE_PTR)
         LD A,(FLASH_BIT)
-        OR COLOUR_DEFAULT
+        OR COLOR_DEFAULT
         LD (DE),A
         LD A,(DRAW_NO_GAP)
         AND A
@@ -1739,7 +1743,7 @@ attr_hold_check:
         POP HL
         JP fx_attr
 
-; ---- attr_rainbow: BC starts the per-character colour cycle
+; ---- attr_rainbow: BC starts the per-character color cycle
 attr_rainbow:
         LD A,(CUR_CHAR)
         CP ATTR_RAINBOW
@@ -1747,13 +1751,13 @@ attr_rainbow:
         LD A,(MAGIC_MODE)
         AND A
         JR z,rainbow_on
-        LD A,(RAINBOW_COLOURS+1)
-        LD (CUR_COLOUR),A
+        LD A,(RAINBOW_COLORS+1)
+        LD (CUR_COLOR),A
 
 rainbow_on:
         LD A,1
         LD (RAINBOW_IDX),A
-        LD (MAGIC_COLOUR_SET),A
+        LD (MAGIC_COLOR_SET),A
         POP HL
         JP render_next_char
 
@@ -1779,24 +1783,24 @@ rainbow_step:
 rainbow_lookup:
         LD E,A
         LD D,0
-        LD HL,RAINBOW_COLOURS
+        LD HL,RAINBOW_COLORS
         ADD HL,DE
         LD A,(HL)
         CP 0xff
         JR nz,rainbow_apply
         LD E,1
-        LD A,(RAINBOW_COLOURS+1)
+        LD A,(RAINBOW_COLORS+1)
 
 rainbow_apply:
         AND 15
-        LD (CUR_COLOUR),A
+        LD (CUR_COLOR),A
         LD A,E
         LD (RAINBOW_IDX),A
         LD A,(CUR_CHAR)
         RET
 
-; ---- RAINBOW_COLOURS: per-character cycle red, orange, yellow, lime, green
-RAINBOW_COLOURS:
+; ---- RAINBOW_COLORS: per-character cycle red, orange, yellow, lime, green
+RAINBOW_COLORS:
         db 0x00,0x8c,0x8d,0x8f,0x87,0x83,0xff,0xff
 
 attr_remark_check:
@@ -1838,7 +1842,7 @@ attr_wait_check:
         RET
 
 wait_for_key:
-        CALL fb_colours_default
+        CALL fb_colors_default
         XOR A
         LD (RX_BYTE),A
         LD (IR_CODE),A
@@ -1978,7 +1982,7 @@ hexval_bad:
         LD A,0xff
         RET
 
-; ---- magic_preprocess: MAGIC mode: random font per word, colour change every
+; ---- magic_preprocess: MAGIC mode: random font per word, color change every
 ;      few words or at punctuation, text pushed off before movement attributes
 magic_preprocess:
         LD A,(MENU_ACTIVE)
@@ -2032,7 +2036,7 @@ magic_attr:
 magic_effect_attr:
         XOR A
         LD (MAGIC_FONT_SET),A
-        LD (MAGIC_COLOUR_SET),A
+        LD (MAGIC_COLOR_SET),A
         LD A,(MAGIC_FX_PREV)
         AND A
         RET nz
@@ -2076,7 +2080,7 @@ magic_other:
         JP z,magic_printable
         CP 0x20
         JP c,magic_ret
-        CP COLOUR_BASE
+        CP COLOR_BASE
         JP nc,magic_ret
 
 magic_printable:
@@ -2097,7 +2101,7 @@ magic_word_start:
 magic_pick_font:
         AND 0xf0
         CP GRAPH_BASE
-        JP z,magic_colour_check
+        JP z,magic_color_check
         LD A,(MAGIC_FONT_SET)
         AND A
         LD A,0
@@ -2144,18 +2148,18 @@ magic_font_normal:
 magic_count_words:
         LD A,(MAGIC_WORD_COUNT)
         CP 3
-        JP nc,magic_colour_check
+        JP nc,magic_color_check
         LD A,(RND_VAL)
         AND A
         JP z,magic_reseed
         DEC A
         JP z,magic_reseed
         LD (RND_VAL),A
-        LD A,(MAGIC_COLOUR_SET)
+        LD A,(MAGIC_COLOR_SET)
         AND A
         JR z,magic_reset_words
         XOR A
-        LD (MAGIC_COLOUR_SET),A
+        LD (MAGIC_COLOR_SET),A
         LD (RND_VAL),A
         JP magic_reset_words
 
@@ -2166,61 +2170,61 @@ magic_reseed:
         ADD A,2
         LD (RND_VAL),A
 
-magic_colour_check:
-        LD A,(MAGIC_COLOUR_SET)
+magic_color_check:
+        LD A,(MAGIC_COLOR_SET)
         AND A
-        JR z,magic_next_colour
+        JR z,magic_next_color
         XOR A
-        LD (MAGIC_COLOUR_SET),A
+        LD (MAGIC_COLOR_SET),A
         LD (RND_VAL),A
         JP magic_reset_words
 
-magic_next_colour:
+magic_next_color:
         XOR A
         LD (RAINBOW_IDX),A
-        LD A,(MAGIC_COLOUR_IDX)
+        LD A,(MAGIC_COLOR_IDX)
         INC A
         LD E,A
         LD A,(NMI_COUNT)
         ADD A,E
 
-magic_colour_try:
+magic_color_try:
         AND 15
-        LD (MAGIC_COLOUR_IDX),A
+        LD (MAGIC_COLOR_IDX),A
         LD E,A
         LD D,0
-        LD HL,MAGIC_COLOUR_CYCLE
+        LD HL,MAGIC_COLOR_CYCLE
         ADD HL,DE
-        LD A,(CUR_COLOUR)
+        LD A,(CUR_COLOR)
         AND 15
         CP (HL)
-        JR z,magic_colour_retry
-        LD A,(CUR_COLOUR)
+        JR z,magic_color_retry
+        LD A,(CUR_COLOR)
         LD E,A
         LD D,(HL)
         LD A,D
-        LD HL,CUR_COLOUR
+        LD HL,CUR_COLOR
         RLD
         LD A,(HL)
         LD HL,MAGIC_CLASH_PAIRS
         LD BC,6
         OR A
         CPIR
-        JP nz,magic_colour_apply
+        JP nz,magic_color_apply
         LD A,E
-        LD (CUR_COLOUR),A
+        LD (CUR_COLOR),A
 
-magic_colour_retry:
-        LD A,(MAGIC_COLOUR_IDX)
+magic_color_retry:
+        LD A,(MAGIC_COLOR_IDX)
         INC A
-        JR magic_colour_try
+        JR magic_color_try
 
-magic_colour_apply:
+magic_color_apply:
         LD A,E
-        AND COLOUR_FLASH
+        AND COLOR_FLASH
         OR D
         AND 0x1f
-        LD (CUR_COLOUR),A
+        LD (CUR_COLOR),A
 
 magic_reset_words:
         XOR A
@@ -2233,8 +2237,8 @@ magic_ret:
 ;      other in MAGIC mode: yellow/lime, yellow/orange, red/orange
 MAGIC_CLASH_PAIRS:
         db 0xf7,0x7f,0xfd,0xdf,0xcd,0xdc
-; ---- MAGIC_COLOUR_CYCLE: the 16 foregrounds MAGIC mode walks through
-MAGIC_COLOUR_CYCLE:
+; ---- MAGIC_COLOR_CYCLE: the 16 foregrounds MAGIC mode walks through
+MAGIC_COLOR_CYCLE:
         db 0x07,0x0c,0x0f,0x03,0x0c,0x03,0x0d,0x03,0x0f,0x03
         db 0x0c,0x03,0x03,0x0c,0x0f,0x0c
 
@@ -2530,7 +2534,7 @@ fx_done_effect:
         AND A
         JR z,fx_toggle_flush
         LD A,15
-        LD (CUR_COLOUR),A
+        LD (CUR_COLOR),A
 
 fx_toggle_flush:
         LD A,(FLUSH_PENDING)
@@ -2577,7 +2581,7 @@ attr_not_bold:
 attr_not_italic:
         CP ATTR_FLASH
         JP nz,attr_not_flash
-        LD A,COLOUR_FLASH
+        LD A,COLOR_FLASH
         LD (FLASH_PENDING),A
         JP render_next_char
 
@@ -2726,7 +2730,7 @@ set_effect_vector:
 fx_magic:
         XOR A
         LD (FLASH_PENDING),A
-        LD (MAGIC_COLOUR_SET),A
+        LD (MAGIC_COLOR_SET),A
         LD (MAGIC_FONT_SET),A
         LD (RAINBOW_IDX),A
         LD (MAGIC_FX_PREV),A
@@ -2741,42 +2745,42 @@ fx_magic:
         AND 3
         ADD A,2
         LD (RND_VAL),A
-        CALL magic_first_colour
+        CALL magic_first_color
         JP render_next_char
 
-; ---- magic_first_colour: first colour of the cycle when MAGIC starts
-magic_first_colour:
+; ---- magic_first_color: first color of the cycle when MAGIC starts
+magic_first_color:
         LD A,(MENU_ACTIVE)
         AND A
         RET nz
         LD A,(EFFECT_ID)
         AND A
         RET nz
-        LD A,(MAGIC_COLOUR_IDX)
+        LD A,(MAGIC_COLOR_IDX)
         INC A
         AND 15
-        LD (MAGIC_COLOUR_IDX),A
+        LD (MAGIC_COLOR_IDX),A
         LD E,A
         LD D,0
-        LD HL,MAGIC_COLOUR_CYCLE
+        LD HL,MAGIC_COLOR_CYCLE
         ADD HL,DE
         LD A,(HL)
         AND 15
-        LD (CUR_COLOUR),A
+        LD (CUR_COLOR),A
         RET
 
-; ---- attr_magic_off: 0xBD: leave MAGIC mode, default colour and font
+; ---- attr_magic_off: 0xBD: leave MAGIC mode, default color and font
 attr_magic_off:
         XOR A
         LD (MAGIC_MODE),A
         LD (MAGIC_FONT_SET),A
-        LD (MAGIC_COLOUR_SET),A
+        LD (MAGIC_COLOR_SET),A
         LD (FONT_MODE),A
-        LD A,COLOUR_DEFAULT
-        LD (CUR_COLOUR),A
+        LD A,COLOR_DEFAULT
+        LD (CUR_COLOR),A
         JP render_next_char
 
-; ---- fx_halt: 06: hold HOLD_FRAMES frames (~1.3 s) with the colours reset
+; ---- fx_halt: 06: hold HOLD_FRAMES frames (~1.3 s) with the colors reset
 fx_halt:
         XOR A
         LD (SCROLLING),A
@@ -2792,7 +2796,7 @@ halt_wait_frames:
 halt_hold:
         LD A,HOLD_FRAMES
         LD (FRAME_DELAY),A
-        CALL fb_colours_default
+        CALL fb_colors_default
         LD HL,(STORE_CURSOR)
         LD A,(HL)
         CP ATTR_LEFT
@@ -2804,8 +2808,8 @@ halt_hold:
         LD (COL_COUNT),A
         JP render_next_char
 
-; ---- fb_colours_default: every colour byte in FRAMEBUF -> 8F, keeping flash
-fb_colours_default:
+; ---- fb_colors_default: every color byte in FRAMEBUF -> 8F, keeping flash
+fb_colors_default:
         LD HL,FRAMEBUF
         LD BC,FRAMEBUF_SIZE
 
@@ -2813,8 +2817,8 @@ fbcol_loop:
         BIT 7,(HL)
         JR z,fbcol_next
         LD A,(HL)
-        AND COLOUR_FLASH
-        OR COLOUR_DEFAULT
+        AND COLOR_FLASH
+        OR COLOR_DEFAULT
         LD (HL),A
 
 fbcol_next:
@@ -2823,27 +2827,27 @@ fbcol_next:
         LD A,C
         OR B
         JR nz,fbcol_loop
-        LD A,(WINDOW_COLOUR)
-        AND COLOUR_FLASH
-        OR COLOUR_DEFAULT
-        LD (WINDOW_COLOUR),A
-        LD (ROW_COLOUR),A
+        LD A,(WINDOW_COLOR)
+        AND COLOR_FLASH
+        OR COLOR_DEFAULT
+        LD (WINDOW_COLOR),A
+        LD (ROW_COLOR),A
         LD E,A
         LD A,(MAGIC_MODE)
         AND A
         RET z
         LD A,15
-        LD (CUR_COLOUR),A
+        LD (CUR_COLOR),A
         RET
 
-; ---- attr_colour_speed: 0x8x foreground colour, 0x9x background, 0xFx speed, 0xBD MAGIC OFF
-attr_colour_speed:
+; ---- attr_color_speed: 0x8x foreground color, 0x9x background, 0xFx speed, 0xBD MAGIC OFF
+attr_color_speed:
         LD A,(CUR_CHAR)
         AND 0xf0
-        CP COLOUR_BASE
-        JP z,attr_fore_colour
+        CP COLOR_BASE
+        JP z,attr_fore_color
         CP BGRND_BASE
-        JP z,attr_back_colour
+        JP z,attr_back_color
         CP SPEED_BASE
         JP z,attr_speed
         LD A,(CUR_CHAR)
@@ -2851,37 +2855,37 @@ attr_colour_speed:
         JP z,attr_magic_off
         JP render_next_char
 
-; ---- attr_fore_colour
-attr_fore_colour:
+; ---- attr_fore_color
+attr_fore_color:
         XOR A
         LD (RAINBOW_IDX),A
         LD A,(MAGIC_MODE)
         AND A
         JR z,fore_set
-        LD A,(CUR_COLOUR)
+        LD A,(CUR_COLOR)
         AND 0xcf
-        LD (CUR_COLOUR),A
+        LD (CUR_COLOR),A
 
 fore_set:
         LD A,(CUR_CHAR)
         AND 15
         LD E,A
-        LD A,(CUR_COLOUR)
+        LD A,(CUR_COLOR)
         AND 0x60
         OR E
-        LD (CUR_COLOUR),A
+        LD (CUR_COLOR),A
         LD A,0xff
-        LD (MAGIC_COLOUR_SET),A
+        LD (MAGIC_COLOR_SET),A
         JP render_next_char
 
-; ---- attr_back_colour
-attr_back_colour:
+; ---- attr_back_color
+attr_back_color:
         LD A,(MAGIC_MODE)
         AND A
         JR z,back_set
-        LD A,(CUR_COLOUR)
+        LD A,(CUR_COLOR)
         OR 15
-        LD (CUR_COLOUR),A
+        LD (CUR_COLOR),A
 
 back_set:
         XOR A
@@ -2898,13 +2902,13 @@ back_mul:
         JR nz,back_mul
 
 back_apply:
-        LD A,(CUR_COLOUR)
+        LD A,(CUR_COLOR)
         AND 15
         OR L
         AND 0x6f
-        LD (CUR_COLOUR),A
+        LD (CUR_COLOR),A
         LD A,0xff
-        LD (MAGIC_COLOUR_SET),A
+        LD (MAGIC_COLOR_SET),A
         JP render_next_char
 
 ; ---- attr_speed
@@ -2920,7 +2924,7 @@ attr_tiny:
         CALL clear_framebuf
         LD A,0xff
         LD (TINY_RENDER),A
-        LD A,COLOUR_DEFAULT
+        LD A,COLOR_DEFAULT
         LD (FRAMEBUF_TINY),A
 
 tiny_loop:
@@ -3032,13 +3036,13 @@ tinyg_lookup:
         LD (GLYPH_WIDTH),A
         POP HL
 
-; ---- tiny_put_glyph: colour byte + glyph into FRAMEBUF_TINY
+; ---- tiny_put_glyph: color byte + glyph into FRAMEBUF_TINY
 tiny_put_glyph:
         LD DE,FRAMEBUF_TINY+1
         LD B,0
         LD A,(GLYPH_WIDTH)
         LD C,A
-        LD A,COLOUR_DEFAULT
+        LD A,COLOR_DEFAULT
         LD (DE),A
         INC DE
         LDIR
@@ -3131,7 +3135,7 @@ disp_blank_row:
         OR C
         LD C,A
         RES 5,C
-        LD A,COLOUR_DEFAULT
+        LD A,COLOR_DEFAULT
         OUT (C),A
         OTIR
         OUT (PORT_STROBE),A
@@ -3171,7 +3175,7 @@ disp_next_row:
         JP rx_consume
 
 ; ---- fxv_prepare: clear FRAMEBUF and reset the output window; HL = TXBUF,
-;      DE = FRAMEBUF + STAGE_OFFSET (the staged text is centred)
+;      DE = FRAMEBUF + STAGE_OFFSET (the staged text is centered)
 fxv_prepare:
         CALL clear_framebuf
 
@@ -3235,7 +3239,7 @@ fxv_hold:
         LD BC,FRAMEBUF_SIZE
 
 hold_fill:
-        LD (HL),COLOUR_DEFAULT
+        LD (HL),COLOR_DEFAULT
         INC HL
         DEC BC
         LD A,C
@@ -3323,14 +3327,14 @@ wipev_wait_row:
 wipev_col:
         LD A,(HL)
         BIT 7,A
-        JR nz,wipev_colour_byte
+        JR nz,wipev_color_byte
         AND C
         JR wipev_store
 
-wipev_colour_byte:
+wipev_color_byte:
         LD A,C
         CP 0xff
-        LD A,COLOUR_DEFAULT
+        LD A,COLOR_DEFAULT
         JR nz,wipev_store
         LD A,(HL)
 
@@ -3945,7 +3949,7 @@ pkt_check_ok:
         XOR A
         LD (PKT_STATE),A
         LD A,(PKT_FLAG)
-        CP COLOUR_BASE
+        CP COLOR_BASE
         JP z,pkt_process
         RET
 
@@ -6152,7 +6156,7 @@ makeroom_ret:
 ; ---- editor_translate_key: apply the GRAPH/COLOR/BGRND/SPEED/FUNC prefixes
 editor_translate_key:
         CALL apply_graph_prefix
-        CALL apply_colour_prefix
+        CALL apply_color_prefix
         CALL apply_speed_prefix
         CALL editor_key_to_attr
         CALL editor_query_hook
@@ -6239,8 +6243,8 @@ func_store:
         LD (EDIT_KEY),A
         RET
 
-; ---- apply_colour_prefix: COLOR n -> FG_IDX_TABLE, BGRND n -> BG_IDX_TABLE
-apply_colour_prefix:
+; ---- apply_color_prefix: COLOR n -> FG_IDX_TABLE, BGRND n -> BG_IDX_TABLE
+apply_color_prefix:
         LD A,(COLOR_PENDING)
         AND A
         JR nz,prefix_fore
@@ -6289,11 +6293,11 @@ prefix_back_lookup:
         LD (BGRND_PENDING),A
         RET
 
-; ---- data 2718-2721: cmd 15 n: foreground colour codes (Red,Orange,Yellow,Lime,Green,84,8E,Black,8B,81)
+; ---- data 2718-2721: cmd 15 n: foreground color codes (Red,Orange,Yellow,Lime,Green,84,8E,Black,8B,81)
 FG_IDX_TABLE:
         db 0x8c,0x8d,0x8f,0x87,0x83,0x84,0x8e,0x80,0x8b,0x81
 
-; ---- data 2722-2727: cmd 16 n: background colour codes
+; ---- data 2722-2727: cmd 16 n: background color codes
 BG_IDX_TABLE:
         db 0x91,0x93,0x93,0x93,0x92,0x90
 
@@ -6413,7 +6417,7 @@ redraw_attr2:
 redraw_not_norm:
         CP ATTR_FLASH
         JP nz,redraw_not_flash
-        LD A,COLOUR_FLASH
+        LD A,COLOR_FLASH
         LD (FLASH_PENDING),A
         JR redraw_label_check
 
@@ -6766,7 +6770,7 @@ nibble_to_hex:
         ADD A,7
         RET
 
-; ---- pkt_process: Process a received packet: wait for TX idle, DI, walk PKT_BUF byte by byte. Bytes in IGNORE_TABLE are skipped; command bytes dispatch (02 speed,03 clear all,04 sequence,09 channel,0D end,0E delete channel text,15 fg idx,16 bg idx,17 time,1E A0-colour,B3 append,B4 query); anything else is inserted as message text
+; ---- pkt_process: Process a received packet: wait for TX idle, DI, walk PKT_BUF byte by byte. Bytes in IGNORE_TABLE are skipped; command bytes dispatch (02 speed,03 clear all,04 sequence,09 channel,0D end,0E delete channel text,15 fg idx,16 bg idx,17 time,1E A0-color,B3 append,B4 query); anything else is inserted as message text
 pkt_process:
         LD A,(TX_STATUS)
         AND 3
@@ -6849,8 +6853,8 @@ pkt_byte_loop:
         JP z,cmd_16_back_idx
         CP CMD_SET_TIME
         JP z,cmd_17_set_time
-        CP CMD_COLOUR_A0
-        JP z,cmd_1E_colour_A0
+        CP CMD_COLOR_A0
+        JP z,cmd_1E_color_A0
         CP CMD_APPEND
         JP z,cmd_B3_append
         CP CMD_QUERY
@@ -7008,8 +7012,8 @@ query_wait_tx:
         DI
         JP z,pkt_next
 
-; ---- cmd_1E_colour_A0: 1E n -> insert 0xA0|(n&15)
-cmd_1E_colour_A0:
+; ---- cmd_1E_color_A0: 1E n -> insert 0xA0|(n&15)
+cmd_1E_color_A0:
         CALL pkt_next_byte
         AND 15
         OR GRAPH_BASE
@@ -7301,8 +7305,8 @@ STR_RIGHT:
         db 0x15,"RIGHT",0x16,0x00
         db 0x00
 
-; ---- COLOUR_NAME_TABLE: indexed by colour code 80-8F fg, 90-9F bg; 0000 = no label
-COLOUR_NAME_TABLE:
+; ---- COLOR_NAME_TABLE: indexed by color code 80-8F fg, 90-9F bg; 0000 = no label
+COLOR_NAME_TABLE:
         dw STR_C_BLACK             ; 00  .BLACK.
         dw STR_C_D_GRE             ; 01  .D-GRE.
         dw STR_C_M_GRE             ; 02  .M-GRE.
@@ -7762,7 +7766,7 @@ CHAR_FLAGS:
 ;      SHIFT_STATE clear    -> CHARSET_LOWER  / CHARSET_UPPER   (by CAPS_LOCK)
 ;      SHIFT_STATE set      -> CHARSET_UPPER2 / CHARSET_LOWER2  (by CAPS_LOCK)
 ;
-;  On the remote these are one key labelled UPPER/LOWER, whose shifted
+;  On the remote these are one key labeled UPPER/LOWER, whose shifted
 ;  function is EUROPE: unshifted it toggles CAPS_LOCK (0x216C), shifted it
 ;  toggles EURO_STATE (0x2184).
 ;
@@ -7833,7 +7837,7 @@ CHARSET_EURO:
         db 0xda,0xda                                  ; 40-41  DA DA
 
 
-; ---- data 396f-3c20: built-in demonstration message (contains control codes 10,11,12,13,14,BC,BE,8x colours,A2-AB graphics)
+; ---- data 396f-3c20: built-in demonstration message (contains control codes 10,11,12,13,14,BC,BE,8x colors,A2-AB graphics)
 DEMO_MESSAGE:
         db "THE ",0x12,0x14,"ULTIMATE ",0x11,0x8c,"INFRARED ",0xbc,"REMOTE CONTROL MULTI-"
         db "COLOR DISPLAY..... ",0x10,"** MAGIC ** ",0x11,"AUTOMATIC COLOR CHANGING....."
