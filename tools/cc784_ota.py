@@ -181,7 +181,7 @@ def rollback(ota):
     return ok
 
 
-def push(sign, bank, seq=None, dry_run=False, trial=False):
+def push(sign, bank, seq=None, dry_run=False, trial=False, all_pages=False):
     sign.quiet = True
     ota = Ota(sign)
     running, t0, t1 = ota.info()
@@ -189,13 +189,20 @@ def push(sign, bank, seq=None, dry_run=False, trial=False):
     describe(running, t0, t1)
     if seq is None:
         seq = (max(t['seq'] for t in (t0, t1) if t) + 1) & 0xFF if (t0 or t1) else 1
-    print('new sequence number %d; reading the idle bank\'s page CRCs' % seq)
-    have = ota.page_crcs()
-    want = [crc16(bank[p * PAGE:(p + 1) * PAGE]) for p in range(BANK // PAGE)]
-    pages = [p for p in range(BANK // PAGE - 1) if have[p] != want[p]]      # the trailer is written by F
-    stub = [p for p in pages if p < STUB_END // PAGE]
-    if stub:
-        raise RuntimeError('stub pages %s differ from the image: this image needs the T48' % stub)
+    if all_pages:
+        # no C command: a sign running patch 35 or older crashes when a mains
+        # NMI lands while C has the idle bank mapped in and the two images
+        # differ at nmi_entry
+        print('new sequence number %d; sending every page' % seq)
+        pages = list(range(STUB_END // PAGE, BANK // PAGE - 1))
+    else:
+        print('new sequence number %d; reading the idle bank\'s page CRCs' % seq)
+        have = ota.page_crcs()
+        want = [crc16(bank[p * PAGE:(p + 1) * PAGE]) for p in range(BANK // PAGE)]
+        pages = [p for p in range(BANK // PAGE - 1) if have[p] != want[p]]      # the trailer is written by F
+        stub = [p for p in pages if p < STUB_END // PAGE]
+        if stub:
+            raise RuntimeError('stub pages %s differ from the image: this image needs the T48' % stub)
     print('%d pages to send, ~%d s' % (len(pages), len(pages) * 3))
     if dry_run:
         return
@@ -257,6 +264,7 @@ def main():
     u.add_argument('bank'); u.add_argument('-s', '--seq', type=int)
     u.add_argument('-n', '--dry-run', action='store_true')
     u.add_argument('--trial', action='store_true', help='leave the new image unconfirmed: a power cycle reverts it until `confirm`')
+    u.add_argument('--all', action='store_true', help='send every page without reading the idle bank first (a sign on patch 35 or older can crash on the C command)')
     i = sub.add_parser('info')
     c = sub.add_parser('confirm'); r = sub.add_parser('rollback')
     for x in (u, i, c, r):
@@ -281,7 +289,7 @@ def main():
         else:
             ap.error('%s needs -p PORT or -H HOST' % a.cmd)
         try:
-            sign = cc784.Sign(link, a.addr, verbose=a.verbose, baud=a.baud)
+            sign = cc784.Sign(link, a.addr, timeout=8.0, verbose=a.verbose, baud=a.baud)   # the sign restarts its display after every command: up to ~4 s deaf
             sign.quiet = True
             if a.cmd == 'info':
                 describe(*Ota(sign).info()); sys.exit(0)
@@ -289,7 +297,7 @@ def main():
                 sys.exit(0 if confirm(Ota(sign)) else 1)
             if a.cmd == 'rollback':
                 sys.exit(0 if rollback(Ota(sign)) else 1)
-            sys.exit(0 if push(sign, bank, a.seq, a.dry_run, a.trial) else 1)
+            sys.exit(0 if push(sign, bank, a.seq, a.dry_run, a.trial, a.all) else 1)
         finally:
             link.close()
 

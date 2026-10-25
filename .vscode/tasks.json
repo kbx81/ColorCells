@@ -3,14 +3,9 @@
   "tasks": [
     {
       "label": "Build stock ROM",
-      "detail": "Reassembles the untouched reconstruction. Must stay byte-identical to the EPROM dump.",
+      "detail": "Reassembles the untouched reconstructions (NIR, NET, CC710). Each must stay byte-identical to its EPROM dump.",
       "type": "shell",
-      "command": "sjasmplus",
-      "args": [
-        "--fullpath",
-        "--lst=cc784nir.lst",
-        "cc784nir.asm"
-      ],
+      "command": "sjasmplus --fullpath --lst=cc784nir.lst cc784nir.asm && sjasmplus --fullpath --lst=cc784net.lst cc784net.asm && sjasmplus --fullpath --lst=cc710.lst cc710.asm",
       "options": {
         "cwd": "${workspaceFolder}/src/stock"
       },
@@ -19,9 +14,9 @@
     },
     {
       "label": "Verify stock ROM is byte-identical",
-      "detail": "Regression test for any edit to src/stock: the image must still md5 to c021af146a50b93a22d13535201b7eaa.",
+      "detail": "Regression test for any edit to src/stock: NIR c021af146a50b93a22d13535201b7eaa, NET 872c87932339e9e072c5525d30ffb5df, CC710 f346d39e5aa7b49709a717c85d7c7e11.",
       "type": "shell",
-      "command": "test \"$(md5 -q cc784nir.bin)\" = c021af146a50b93a22d13535201b7eaa && echo 'OK: byte-identical to the dump' || { echo 'FAIL: stock ROM no longer matches the dump'; exit 1; }",
+      "command": "ok=1; for p in cc784nir:c021af146a50b93a22d13535201b7eaa cc784net:872c87932339e9e072c5525d30ffb5df cc710:f346d39e5aa7b49709a717c85d7c7e11; do f=${p%%:*}; h=${p##*:}; if test \"$(md5 -q $f.bin)\" = $h; then echo \"OK: $f.bin byte-identical to the dump\"; else echo \"FAIL: $f.bin no longer matches the dump\"; ok=0; fi; done; test $ok = 1",
       "options": {
         "cwd": "${workspaceFolder}/src/stock"
       },
@@ -158,7 +153,7 @@
       "label": "OTA: emulator regression",
       "detail": "EEPROM model self-test, boot stub scenarios, a full B5 update, the host tool's push, all against the emulated sign. fuzz [RUNS] is separate (slow).",
       "type": "shell",
-      "command": "uv run tools/cc784_sim.py eeprom && uv run tools/cc784_sim.py ota && uv run tools/cc784_sim.py update && uv run tools/cc784_sim.py push && uv run tools/cc784_sim.py ram && uv run tools/cc784_sim.py quiet && uv run tools/cc784_sim.py speed && uv run tools/cc784_sim.py baud && uv run tools/cc784_sim.py clock",
+      "command": "uv run tools/cc784_sim.py eeprom && uv run tools/cc784_sim.py ota && uv run tools/cc784_sim.py update && uv run tools/cc784_sim.py push && uv run tools/cc784_sim.py ram && uv run tools/cc784_sim.py quiet && uv run tools/cc784_sim.py speed && uv run tools/cc784_sim.py baud && uv run tools/cc784_sim.py clock && uv run tools/cc784_sim.py config",
       "options": {
         "cwd": "${workspaceFolder}"
       },

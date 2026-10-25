@@ -17,7 +17,7 @@ Examples
                                          # "speed N", attribute names, or a raw hex byte @{9f}
     cc784.py clear 0 1 2                # clear channels
     cc784.py clearall
-    cc784.py seq 0 1 2                  # display sequence
+    cc784.py seq 0 1 2                  # display sequence; 'seq a' = all channels
     cc784.py time                       # set clock from the PC (12-hour)
     cc784.py time24                     # patched firmware: 24-hour clock, no AM/PM
     cc784.py raw 09 30 30 0e 48 49      # send an arbitrary payload
@@ -52,7 +52,7 @@ ACK, NAK, START, DONE = 0x06, 0x15, 0xB1, 0x04   # DONE: patched firmware, after
 
 # ---- message escapes -------------------------------------------------------
 # Single-letter form:  @B bold, @R red ...   (see ESC)
-# Braced form:         @{lime} @{d-red} @{bg red} @{bg yellow} @{9f} @{speed 3}
+# Braced form:         @{lime} @{d-red} @{bg red} @{bg yellow} @{9f} @{speed 3} @{up} @{hold} @{halt}
 #   color names are the firmware's own (menu strings), code = 0x80 + index:
 FORE = ['black', 'd-gre', 'm-gre', 'green', 'd-red', 'd-yel', 'd-lim', 'lime',
         'm-red', 'd-ora', 'm-yel', 'lemon', 'red', 'orange', 'gold', 'yellow']
@@ -60,8 +60,8 @@ FORE = ['black', 'd-gre', 'm-gre', 'green', 'd-red', 'd-yel', 'd-lim', 'lime',
 BACK = {'black': 0x90, 'red': 0x91, 'green': 0x92, 'yellow': 0x93}
 ESC = {
     'N': 0x11, 'B': 0x12, 'I': 0x13, 'F': 0x14, 'L': 0x10, 'M': 0x1F,  # normal bold italic flash large magic
-    'C': 0x18, 'J': 0x19, 'U': 0x1A, 'D': 0x1B, 'W': 0x0F,             # crawl jump wipe-up wipe-down wipe-back
-    'P': 0x06, 'S': 0x07, 'T': 0x5F, 'A': 0xBC, 'X': 0xBA, 'H': 0xB9,  # pause beep time rainbow wait thin(H)
+    'C': 0x18, 'J': 0x19, 'U': 0x1A, 'D': 0x1B, 'W': 0x0F,             # left pause up down right (the sign's names; NETCC said crawl, jump, wipes)
+    'P': 0x06, 'S': 0x07, 'T': 0x5F, 'A': 0xBC, 'X': 0xBA, 'H': 0xB9,  # halt beep time rainbow wait thin(H)
     'R': 0x8C, 'O': 0x8D, 'Y': 0x8F, 'G': 0x83, 'K': 0x80,             # fore: red orange yellow green black
     'r': 0x91, 'g': 0x92, 'y': 0x93, 'k': 0x90,                        # back: red green yellow black
     '0': 0xF0, '1': 0xF1, '2': 0xF2, '3': 0xF3, '4': 0xF4, '5': 0xF5, '6': 0xF6, '7': 0xF7,  # speed
@@ -71,10 +71,14 @@ NAMED = {n: 0x80 + i for i, n in enumerate(FORE)}
 NAMED.update({'bg ' + n: v for n, v in BACK.items()})
 NAMED.update({'speed %d' % i: 0xF0 + i for i in range(8)})
 NAMED.update({'normal': 0x11, 'bold': 0x12, 'italic': 0x13, 'flash': 0x14, 'large': 0x10,
-              'thin': 0xB9, 'magic': 0x1F, 'crawl': 0x18, 'jump': 0x19, 'wipe up': 0x1A,
-              'wipe down': 0x1B, 'wipe back': 0x0F, 'pause': 0x06, 'beep': 0x07, 'time': 0x5F,
+              'thin': 0xB9, 'magic': 0x1F,
+              # the effects, named as the sign's own editor labels them: UP, DOWN, RIGHT and HOLD
+              # wipe the text that follows; LEFT ends a run where a space alone will not; PAUSE is a
+              # display effect, HALT stops and waits
+              'up': 0x1A, 'down': 0x1B, 'right': 0x0F, 'hold': 0xBB, 'left': 0x18, 'pause': 0x19,
+              'halt': 0x06, 'beep': 0x07, 'time': 0x5F,
               'rainbow': 0xBC, 'wait': 0xBA, 'remark': 0xB0, 'graphic': 0xB8,
-              'tiny': 0xBE, 'restart': 0xBD, 'fx-bb': 0xBB})
+              'tiny': 0xBE, 'restart': 0xBD})
 
 def encode_text(s: str) -> bytes:
     out = bytearray(); i = 0
@@ -252,6 +256,51 @@ class Sign:
         return raw
 
 # ---- commands ---------------------------------------------------------------
+def reply_data(raw: bytes) -> bytes:
+    """the payload of a short query reply (ACK, then B1 addr len data cksum)"""
+    if raw[:1] == bytes([ACK]): raw = raw[1:]
+    if raw[:1] != bytes([START]) or len(raw) < 3: return b''
+    ln = raw[2]; data = raw[3:3 + ln]
+    return data if len(raw) > 3 + ln and sum(data) & 0xFF == raw[3 + ln] else b''
+
+def _choice(*names):
+    return lambda v: names.index(v) if v in names else int(v, 0)
+
+def _onoff(v):
+    return {'on': 1, 'off': 0}.get(v, None) if v in ('on', 'off') else int(v, 0)
+
+def _mute(v):
+    return {'off': 0x00, 'now': 0x04, 'after': 0x08}[v] if v in ('off', 'now', 'after') else int(v, 0) & 0x0C
+
+# patch 35: the configuration block, byte index and how a value is written
+CONFIG_FIELDS = {
+    'brightness': (2, _choice('off', 'low', 'medium', 'full')),
+    'mute':       (2, _mute),                               # off, now, after (the current message)
+    'pin2':       (3, _choice('none', 'alert', 'chain')),
+    'pin6':       (4, _choice('none', 'mute')),
+    'pin4':       (5, _choice('none', 'boundary')),
+    'pin7':       (6, _choice('none', 'heartbeat', 'busy')),
+    'alert':      (7, lambda v: int(v, 0)),                 # channel 0-99
+    'hold':       (8, lambda v: int(v, 0)),                 # frames, 62 per second
+    'flash':      (9, lambda v: int(v, 0)),                 # frames per half period
+    'beeper':     (10, _onoff),
+    'lock':       (11, _onoff),                             # remote keys ignored
+    'status':     (12, _onoff),                             # reserved
+    'clocksource': (13, _choice('auto', 'mains', 'crystal')),
+}
+
+def config_text(b: bytes) -> str:
+    f = b[2]
+    bright = ('off', 'low', 'medium', 'full')[f & 3]
+    mute = 'muted' if f & 0x04 else ('mute pending' if f & 0x08 else 'unmuted')
+    live = [n for bit, n in ((0x10, 'alert playing'), (0x20, 'editor open'), (0x40, 'wrapped')) if f & bit]
+    return ("address %d, brightness %s, %s%s; pins 2/6/4/7 roles %d/%d/%d/%d; alert channel %d; "
+            "hold %d frames, flash %d frames; beeper %s, remote %s, status reports %s, clock source %s; "
+            "signature %02x sum %02x"
+            % (b[1], bright, mute, (', ' + ', '.join(live)) if live else '', b[3], b[4], b[5], b[6], b[7],
+               b[8], b[9], 'on' if b[10] else 'off', 'locked' if b[11] else 'unlocked', 'on' if b[12] else 'off',
+               ('auto', 'mains', 'crystal')[b[13]] if b[13] < 3 else b[13], b[0], b[15]))
+
 def parse_reply(raw: bytes, kind: str):
     if not raw:
         print("  (no reply)"); return
@@ -288,10 +337,11 @@ def parse_reply(raw: bytes, kind: str):
               (raw[1], ln, "OK" if ok else "BAD/short", printable(data)))
         if kind == 'mem' and len(data) == 10:
             print("  total %s bytes, free %s bytes" % (data[:5].decode(), data[5:].decode()))
-        if kind == 'timing' and len(data) == 4:
-            t300, step, last, nmi = data
-            print("  300-baud bit %d fifths of an interrupt (a %.2f us interrupt), step %d (%d baud), last second's count low byte %d, NMI %s"
-                  % (t300, 3333.3 / (t300 / 5.0), step, step * 60, last, 'seen' if nmi else 'none (DC supply: no calibration)'))
+        if kind == 'timing' and len(data) in (4, 8):
+            t300, step, last, nmi = data[:4]
+            print("  300-baud bit %d fifths of an interrupt (a %.2f us interrupt), step %d (%d baud), last second's count low byte %d, NMI %s%s"
+                  % (t300, 3333.3 / (t300 / 5.0), step, step * 60, last, 'seen' if nmi else 'none (DC supply: no calibration)',
+                     '; last second: %d display ticks merged, longest renderer stall %d frames, %d stalls of 3+ frames (the visible pauses); stack headroom %d bytes never used since boot' % (data[4], data[5], data[6], data[7]) if len(data) == 8 else ''))
 
 def add_common_args(ap):
     ap.add_argument('-a', '--addr', default='*', help="sign address 0-255 or '*' (broadcast; a broadcast frame gets no ACK and no DONE)")
@@ -330,6 +380,37 @@ def run(link, a, ap):
                      "(stack overflow). Add --unsafe if you really want to." % c)
         parse_reply(s.query({'id': '0', 'mem': '1', 'dump': '3', 'timing': '4'}[c]), c)
 
+    elif c == 'config':
+        # patch 35: B4 '5' reads the 16-byte block, B4 '6' the sequence list,
+        # B6 index value writes one byte (the firmware refuses 0, 1 and 15 and
+        # keeps the live bits of byte 2)
+        if not args:
+            blk = reply_data(s.query('5'))
+            seq = reply_data(s.query('6'))
+            if len(blk) != 16:
+                sys.exit("  no config block in the reply (patched firmware 35+ only)")
+            print("  " + config_text(blk))
+            if seq:
+                chans = [str(x) for x in seq if x != 0xFF]
+                print("  sequence: %s" % (' '.join(chans) if chans else '(empty)'))
+        elif args[0] == 'set' and len(args) == 3:
+            name, value = args[1], args[2]
+            if name not in CONFIG_FIELDS:
+                sys.exit("  unknown setting %s; one of %s" % (name, ', '.join(CONFIG_FIELDS)))
+            index, parse = CONFIG_FIELDS[name]
+            if name in ('brightness', 'mute'):               # the two share byte 2
+                blk = reply_data(s.query('5'))
+                if len(blk) != 16:
+                    sys.exit("  no config block in the reply")
+                cur = blk[2]
+                byte = (cur & ~0x03 & 0x0F) | parse(value) if name == 'brightness' else (cur & 0x03) | parse(value)
+            else:
+                byte = parse(value)
+            s.send_frame(b'\xB6' + bytes([index, byte & 0xFF]))
+            print("  %s = %s (byte %d <- 0x%02x)" % (name, value, index, byte & 0xFF))
+        else:
+            sys.exit("usage: config | config set NAME VALUE")
+
     elif c == 'msg':
         ch = int(args[0]); text = encode_text(' '.join(args[1:]))
         body = b'\x09' + chan(ch) + b'\x0E' + text
@@ -349,7 +430,8 @@ def run(link, a, ap):
     elif c == 'clearall':
         s.send_frame(b'\x03')
     elif c == 'seq':
-        s.send_frame(b'\x04' + b''.join(chan(int(x)) for x in args))
+        # the firmware lays 0..99 first and stops at the first non-digit, so a bare 04 (or 'A') is all
+        s.send_frame(b'\x04' + (b'' if [x.lower() for x in args] in (['a'], ['all']) else b''.join(chan(int(x)) for x in args)))
     elif c in ('time', 'time24'):
         # the protocol carries no seconds, and the sign starts the new minute at
         # :00 (patch 23), so the frame is timed to be processed on the minute:

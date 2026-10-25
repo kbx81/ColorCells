@@ -98,6 +98,8 @@ uv run tools/cc784_ota.py push src/patched/cc784nir_bank.bin -p <port>          
 
 **`confirm`** marks the running image GOOD. **`rollback`** gives the running bank a lower sequence number than the other and reboots: the previous image is back in ten seconds with nothing transferred, as long as the next push hasn't overwritten it yet. **`info`** shows both banks.
 
+`--all` skips `C` and sends every page (about 12 min at 1200 baud). Use it when the sign runs a build older than the `ota_copy` fix of patch 35: on those, a mains NMI during `C` runs the idle image's NMI handler (§8), which is harmless only while the two images agree on `nmi_entry` and the clock variables.
+
 **What a push costs:** the diff is against the idle bank, which holds the image from *two* pushes ago, so a push carries the union of the last two changes. An inserted byte shifts everything after it, so a code edit early in the file is typically a 100-page push (~5 min); an edit in the data at the end of the bank is one page. An interrupted push can simply be run again: `C` finds the pages already written.
 
 **`diff OLD.bin NEW.bin`** prints the pages two images differ in and the transfer time.
@@ -117,6 +119,7 @@ Everything above is modeled in `tools/cc784_sim.py` (AT28C256 with banks, page t
 | `uv run tools/cc784_sim.py ram` | the build on the 6264 and on a 62256: sizes, fill, dump; a set clock survives a reset |
 | `uv run tools/cc784_sim.py quiet` | packets arriving mid-scroll: no restart, no watchdog clear, replies and DONE in the background, early frames dropped whole, cursor fix-up; the demo's lock survives a packet and a SEQ change is acted on |
 | `uv run tools/cc784_sim.py speed` | each scroll speed steps columns at stock's rate with no dark frames, and the seven rows get the same dwell |
+| `uv run tools/cc784_sim.py config` | the configuration block (patch 35): defaults after a RAM loss, kept across a reset, defaults again on a bad sum; the protected bytes refuse writes and the flags byte keeps its live bits; brightness is lit time (duty one third and two thirds with both passes still sent), mute darkens now or at the next message, hold and flash follow their bytes, the beeper and the remote switch off, the editor's address dialog reseals |
 | `uv run tools/cc784_sim.py clock` | the NMI source: mains on AC, the add-in board's 64 Hz on DC, neither on a bare DC supply, with the clock, the calibration and an OTA page write in each; 12 and 24-hour rollovers |
 | `uv run tools/cc784_sim.py baud` | a cold sign follows the host at 300, 600 and 1200; replies come back at that rate; a rate change after a pause is followed; 1200 holds over interrupt periods from 126 to 134 µs thanks to the calibration and on a DC supply; 300-baud bare bytes still work. `update 1200` and `push 1200` run those gates at a rate |
 | `uv run tools/cc784_sim.py fuzz [N]` | N power cuts at random instants of an update; every reboot must land in a verified bank (1000/1000 when last run) |
@@ -141,6 +144,7 @@ The `OTA: emulator regression` task runs the nine fast ones.
 ### Changing the firmware or writing a host
 
 - **Never load `I` with `C0` or above, never read `C000–FFFF`.** Refresh cycles and reads clock the bank register with whatever is on the bus. The emulator reports both as faults.
+- **The NMI follows the mapped bank.** `NMI_VECTOR` jumps through the jump table at `0246` of whichever bank is in the window, so an NMI that lands while `lib_copy` has the idle bank mapped (`I`, `C`, `F`) runs the *other* image's `nmi_entry` and `clock_tick` against this image's RAM map. The app holds `NMI_MAGIC` off around those copies (`ota_copy`, patch 35); the emulator reports an NMI taken with the idle bank mapped as a fault. The page writer is different: it syncs to the NMI and finishes before the next one.
 - **The RAM library overruns `FRAMEBUF`** (192 bytes) at boot. The application copies only `STUB_LIB_APP_SIZE` bytes; the stub copies all of it, over the first 130 bytes of variables. The clock digits once lived there and reset on every power cycle (patch 20).
 - **A reply is not "ready for the next frame".** Replies and DONE leave in the background while the display runs, and a frame that arrives before DONE is parsed and thrown away unanswered. Use flag `81` and wait for the `04`; without it, allow the reply's wire time plus 1 s.
 - **Binary replies exposed two stock serial bugs**, both fixed in the patched build: a `00` byte offered to a busy transmitter was dropped (B10), and a `20` byte inside a packet counted as the SPACE key and released a WAIT (B12).

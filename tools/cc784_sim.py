@@ -184,7 +184,7 @@ def assemble(src_dir):
 
 
 class Sign:
-    def __init__(self, rom, syms, fresh_ram=True, seed=1, sdp=True, ram8k=False, mains=True, baud=300, crystal=False):
+    def __init__(self, rom, syms, fresh_ram=True, seed=1, sdp=True, ram8k=False, mains=True, baud=300, crystal=False, strict_int=False):
         # rom: one 16 K bank (the rest of the chip erased) or the whole chip image
         # ram8k: the stock 6264, which mirrors 4000-5FFF at 6000-7FFF
         # mains=False: a DC supply, no NMI from the zero-cross detector
@@ -231,6 +231,11 @@ class Sign:
         self.rx_busy_until = self.ir_busy_until = 0
         self.int_pending = False
         self.tick_t = TICK_T + int(2 * US)  # 128 us + ~2 us of acknowledge latency, as measured on the board
+        self.strict_int = strict_int        # /INT follows Q11: a request not taken within 128 us is lost
+        self.int_lost = 0
+        self._int_phase = 0
+        self.watch, self.watch_log = set(), []   # RAM addresses whose writes are logged as (t, pc, addr, value)
+        self._di_run, self.max_di, self.max_di_pc = 0, 0, 0
         self.set_baud(baud)
         self.burst, self.frames = [], []
         self.row_starts, self.last_out_t = [], 0   # (t, port low nibble) at each row burst
@@ -277,6 +282,8 @@ class Sign:
 
     def _on_write(self, addr, value):
         # a write-marked address is replaced by this callback, so store it ourselves
+        if addr in self.watch:
+            self.watch_log.append((self.t, self.m.pc, addr, value))
         if addr == 0x8000:
             self._set_latch(value)
             return
@@ -351,7 +358,12 @@ class Sign:
         return False
 
     def _nmi(self):
-        self._push_pc(); self.m.iff1 = 0; self.m.pc = 0x66; self.m.halted = 0
+        # the stub vectors through NMI_VEC: with the idle bank mapped in, that
+        # address holds the other image's bytes
+        m = self.m
+        if m.memory[self.sym['NMI_MAGIC']] == 0xA5 and (self.bank_reg ^ m.memory[self.sym['ROM_BANK']]) & 1:
+            self.faults.append((self.t, 'NMI vectored into the idle bank', m.pc, self.bank_reg))
+        self._push_pc(); m.iff1 = 0; m.pc = 0x66; m.halted = 0
 
     def run(self, t_states):
         end = self.t + t_states
@@ -359,7 +371,13 @@ class Sign:
         while self.t < end:
             if self.cut_at is not None and self.t >= self.cut_at:
                 raise PowerCut()
-            if self.t >= self.next_int:
+            if self.strict_int:
+                phase = (self.t - self.last_inta) // TICK_T
+                if phase != self._int_phase:
+                    if self.int_pending and not phase & 1:
+                        self.int_lost += 1          # Q11 fell before the acknowledge
+                    self._int_phase, self.int_pending = phase, bool(phase & 1)
+            elif self.t >= self.next_int:
                 self.int_pending = True             # level: held until acknowledged, across run() calls
                 self.next_int += self.tick_t        # the counter restarts at the acknowledge: 128 us + latency
             # the core can stop between a DD/FD prefix and its opcode, where a real
@@ -368,6 +386,7 @@ class Sign:
                 if self.int_pending and self._irq():
                     self.int_pending = False
                     self.last_inta = self.t
+                    self._int_phase = 0
                 if self.t >= self.next_nmi:
                     self._nmi()
                     p = self._nmi_period()
@@ -380,6 +399,12 @@ class Sign:
             m.ticks_to_stop = SLICE
             m.run()
             self.t += SLICE
+            if m.iff1:
+                self._di_run = 0
+            else:
+                self._di_run += SLICE           # longest stretch with interrupts off, and where it ended
+                if self._di_run > self.max_di:
+                    self.max_di, self.max_di_pc = self._di_run, m.pc
 
     def run_ms(self, ms):
         self.run(int(ms * 1000 * US))
@@ -873,8 +898,17 @@ def cmd_ram():
         s.send_frame(payload, addr=1, flag=0x80); s.rx_wait(); s.run_ms(wait_ms)
         tx = s.tx_bytes()
         return tx[1:] if tx[:1] == b'\x06' else tx
+    def load(s, payload):
+        """a host that waits for DONE (flag 81): processing a packet into a nearly full
+        store takes over a second, since init_sequence rescans the store per channel"""
+        s.tx_edges.clear()
+        s.send_frame(payload, addr=1, flag=0x81); s.rx_wait()
+        for _ in range(500):
+            s.run_ms(10)
+            if s.tx_bytes().endswith(b'\x04'): break
+        s.tx_edges.clear(); s.run_ms(200)
 
-    for ram8k, want_total in ((True, 7054), (False, 15246)):     # P21 took 32 bytes for the reply stream
+    for ram8k, want_total in ((True, 6994), (False, 15186)):     # P21 took 32 bytes for the reply stream, P35 17 for the configuration block and the brightness clock, 64 more of stack and the stutter meter
         name = '8 K' if ram8k else '16 K'
         s = Sign(rom, syms, fresh_ram=True, ram8k=ram8k)
         s.run_ms(2500)
@@ -884,11 +918,11 @@ def cmd_ram():
         text = bytes(0x41 + i % 26 for i in range(250))
         sent = chan = 0                     # one 250-byte chunk per channel (B3 append drops bytes: B11)
         while free >= 250:
-            s.send_frame(b'\x09' + b'%02d' % chan + b'\x0e' + text, addr=1, flag=0x80); s.rx_wait(); s.run_ms(1200)
+            load(s, b'\x09' + b'%02d' % chan + b'\x0e' + text)
             sent += 250; free -= 250; chan += 1
         r = reply(s, b'\xb4\x31')
         check('%s: %d bytes in %d channels, free now %d' % (name, sent, chan, int(r[8:13])), int(r[8:13]) == free)
-        s.send_frame(b'\x09' + b'%02d' % chan + b'\x0e' + text, addr=1, flag=0x80); s.rx_wait(); s.run_ms(1200)   # overfills: the tail is dropped
+        load(s, b'\x09' + b'%02d' % chan + b'\x0e' + text)   # overfills: the tail is dropped
         r = reply(s, b'\xb4\x31')
         check('%s: overfill leaves free %d (the byte under the terminator is never used)' % (name, int(r[8:13])), int(r[8:13]) <= 1)
         r = reply(s, b'\xb4\x33', wait_ms=int((total + 20) * 12 / 300 * 1000) + 3000)   # ~2.3 stop bits per byte
@@ -965,7 +999,7 @@ def cmd_quiet():
           % (tx.hex(), s.ram('PKT_RESTART')[0], s.wdog_clears, before, after),
           tx == b'\x06\x04' and s.ram('PKT_RESTART')[0] == 0 and s.wdog_clears == 0 and after != before)
     tx = send(s, b'\xb4\x31')
-    check("B4 '1' mid-scroll: reply %s, no restart" % tx[4:14], tx[:4] == b'\x06\xb1\x01\x0a' and tx[4:9] == b'15246' and s.ram('PKT_RESTART')[0] == 0)
+    check("B4 '1' mid-scroll: reply %s, no restart" % tx[4:14], tx[:4] == b'\x06\xb1\x01\x0a' and tx[4:9] == b'15186' and s.ram('PKT_RESTART')[0] == 0)
     tx = send(s, b'\x17' + b'1045' + b'P', wait_ms=300)
     check('set time mid-scroll: clock %s, seconds %d and ticks %d zeroed (P23), no restart, no watchdog clear'
           % (s.ram('CLK_H10', 4).hex(), s.ram('CLK_SEC')[0], s.ram('NMI_COUNT')[0]),
@@ -1076,7 +1110,7 @@ def cmd_baud():
         s = Sign(rom, syms, fresh_ram=True, baud=baud); s.run_ms(2500)
         tx = send(s, b'\xb4\x31', wait_ms=int(16 * 10000 / baud) + 500)
         rate = s.ram('BAUD_STEP')[0]
-        check('%4d baud from cold: query reply %s, BAUD_STEP %d, BAUD_T %d' % (baud, tx[:9], rate, s.ram('BAUD_T')[0]), tx[:4] == b'\x06\xb1\x01\x0a' and tx[4:9] == b'15246' and rate == baud // 60)
+        check('%4d baud from cold: query reply %s, BAUD_STEP %d, BAUD_T %d' % (baud, tx[:9], rate, s.ram('BAUD_T')[0]), tx[:4] == b'\x06\xb1\x01\x0a' and tx[4:9] == b'15186' and rate == baud // 60)
         tx = send(s, b'\x09\x30\x31\x0e' + text, wait_ms=500)
         d = bytes(s.m.memory[syms['MSG_STORE']:int.from_bytes(s.ram('STORE_END', 2), 'little')])
         check('%4d baud: 220-byte load intact, ACK+DONE %s' % (baud, tx.hex()), text in d and tx == b'\x06\x04')
@@ -1101,10 +1135,10 @@ def cmd_baud():
     s = Sign(rom, syms, fresh_ram=True, baud=1200); s.run_ms(2500)
     send(s, b'\x09\x30\x30\x0e' + b'FAST', wait_ms=500)
     s.run_ms(1500); s.set_baud(300)
-    tx = send(s, b'\x09\x30\x31\x0e' + b'SLOW', wait_ms=500)
+    tx = send(s, b'\x09\x30\x31\x0e' + b'SLOW', wait_ms=3000)   # DONE can wait behind the sequence's empty-channel scans
     check('1200 then, after 1.5 s, 300: taken (%s, BAUD_STEP %d)' % (tx.hex(), s.ram('BAUD_STEP')[0]), tx == b'\x06\x04' and s.ram('BAUD_STEP')[0] == 5)
     s.run_ms(1500); s.set_baud(1200)
-    tx = send(s, b'\xb4\x33', wait_ms=3000)
+    tx = send(s, b'\xb4\x33', wait_ms=6500)   # the query can wait behind the empty-channel scans, then 3 s of dump
     check('then 1200: a store dump comes back whole at 1200 (%d bytes, ends %s)' % (len(tx), tx[-1:].hex()), tx[:4] == b'\x06\xb1\x01' + bytes([len(tx) - 6]) and tx[-1:] == b'\x04' if False else len(tx) > 20 and b'FAST' in tx and b'SLOW' in tx and tx.endswith(b'\x04'))
     # NETCC habits at 300: a bare STOP byte after silence, then keys, then a frame
     s = Sign(rom, syms, fresh_ram=True); s.run_ms(2500)
@@ -1177,6 +1211,190 @@ def cmd_clock():
           s.ram('NMI_PER_SEC')[0] == 64 and s.bank_reg & 0x80 and s.ram('NMI_SEEN')[0] == 0 and s.ram('CLK_SEC')[0] == 0 and r == b'\x00' and r2 == b'\x00')
     check('no faults', not s.faults)
     print('clock: %d/%d checks pass' % (sum(checks), len(checks)))
+    return all(checks)
+
+
+def cmd_config():
+    """P35: the configuration block: defaults after a RAM loss, kept across a reset,
+    rejected when its sum is wrong; B6 writes with the protected bytes refused and the
+    live bits kept; B4 '5' and '6' read it and the sequence; brightness picks the
+    intensity passes, mute darkens now or at the next message, hold and flash follow
+    their bytes, the beeper and the remote can be switched off"""
+    rom, syms = assemble(HERE.parent / 'src' / 'patched')
+    checks = []
+    def check(name, cond):
+        checks.append(bool(cond)); print('  %s %s' % ('ok  ' if cond else 'FAIL', name))
+    def reply(s, payload, wait_ms=1500):
+        s.tx_edges.clear()
+        s.send_frame(payload, addr=1, flag=0x80); s.rx_wait(); s.run_ms(wait_ms)
+        tx = s.tx_bytes()
+        return tx[1:] if tx[:1] == b'\x06' else tx
+    def cfg(s):
+        return s.ram('CFG', 16)
+    def valid(b):
+        return b[0] == 0xA5 and (sum(b[:15]) - (b[2] & 0xF0)) & 0xFF == b[15]
+    def setb(s, index, value, wait_ms=1500):
+        reply(s, bytes([0xB6, index, value]), wait_ms)
+    def passes(s, ms=1000):
+        s.row_starts.clear(); s.run_ms(ms)
+        first = sum(1 for t, p in s.row_starts if not p & 8)
+        second = sum(1 for t, p in s.row_starts if p & 8)
+        return first, second
+    def duty(s, ms=500):
+        """share of the time a row is selected on the control latch, sampled every 64 us"""
+        lit = n = 0
+        for _ in range(ms * 1000 // 64):
+            s.run(512); n += 1; lit += (s.latch & 0x0F) != 0x0F
+        return lit / n
+    defaults = bytes([0xA5, 1, 3, 0, 0, 0, 0, 99, 80, 13, 1, 0, 0, 0, 0])
+
+    s = Sign(rom, syms, fresh_ram=True)
+    s.run_ms(2500)
+    b = cfg(s)
+    check('fresh RAM: defaults %s, sum valid' % b.hex(), b[:15] == defaults and valid(b))
+    r = reply(s, b'\xb4\x35')
+    check("B4 '5' returns the block (%s)" % r[3:19].hex(), r[:3] == b'\xb1\x01\x10' and r[3:19] == b and r[19] == sum(b) & 0xFF)
+    r = reply(s, b'\xb4\x36', wait_ms=5000)
+    check("B4 '6' returns SEQ_LIST (%d bytes, first %s)" % (r[2], r[3:7].hex()), r[:3] == b'\xb1\x01\x68' and r[3:107] == s.ram('SEQ_LIST', 104))
+    # a plain message from here on: the demo's TINY segment has its own output path
+    s.send_frame(b'\x09\x30\x30\x0eHELLO THERE \x04\x30\x30', addr=1, flag=0x80); s.rx_wait(); s.run_ms(3000)
+
+    # writes: protected bytes refused, others sealed, the flags byte keeps its live bits
+    setb(s, 0, 0x00); setb(s, 1, 7); setb(s, 15, 0)
+    b = cfg(s)
+    check('B6 to the signature, the address and the sum is refused (%s)' % b.hex(), b[:2] == bytes([0xA5, 1]) and valid(b))
+    setb(s, 8, 20); setb(s, 9, 5)
+    b = cfg(s)
+    check('B6 8 20 and B6 9 5 land and reseal: hold %d flash %d' % (b[8], b[9]), b[8] == 20 and b[9] == 5 and valid(b))
+    a = syms['CFG_FLAGS']
+    s.m.memory[a] |= 0x10                           # a live bit, as patch 36 will set
+    setb(s, 2, 0x02)
+    b = cfg(s)
+    check('B6 2 keeps the live bits: flags %02x, sum valid' % b[2], b[2] & 0x1F == 0x12 and valid(b))   # bit 6 may be set by a wrap
+    s.m.memory[a] &= 0x0F
+
+    # brightness: lit time, both passes still sent so no color loses a bit
+    setb(s, 2, 0x03); d3 = duty(s); f3, s3 = passes(s)
+    setb(s, 2, 0x02); d2 = duty(s); f2, s2 = passes(s)
+    setb(s, 2, 0x01); d1 = duty(s); f1, s1 = passes(s)
+    setb(s, 2, 0x00); d0 = duty(s); f0, s0 = passes(s)
+    check('brightness 3: duty %.2f (%d+%d passes/s), 2: %.2f (%d+%d), 1: %.2f (%d+%d), 0: %.2f (%d+%d)' % (d3, f3, s3, d2, f2, s2, d1, f1, s1, d0, f0, s0),
+          d3 > 0.5 and abs(d2 / d3 - 2 / 3) < 0.08 and abs(d1 / d3 - 1 / 3) < 0.08 and d0 == 0
+          and min(f3, s3, f2, s2, f1, s1) > 300 and f0 == 0 and s0 == 0)
+    # the lit time must be the same every pass: lit from the latch it carried a
+    # drifting 0-128 us remainder that pulsed at a few hertz on the sign
+    setb(s, 2, 0x01)
+    runs, lit = [], 0
+    for _ in range(500 * 1000 // 32):
+        s.run(256)
+        if (s.latch & 0x0F) != 0x0F: lit += 1
+        elif lit: runs.append(lit); lit = 0
+    from collections import Counter
+    hist = Counter(runs); top = hist.most_common(2)
+    near = lambda want: sum(1 for l in runs if abs(l - want) <= 1)       # 32 us samples: a run lands on 4 or 5, 12 or 13
+    check('level 1: lit runs are two exact lengths, 1 and 3 interrupts: %d near 128 us, %d near 384 us (of %d)' % (near(4), near(12), len(runs)),
+          len(runs) > 300 and near(4) + near(12) > 0.95 * len(runs) and near(4) > 100 and near(12) > 100)
+
+    # mute now, then unmute; mute after the current message waits for the boundary
+    setb(s, 2, 0x07); fm, sm = passes(s)
+    setb(s, 2, 0x03); fu, su = passes(s)
+    check('mute now: %d passes/s; unmute: %d' % (fm + sm, fu + su), fm + sm == 0 and fu + su > 600)
+    # a long message, so the next boundary is seconds away
+    s.send_frame(b'\x09\x30\x30\x0e' + b'THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG ' * 5 + b'\x04\x30\x30', addr=1, flag=0x80); s.rx_wait(); s.run_ms(4000)
+    setb(s, 2, 0x0B)                                 # pending
+    fp, sp = passes(s, 300)
+    for _ in range(200):                             # the demo loops within a few seconds
+        if cfg(s)[2] & 0x04: break
+        s.run_ms(100)
+    b = cfg(s)
+    fa, sa = passes(s)
+    check('mute after the message: lit meanwhile (%d), then muted at the boundary: flags %02x, dark (%d), sum valid' % (fp + sp, b[2], fa + sa),
+          fp + sp > 100 and b[2] & 0x0C == 0x04 and fa + sa == 0 and valid(b))
+    setb(s, 2, 0x03)
+
+    # hold time: a PAUSE holds CFG_HOLD frames
+    def max_delay(s, ms):
+        top = 0
+        for _ in range(ms // 10):
+            s.run_ms(10); top = max(top, s.ram('FRAME_DELAY')[0])
+        return top
+    s.send_frame(b'\x09\x30\x30\x0e\x19HOLD ME\x18\x04\x30\x30', addr=1, flag=0x80); s.rx_wait(); s.run_ms(1500)
+    h20 = max_delay(s, 6000)
+    setb(s, 8, 80)
+    h80 = max_delay(s, 6000)
+    check('PAUSE holds %d frames with hold 20, %d with 80' % (h20, h80), h20 == 20 and h80 == 80)
+
+    # flash rate: LATCH_BIT7 toggles every CFG_FLASH frames
+    def toggles(s, ms):
+        n, last = 0, s.ram('LATCH_BIT7')[0]
+        for _ in range(ms // 2):
+            s.run_ms(2); v = s.ram('LATCH_BIT7')[0]
+            if v != last: n += 1; last = v
+        return n
+    t5 = toggles(s, 2000)
+    setb(s, 9, 13)
+    t13 = toggles(s, 2000)
+    check('flash toggles %d times in 2 s at 5 frames, %d at 13 (want ~25 and ~9)' % (t5, t13), 20 <= t5 <= 30 and 7 <= t13 <= 12)
+
+    # beeper off: a BEEP attribute does nothing
+    setb(s, 10, 0)
+    s.send_frame(b'\x09\x30\x30\x0e\x07BEEP\x04\x30\x30', addr=1, flag=0x80); s.rx_wait()
+    beeped = False
+    for _ in range(400):
+        s.run_ms(10); beeped |= s.ram('BEEP_TICKS', 2) != b'\x00\x00'
+    setb(s, 10, 1)
+    s.send_frame(b'\x09\x30\x30\x0e\x07BEEP\x04\x30\x30', addr=1, flag=0x80); s.rx_wait()
+    beeped_on = False
+    for _ in range(400):
+        s.run_ms(10); beeped_on |= s.ram('BEEP_TICKS', 2) != b'\x00\x00'
+    check('beeper off: silent (%s); on: beeps (%s)' % (beeped, beeped_on), not beeped and beeped_on)
+
+    # remote lock: STOP opens the editor only when unlocked
+    setb(s, 11, 1)
+    s.ir_key('STOP'); s.ir_wait(); s.run_ms(800)
+    locked = s.ram('MENU_ACTIVE')[0]
+    setb(s, 11, 0)
+    s.ir_key('STOP'); s.ir_wait(); s.run_ms(800)
+    opened = s.ram('MENU_ACTIVE')[0]
+    check('remote lock: STOP ignored (%02x); unlocked: editor opens (%02x)' % (locked, opened), locked == 0 and opened == 0xFF)
+    s.send_bytes(b'\x0d', gap_bits=20); s.rx_wait()  # leave the editor: 0D is the STOP/START key as a serial byte
+    for _ in range(50):
+        if not s.ram('MENU_ACTIVE')[0]: break
+        s.run_ms(100)
+
+    # the editor's ADDRESS? dialog reseals the block (driven as serial keys: a bare
+    # 01 opens the editor, B7 1F is FUNC MAGIC, three digits, 0D is STOP/START)
+    s.run_ms(3000)                                   # a bare 01 is ignored while a packet is busy
+    s.send_bytes(b'\x01', gap_bits=20); s.rx_wait()
+    for _ in range(50):
+        if s.ram('MENU_ACTIVE')[0]: break
+        s.run_ms(100)
+    for data, wait in ((b'\xb7\x1f', 1500), (b'002', 1500), (b'\x0d', 2000), (b'\x0d', 2500)):
+        s.send_bytes(data, gap_bits=20); s.rx_wait(); s.run_ms(wait)
+    for _ in range(50):
+        if not s.ram('MENU_ACTIVE')[0]: break
+        s.run_ms(100)
+    b = cfg(s)
+    check('address 2 set in the editor, block resealed (%s)' % b.hex(), b[1] == 2 and valid(b) and s.ram('MENU_ACTIVE')[0] == 0)
+    s.send_frame(b'\x04\x30\x30', addr=2, flag=0x80); s.rx_wait(); s.run_ms(2000)   # the sign now answers at 2
+
+    # kept across a reset with RAM intact; defaults again when the sum is wrong
+    s.send_frame(bytes([0xB6, 2, 0x01]), addr=2, flag=0x80); s.rx_wait(); s.run_ms(2500)
+    kept = cfg(s)
+    s2 = Sign(rom, syms, fresh_ram=True)
+    s2.m.set_memory_block(0x4000, bytes(s.m.memory[0x4000:0x8000]))
+    s2.run_ms(2500)
+    b2 = cfg(s2)
+    check('reset with RAM kept: block unchanged (%s), clock running' % b2.hex(), b2 == kept and kept[1] == 2 and kept[2] & 3 == 1 and s2.ram('CLK_RUN')[0])
+    s2.m.memory[syms['CFG_HOLD']] ^= 0xFF
+    s3 = Sign(rom, syms, fresh_ram=True)
+    s3.m.set_memory_block(0x4000, bytes(s2.m.memory[0x4000:0x8000]))
+    s3.run_ms(2500)
+    b3 = cfg(s3)
+    check('reset with a corrupt sum: defaults, store cleared, address 1 (%s)' % b3.hex(),
+          b3[:15] == defaults and valid(b3) and s3.ram('MSG_STORE', 3) == b'\xd0\xd0\x03')
+    check('no faults, stack ok (depth %d)' % s.depth(), not s.faults and not s2.faults and not s3.faults and s.depth() < 160)
+    print('config: %d/%d checks pass' % (sum(checks), len(checks)))
     return all(checks)
 
 
@@ -1328,7 +1546,7 @@ def cmd_compare(dir_a, dir_b):
 
 if __name__ == '__main__':
     args = sys.argv[1:]
-    if not args or args[0] not in ('stack', 'compare', 'eeprom', 'ota', 'update', 'push', 'fuzz', 'ram', 'quiet', 'speed', 'baud', 'clock'):
+    if not args or args[0] not in ('stack', 'compare', 'eeprom', 'ota', 'update', 'push', 'fuzz', 'ram', 'quiet', 'speed', 'baud', 'clock', 'config'):
         sys.exit(__doc__)
     if args[0] == 'ram':
         sys.exit(0 if cmd_ram() else 1)
@@ -1338,6 +1556,8 @@ if __name__ == '__main__':
         sys.exit(0 if cmd_baud() else 1)
     if args[0] == 'clock':
         sys.exit(0 if cmd_clock() else 1)
+    if args[0] == 'config':
+        sys.exit(0 if cmd_config() else 1)
     if args[0] == 'quiet':
         sys.exit(0 if cmd_quiet() else 1)
     if args[0] == 'push':

@@ -152,7 +152,7 @@ Clear **all** channels (`'A'` in the menu): payload is the single byte `03`.
 04  '0' c1  '0' c2  '0' c3 …       channels in the order to display
 ```
 
-(`"A"` = all → `04 30 30 30 31 30 32 … 30 39`.)
+NETCC sends `"A"` (all) as every channel, `04 30 30 30 31 30 32 … 30 39`, but the firmware lays the full 0–99 sequence down before it parses the digits and stops at the first byte that is not one, so a bare `04`, or `04 41` (`'A'`), means all as well; `cc784.py seq a` sends the bare form.
 
 ### 4.4 Set the clock
 
@@ -192,15 +192,18 @@ These are single bytes embedded in the message body. The editor letter is what y
 
 ### 5.2 Movement / effects
 
-| Editor | Name | Byte |
-|---|---|---|
-| C | Crawl on | `0x18` (24) |
-| J | Jump | `0x19` (25) |
-| D | Wipe down | `0x1B` (27) |
-| U | Wipe up | `0x1A` (26) |
-| W | Wipe back | `0x0F` (15) |
-| M | Magic | `0x1F` (31) |
-| P | Pause 1 s | `0x06` (6) |
+NETCC's names for these are not the sign's. The sign's own editor labels each byte (`ATTR_LABEL_TABLE` in the firmware) and its remote has keys for them, so the last column is the name to use; the host tool's `@{...}` escapes follow it. UP, DOWN, RIGHT and HOLD wipe the text that follows them onto the panel; PAUSE puts it up at once and holds it; LEFT is the plain scroll, which also ends a held section when a space alone will not; HALT stops and waits with the text yellowed.
+
+| Editor | NETCC's name | Byte | The sign's name |
+|---|---|---|---|
+| C | Crawl on | `0x18` (24) | **LEFT** |
+| J | Jump | `0x19` (25) | **PAUSE** |
+| D | Wipe down | `0x1B` (27) | **DOWN** |
+| U | Wipe up | `0x1A` (26) | **UP** |
+| W | Wipe back | `0x0F` (15) | **RIGHT** |
+| — | not in NETCC | `0xBB` (187) | **HOLD** |
+| M | Magic | `0x1F` (31) | MAGIC |
+| P | Pause 1 s | `0x06` (6) | **HALT** |
 | X | Wait for key | `0xBA` (186) |
 
 ### 5.3 Speed
@@ -310,6 +313,7 @@ The sign's side of this protocol is read from the firmware itself, and lives in 
 |---|---|
 | The fixed 300 baud, the bit-banged receiver and transmitter | [firmware notes §3](CC784_firmware.md#3-serial-link-h) |
 | The patched firmware's 300 to 1200 baud, set by the first frame after a second of silence | [CC784_patched.md](CC784_patched.md#2-patches), patch 30 |
+| The patched firmware's configuration block: `B6 index value` writes a byte, `B4 '5'` reads the block, `B4 '6'` the sequence list; `cc784.py config` | [CC784_patched.md](CC784_patched.md#2-patches), patch 35 |
 | The frame parser state by state, ACK, NAK and the silent discard of other addresses | [firmware notes §4](CC784_firmware.md#4-packet-parser-pkt_st_-16ef178c-h) |
 | The complete command list, including the ones NETCC never sends, and the exact reply and dump frame formats | [firmware notes §5](CC784_firmware.md#5-packet-processing-and-command-set-pkt_process-2a68-h) |
 | Every attribute byte with the sign's own name for it, the color codes, the graphics and the European characters | [firmware notes §7](CC784_firmware.md#7-rendering-h) |
@@ -326,3 +330,13 @@ then, if it doesn't start showing on its own:
 ```
 B1 2A 80 03  04 30 30  64                        (sequence: channel 00)
 ```
+
+## 8. The CC710 on the wire
+
+The ten-channel CC710 ([firmware notes §14](CC784_firmware.md#14-the-cc710-firmware-h--from-a-rom-dump-id-710)) speaks the same frames through its 10-pin header, with these differences:
+
+- It must be put into packet mode at boot: the probe (data out on SK1 pin 5, clock on pin 4, sampled on pin 8) has to echo the `55` pattern (an inverting echo yields address `*`; other replies give `~D`, and the fallback path gives `D5`, a firmware bug); the NET cable's plain short of DB9 pins 2 and 5 (SK1 pins 8 and 2) gives serial *terminal* mode instead, where bytes are key codes. Without an adapter, holding `1`, `7` or `U` on the keypad at power-up also selects packet mode, with address `*`.
+- The transmitter waits for SK1 pins 9 and 7 (DB9 pins 1 and 6) high and the receiver raises SK1 pin 4 (DB9 pin 4) as "ready", dropped while its 8-byte FIFO is full.
+- Query `0` returns six ID bytes (`71009l`); query `2` returns the first `B0` remark of each of channels 0–9, 20 bytes maximum each, separated by `19`.
+- `09 c` takes one byte (`0`–`9`, `D` demo), `04` one byte per channel (ten at most), `17 hhmm a` takes `A`/`a` for AM, `03` clears ten channels. Channel markers in a dump are single bytes `D0`–`D9`.
+- Attributes: HOLD `BB`, RAINBOW `BC`, MAGIC OFF `BD` and TINY `BE` do not exist; the sign names `06` PAUSE, `19` JUMP, `18` CRAWL and `0F` BCRAWL.

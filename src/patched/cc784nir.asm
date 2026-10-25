@@ -157,26 +157,47 @@ RAINBOW_REVERSE      equ 0x80
 TEST_MSG_BUF         equ RAM_VARS+0x1cb   ; the message shown in TEST_MODE, 28 bytes (stock: the test pattern plus the ROM checksum)
 MENU_ENTRY_BUF       equ RAM_VARS+0x1e7
 FUNC_PENDING         equ RAM_VARS+0x1ec   ; editor: FUNC (B7) pressed, next key picks the second function
-MY_ADDRESS           equ RAM_VARS+0x1ed
-MY_ADDRESS_INV       equ RAM_VARS+0x1ee
-SCROLL_SPEED         equ RAM_VARS+0x1ef   ; 0..7 from F0-F7; blank ticks inserted after every frame
-DISP_ACC             equ RAM_VARS+0x1f0   ; P26: sevenths of an interrupt carried to the next display tick (was BLANK_TIMER)
-SPEED_PENDING        equ RAM_VARS+0x1f1   ; editor: SPEED key pressed, next key is the digit
+LIT_COUNT            equ RAM_VARS+0x1ed   ; P35: interrupts the lit row has left
+LIT_LIMIT            equ RAM_VARS+0x1ee   ; P35: the row's share of interrupts; 0 = full brightness or parked
+LATCH_PENDING        equ RAM_VARS+0x1ef   ; P35: row select code the ISR latches on its next interrupt; 0 = none
+SCROLL_SPEED         equ RAM_VARS+0x1f0   ; 0..7 from F0-F7; blank ticks inserted after every frame
+DISP_ACC             equ RAM_VARS+0x1f1   ; P26: sevenths of an interrupt carried to the next display tick (was BLANK_TIMER)
+SPEED_PENDING        equ RAM_VARS+0x1f2   ; editor: SPEED key pressed, next key is the digit
 ; P20: the clock digits must survive a power cycle, so they live up here next
 ; to the store, out of reach of the stub's library copy (RAM_VARS+00..81).
-CLK_H10              equ RAM_VARS+0x1f2
-CLK_H1               equ RAM_VARS+0x1f3
-CLK_M10              equ RAM_VARS+0x1f4
-CLK_M1               equ RAM_VARS+0x1f5
-CLK_SEC              equ RAM_VARS+0x1f6
-CLK_PM               equ RAM_VARS+0x1f7
-KEY_ECHO_TX          equ RAM_VARS+0x1f8   ; non-zero = echo accepted keys on serial TX
-STORE_LIMIT          equ RAM_VARS+0x1f9
-STORE_SIZE           equ RAM_VARS+0x1fb
-STORE_TEXT_LIMIT     equ RAM_VARS+0x1fd   ; free text bytes; scan bound for store_repair
-STORE_WARN_LIMIT     equ RAM_VARS+0x1ff   ; STORE_END here trips the 100 KEYS LEFT warning
-STORE_GUARD          equ RAM_VARS+0x201   ; store_repair writes a space at MSG_STORE-1 every boot
-MSG_STORE            equ RAM_VARS+0x202
+CLK_H10              equ RAM_VARS+0x1f3
+CLK_H1               equ RAM_VARS+0x1f4
+CLK_M10              equ RAM_VARS+0x1f5
+CLK_M1               equ RAM_VARS+0x1f6
+CLK_SEC              equ RAM_VARS+0x1f7
+CLK_PM               equ RAM_VARS+0x1f8
+KEY_ECHO_TX          equ RAM_VARS+0x1f9   ; non-zero = echo accepted keys on serial TX
+STORE_LIMIT          equ RAM_VARS+0x1fa
+STORE_SIZE           equ RAM_VARS+0x1fc
+STORE_TEXT_LIMIT     equ RAM_VARS+0x1fe   ; free text bytes; scan bound for store_repair
+STORE_WARN_LIMIT     equ RAM_VARS+0x200   ; STORE_END here trips the 100 KEYS LEFT warning
+; P35: the configuration block. Battery-backed like the clock; its signature
+; and sum are the RAM-validity test (was MY_ADDRESS against its complement).
+CFG                  equ RAM_VARS+0x202
+CFG_SIG              equ CFG+0            ; CFG_MAGIC while the block is valid
+MY_ADDRESS           equ CFG+1            ; written only by the editor's ADDRESS? dialog
+CFG_FLAGS            equ CFG+2            ; bits 0-1 brightness, 2 muted, 3 mute pending, 4 alert, 5 editor, 6 wrapped
+CFG_PIN2_ROLE        equ CFG+3            ; P36: 0 none, 1 alert, 2 chain input
+CFG_PIN6_ROLE        equ CFG+4            ; P36: 0 none, 1 mute
+CFG_PIN4_ROLE        equ CFG+5            ; P36: 0 none, 1 boundary
+CFG_PIN7_ROLE        equ CFG+6            ; P36: 0 none, 1 heartbeat, 2 busy
+CFG_ALERT_CHAN       equ CFG+7            ; P36: the channel the alert line plays
+CFG_HOLD             equ CFG+8            ; frames a PAUSE, HOLD, wipe or clock holds the panel
+CFG_FLASH            equ CFG+9            ; frames per half period of the FLASH blink
+CFG_BEEP             equ CFG+10           ; 0: the beeper stays silent
+CFG_LOCK             equ CFG+11           ; non-zero: remote keys are ignored
+CFG_STATUS           equ CFG+12           ; reserved: status reports
+CFG_CLKSRC           equ CFG+13           ; reserved: clock source override
+CFG_SUM              equ CFG+15           ; 8-bit sum of the 15 bytes before it
+CFG_LEN              equ 16
+CFG_MAGIC            equ 0xa5
+STORE_GUARD          equ CFG+CFG_LEN      ; store_repair writes a space at MSG_STORE-1 every boot
+MSG_STORE            equ STORE_GUARD+1
 ; ---- Top of RAM (patch 13). Everything at a fixed address sits in the last
 ;      272 bytes below RAM_TOP: on the stock 8 K chip 7Fxx aliases 5Fxx, so the
 ;      same build runs on either; only the store's ceiling is decided at boot.
@@ -215,9 +236,9 @@ STACK_TOP            equ PKT_READY   ; first PUSH lands two below
 ; FLASH blink: frames per half period of CTRL_LATCH bit 7. Stock 13 = 2.4 Hz;
 ; 7 gave a visible ~5 Hz on the sign (2026-09-19), which is what proved bit 7
 ; is the blink clock. Change here to retune, nothing else references it.
-FLASH_HALF_PERIOD    equ 13
+FLASH_HALF_PERIOD    equ 13          ; P35: the default of CFG_FLASH
 FRAME_COLS           equ 86          ; columns sent per row: the panel's 84 plus two that fall off the chain
-HOLD_FRAMES          equ 80          ; frames a PAUSE, HOLD, wipe or clock holds the panel (~1.3 s)
+HOLD_FRAMES          equ 80          ; frames a PAUSE, HOLD, wipe or clock holds the panel (~1.3 s); P35: the default of CFG_HOLD
 BEEP_LEN             equ 150         ; beeper on for this many tick6 periods (~115 ms)
 IR_REPEAT_DELAY      equ 1300        ; tick6 periods a held remote key waits before repeating (~1 s)
 IR_REPEAT_TICKS      equ 300         ; ... and between repeats (~0.23 s)
@@ -287,11 +308,12 @@ GRAPH_BASE           equ 0xa0        ; A0-AF built-in graphics
 SPEED_BASE           equ 0xf0        ; F0-F7 scroll speed
 LATCH_TX             equ 0x10        ; CTRL_LATCH bit 4: serial TX
 LATCH_BLINK          equ 0x80        ; CTRL_LATCH bit 7: the FLASH blink clock
-STACK_SIZE           equ 128         ; measured high-water 70 bytes, worst-case chain ~108
+STACK_SIZE           equ 160         ; P35: a 57-channel store fill used 130 bytes (the canary says); 128 overran into the TX segments
+STACK_CANARY         equ 128         ; P35: bytes of 0x55 laid at the bottom at boot; the timing query reports the untouched ones
 ; P21: packet processing runs in the render loop and replies go out in the
 ; background, so their state cannot share renderer scratch. 32 bytes below the
 ; stack, carved off the store.
-STREAM_AREA          equ STACK_TOP-STACK_SIZE-32
+STREAM_AREA          equ STACK_TOP-STACK_SIZE-STREAM_AREA_SIZE
 TX_SEG0              equ STREAM_AREA+0     ; segment being sent: ptr, count, flags (bit 0 = append the sum)
 TX_SEG1              equ STREAM_AREA+5     ; next segment, same layout
 TX_SUM               equ STREAM_AREA+10    ; running 8-bit sum of TX_SEG0's bytes
@@ -311,7 +333,18 @@ PKT_SEQ_CHANGED      equ STREAM_AREA+28    ; P27: FF once the packet has rewritt
 DISP_STRETCH         equ STREAM_AREA+29    ; P26: sevenths of an interrupt added to every display tick: 2 x speed
 SVC_DUE              equ STREAM_AREA+30    ; P26: bit 0 = tick6 engines due, bit 1 = display tick due
 SVC_ACTIVE           equ STREAM_AREA+31    ; P26: FF while tick6_service runs; it drains SVC_DUE, so it never nests
-STREAM_AREA_SIZE     equ 32
+LOST_MARKS           equ STREAM_AREA+32    ; P35: display ticks that found the previous one still pending, this NMI second
+LOST_MARKS_LAST      equ STREAM_AREA+33    ; the previous second's count, for the timing query
+PORT_SAMPLE          equ STREAM_AREA+34    ; P35: PORT_IN as the ISR read it this interrupt
+IR_QUIET             equ STREAM_AREA+35    ; P35: 1 = the IR decoder waits for the line to rise, 3 = to fall: its handler is skipped meanwhile
+MAIN_BEAT            equ STREAM_AREA+36    ; P35: pkt_poll counts; the frame end sees the renderer stall when it stops
+BEAT_SEEN            equ STREAM_AREA+37
+STALL_FRAMES         equ STREAM_AREA+38    ; frames the renderer has not polled for
+STALL_MAX            equ STREAM_AREA+39    ; the longest this NMI second, and the count of stalls of 3 frames or more
+STALL_MAX_LAST       equ STREAM_AREA+40
+STALL_EVENTS         equ STREAM_AREA+41
+STALL_EVENTS_LAST    equ STREAM_AREA+42
+STREAM_AREA_SIZE     equ 43
 STORE_TOP            equ STREAM_AREA-1    ; with a 32 K chip (16 K usable)
 STORE_TOP_8K         equ STORE_TOP-0x2000         ; with the stock 8 K chip
 ; store_init derives the warning level, the text allowance (301 = framing) and
@@ -338,8 +371,11 @@ QUERY_ROMID          equ '0'
 QUERY_MEMORY         equ '1'
 QUERY_NOP            equ '2'
 QUERY_DUMP           equ '3'
-QUERY_TIMING         equ '4'         ; P30: BAUD_T, BAUD_STEP, BAUD_CAL_LAST, NMI_SEEN
+QUERY_TIMING         equ '4'         ; P30: BAUD_T, BAUD_STEP, BAUD_CAL_LAST, NMI_SEEN; P35: LOST_MARKS_LAST, STALL_MAX_LAST, STALL_EVENTS_LAST, stack headroom
+QUERY_CONFIG         equ '5'         ; P35: the 16-byte configuration block
+QUERY_SEQ            equ '6'         ; P35: SEQ_LIST, 104 bytes
 CMD_OTA              equ 0xb5        ; B5 c ... (patch 11)
+CMD_CONFIG           equ 0xb6        ; B6 index value (patch 35)
 DONE_BYTE            equ 0x04        ; sent after processing when the frame's flag was 81 (patch 16)
 
 ; ---- Boot stub and OTA (CC784_ota.md) ------------------------------------------
@@ -722,7 +758,7 @@ restart_display:
         CALL store_repair
         CALL init_sequence
         EI
-        JR main_loop
+        JP main_loop
 
 ; ---- nmi_entry: NMI = real-time clock tick (mains frequency); calls clock_tick
 nmi_entry:
@@ -747,6 +783,8 @@ nmi_entry:
 int_timer:
         EX AF,AF'
         EXX
+        IN A,(PORT_IN)          ; P35: one sample for the IR gate at the end
+        LD (PORT_SAMPLE),A
         LD A,(RX_PHASE)         ; P30: the serial bit engines, every interrupt,
         AND A                   ; so 1200 baud fits; idle they cost a line poll
         JR nz,int_rx_active
@@ -762,6 +800,36 @@ int_tx:
         LD A,(TX_STATUS)
         AND 3
         CALL nz,tx_isr
+        LD A,(LIT_LIMIT)        ; P35: brightness by lit time (see latch_row_dim):
+        AND A                   ; 0 at full brightness, the cheap way out
+        JR z,int_lit_on
+        LD A,(LATCH_PENDING)    ; a row waiting to be lit: lit here, on the
+        AND A                   ; interrupt grid, so the count is exact
+        JR z,int_lit_count
+        LD C,A
+        LD A,(CTRL_LATCH_SHADOW)
+        AND 0x70
+        OR C
+        LD (CTRL_LATCH_SHADOW),A
+        LD (CTRL_LATCH),A
+        LD A,(LIT_LIMIT)        ; lit: the row's share, counted down below
+        LD (LIT_COUNT),A
+        XOR A
+        LD (LATCH_PENDING),A
+        JR int_lit_on
+
+int_lit_count:
+        LD HL,LIT_COUNT         ; park the rows once it has had its share
+        DEC (HL)
+        JR nz,int_lit_on
+        LD A,(CTRL_LATCH_SHADOW)
+        OR 15
+        LD (CTRL_LATCH_SHADOW),A
+        LD (CTRL_LATCH),A
+        XOR A                   ; parked: nothing more to do until the next row arms it
+        LD (LIT_LIMIT),A
+
+int_lit_on:
         LD HL,DISP_COUNT
         DEC (HL)
         JR nz,int_tick6
@@ -782,6 +850,13 @@ int_disp_reload:
         LD (DISP_ACC),A
         LD (HL),B
         LD HL,SVC_DUE
+        BIT 1,(HL)              ; P35: a tick the service has not reached yet is merged: counted
+        JR z,int_disp_mark
+        LD A,(LOST_MARKS)
+        INC A
+        LD (LOST_MARKS),A
+
+int_disp_mark:
         SET 1,(HL)
 
 int_tick6:
@@ -789,6 +864,8 @@ int_tick6:
         INC A
         CP 6
         JR nz,int_tick6_store
+        LD HL,TICK6_CAL         ; P35: counted here, where the mark is made, so a late
+        INC (HL)                ; service cannot shrink the calibration's second
         LD HL,SVC_DUE
         SET 0,(HL)
         XOR A
@@ -806,8 +883,23 @@ int_tick6_store:
         PUSH HL
 
 int_vector:
+        LD A,(IR_QUIET)         ; P35: the decoder waiting on the line has nothing to
+        AND A                   ; do until it moves: its handler, ~90 cycles an interrupt
+        JR z,int_vector_push    ; (a reset every interrupt on a sign with no receiver), is skipped
+        LD C,A
+        LD A,(PORT_SAMPLE)
+        AND 2
+        OR 1
+        CP C
+        JR z,int_vector_done
+        XOR A
+        LD (IR_QUIET),A
+
+int_vector_push:
         LD HL,(TICK_VECTOR)
         PUSH HL
+
+int_vector_done:
         EX AF,AF'
         EXX
         EI
@@ -839,6 +931,9 @@ render_loop:
 ; ---- pkt_poll (P21): process a pending packet here, between two render
 ;      steps. pkt_process returns unless the display has to restart.
 pkt_poll:
+        LD A,(MAIN_BEAT)        ; P35: the renderer's heartbeat (HL is the caller's)
+        INC A
+        LD (MAIN_BEAT),A
         LD A,(PKT_READY)
         AND A
         RET z
@@ -871,8 +966,6 @@ svc_loop:
         BIT 0,(HL)
         JR z,svc_display
         RES 0,(HL)
-        LD HL,TICK6_CAL         ; P30: baud_calibrate reads this once a second
-        INC (HL)
         LD HL,(GEN_COUNTDOWN)
         DEC HL
         LD A,H
@@ -928,7 +1021,13 @@ row_output:
         CALL latch_blank
         LD A,(DISP_ON)
         AND A
-        JR z,row_phase_step
+        JP z,row_phase_step
+        LD A,(CFG_FLAGS)        ; P35: muted or brightness 0: the row stays dark
+        AND 7
+        CP 4
+        JP nc,row_phase_step
+        AND A
+        JP z,row_phase_step
         LD HL,(FB_OUT_PTR)
         LD A,(FB_OUT_LEN)
         LD B,A
@@ -999,7 +1098,7 @@ row_select:
         OR C
         AND 0x8f
         LD C,A
-        CALL latch_row
+        CALL latch_row_dim      ; P35: lit now at full brightness, else by the ISR
 
 row_phase_step:
         LD A,(ROW_PORT)
@@ -1033,6 +1132,34 @@ row_advance:
 
 frame_idle_held:
         CALL clock_bank         ; P31: the OTA library may have dropped the clock bit
+        PUSH HL                 ; P35: frames since the renderer last polled: a stall
+        LD A,(MAIN_BEAT)        ; of 3 or more is the pause seen on the panel
+        LD HL,BEAT_SEEN
+        CP (HL)
+        JR nz,beat_alive
+        LD HL,STALL_FRAMES
+        INC (HL)
+        LD A,(HL)
+        CP 3
+        JR nz,beat_not3
+        LD HL,STALL_EVENTS
+        INC (HL)
+        LD A,3
+
+beat_not3:
+        LD HL,STALL_MAX
+        CP (HL)
+        JR c,beat_done
+        LD (HL),A
+        JR beat_done
+
+beat_alive:
+        LD (HL),A
+        XOR A
+        LD (STALL_FRAMES),A
+
+beat_done:
+        POP HL
         LD A,(FRAME_DELAY)
         AND A
         JR z,frame_speed
@@ -1134,7 +1261,8 @@ frame_bit7_tick:
         LD A,(FRAME_COUNT)
         INC A
         LD (FRAME_COUNT),A
-        CP FLASH_HALF_PERIOD
+        LD HL,CFG_FLASH         ; P35
+        CP (HL)
         JR nz,frame_done
         XOR A
         LD (FRAME_COUNT),A
@@ -1312,6 +1440,9 @@ seq_all_empty:
 ;      next SEQ_LIST entry (demo 100 when SEQ_ALL_EMPTY); seat STORE_CURSOR on its
 ;      first printable byte, or on TEST_MSG_BUF in TEST_MODE
 seq_next_channel:
+        CALL chan_boundary      ; P35: once per message; the retries below skip it
+
+seq_pick:
         LD A,(TEST_MODE)
         INC A
         JP z,seq_test_message
@@ -1336,7 +1467,9 @@ seq_from_list:
         JR nz,seq_clamp_entry
         LD HL,SEQ_LIST
         LD (SEQ_PTR),HL
-        JR seq_next_channel
+        LD HL,CFG_FLAGS         ; P35: the sequence starts over
+        SET 6,(HL)
+        JR seq_pick
 
 seq_clamp_entry:
         CP CHAN_DEMO+1
@@ -1401,12 +1534,12 @@ seq_chan_empty:
         LD HL,(SEQ_PTR)
         LD A,(HL)
         CP 0xff
-        JP nz,seq_next_channel
+        JP nz,seq_pick
         DEC HL
         LD DE,SEQ_LIST
         OR A
         SBC HL,DE
-        JP nz,seq_next_channel
+        JP nz,seq_pick
         LD A,CHAN_DEMO
         JR seq_open_channel
 
@@ -1676,7 +1809,7 @@ init_nmi_store:
         JP clock_bank
 
 ; ---- init_vars: Power-on RAM init: copies the blocks out of INIT_DATA,
-;      validates MY_ADDRESS/MY_ADDRESS_INV (resets it if corrupt)
+;      validates the configuration block (P35) and applies the defaults if not
 init_vars:
         XOR A
         LD (TINY_RENDER),A
@@ -1709,6 +1842,9 @@ init_clear_addrbuf:
         LD (SCROLL_SPEED),A
         LD (DISP_ACC),A
         LD (TICK6_COUNT),A
+        LD (LIT_LIMIT),A        ; P35: full brightness until latch_row_dim arms it
+        LD (LIT_COUNT),A
+        LD (LATCH_PENDING),A
         LD HL,STREAM_AREA       ; P21: no reply in flight, no packet busy
         LD B,STREAM_AREA_SIZE
 
@@ -1716,6 +1852,14 @@ init_clear_stream:
         LD (HL),A
         INC HL
         DJNZ init_clear_stream
+        LD HL,STACK_TOP-STACK_SIZE  ; P35: a canary over the bottom of the stack; the timing
+        LD B,STACK_CANARY       ; query counts how much of it was never reached
+
+init_canary:
+        LD (HL),0x55
+        INC HL
+        DJNZ init_canary
+        XOR A
         INC A
         LD (DISP_COUNT),A       ; P26: first display tick on the next interrupt
         LD A,0xff
@@ -1727,16 +1871,13 @@ init_clear_stream:
         AND 3
         ADD A,3
         LD (RND_VAL),A
-        LD A,(MY_ADDRESS)
-        LD C,A
-        LD A,(MY_ADDRESS_INV)
-        CPL
-        CP C
+        CALL cfg_valid          ; P35: the block's signature and sum say whether RAM survived
         JR z,init_copy_tables
-        ; MY_ADDRESS_INV is MY_ADDRESS+1, so one 16-bit store does both:
-        ; L=0x01 -> address 1 (NETCC's default), H=0xFE -> its complement.
-        LD HL,0xfe01
-        LD (MY_ADDRESS),HL
+        LD HL,CFG_DEFAULTS
+        LD DE,CFG
+        LD BC,CFG_LEN-1
+        LDIR
+        CALL cfg_seal
         ; P6: RAM is fresh, so the clock bytes are noise too - the image copy
         ; below starts at CLK_RUN and never touches CLK_H10..CLK_PM. Start 12:00 AM.
         LD HL,0x0201
@@ -1770,6 +1911,61 @@ init_copy_tables:
         LD HL,SEQ_LIST
         LD (SEQ_PTR),HL
         RET
+
+; ---- cfg_sum (P35): A = 8-bit sum of the block's first 15 bytes, HL -> CFG_SUM.
+;      The live bits of CFG_FLAGS (4-7) change without a reseal and do not count.
+cfg_sum:
+        LD HL,CFG
+        LD B,CFG_LEN-1
+        XOR A
+
+cfg_sum_loop:
+        ADD A,(HL)
+        INC HL
+        DJNZ cfg_sum_loop
+        LD C,A
+        LD A,(CFG_FLAGS)
+        AND 0xf0
+        LD B,A
+        LD A,C
+        SUB B
+        RET
+
+; ---- chan_boundary: a new message starts: a pending mute takes effect and the
+;      wrapped flag is cleared until the sequence starts over again
+chan_boundary:
+        LD HL,CFG_FLAGS
+        RES 6,(HL)
+        BIT 3,(HL)
+        RET z
+        RES 3,(HL)
+        SET 2,(HL)
+        JR cfg_seal
+
+; ---- cfg_seal: store the sum; every write to the block ends here
+cfg_seal:
+        CALL cfg_sum
+        LD (HL),A
+        RET
+
+; ---- cfg_valid: Z if the sum matches and the signature is in place
+cfg_valid:
+        CALL cfg_sum
+        CP (HL)
+        RET nz
+        LD A,(CFG_SIG)
+        CP CFG_MAGIC
+        RET
+
+; ---- CFG_DEFAULTS: the block after a RAM loss, the sum computed at boot
+CFG_DEFAULTS:
+        db CFG_MAGIC, 1         ; signature, address 1 (NETCC's default)
+        db 0x03                 ; full brightness, not muted
+        db 0, 0, 0, 0           ; spare line roles: none
+        db 99                   ; alert channel
+        db HOLD_FRAMES, FLASH_HALF_PERIOD
+        db 1, 0                 ; beeper on, remote unlocked
+        db 0, 0, 0              ; status reports off, clock source auto, reserved
 
 ; ---- INIT_DATA: RAM images that init_vars LDIRs into place, one run per block
 ;      of initialized variables. The dw entries naming a ROM label hold an
@@ -3202,8 +3398,11 @@ fx_beep:
         CALL beep_start
         JP render_next_char
 
-; ---- beep_start: BEEP_TICKS = BEEP_LEN (~115 ms)
+; ---- beep_start: BEEP_TICKS = BEEP_LEN (~115 ms); P35: nothing with the beeper off
 beep_start:
+        LD A,(CFG_BEEP)
+        AND A
+        RET z
         PUSH HL
         LD HL,BEEP_LEN
         LD (BEEP_TICKS),HL
@@ -3246,7 +3445,7 @@ fx_hold:
         LD HL,fxv_hold
         JR set_effect_vector
 
-; ---- fx_pause: 19: show the staged text at once and hold HOLD_FRAMES frames
+; ---- fx_pause: 19: show the staged text at once and hold CFG_HOLD frames
 fx_pause:
         XOR A
         LD (SCROLLING),A
@@ -3350,7 +3549,7 @@ halt_wait_frames:
         JR nz,halt_wait_frames
 
 halt_hold:
-        LD A,HOLD_FRAMES
+        LD A,(CFG_HOLD)         ; P35
         LD (FRAME_DELAY),A
         CALL fb_colors_default
         LD HL,(STORE_CURSOR)
@@ -3661,6 +3860,12 @@ tiny_row_out:
         AND A
         JR z,disp_next_row
         CALL latch_blank
+        LD A,(CFG_FLAGS)        ; P35: TINY has one pass, so it is dark only
+        AND 7                   ; when muted or at brightness 0
+        CP 4
+        JR nc,tiny_row_done
+        AND A
+        JR z,tiny_row_done
 
 ; ---- disp_blank_row: Send 0x8F (all off) to the current row
 disp_blank_row:
@@ -3691,7 +3896,9 @@ tiny_row_select:
         OR C
         AND 0x8f
         LD C,A
-        CALL latch_row
+        CALL latch_row_dim_tiny ; P35
+
+tiny_row_done:
         XOR A
         LD (ROW_OUT_PENDING),A
         JP tick6_restore
@@ -3758,7 +3965,7 @@ right_wait_frame:
         AND A
         JR nz,right_wait_frame
         DJNZ right_wait_row
-        LD A,HOLD_FRAMES
+        LD A,(CFG_HOLD)         ; P35
         LD (FRAME_DELAY),A
         XOR A
         LD (SCROLLING),A
@@ -3814,7 +4021,7 @@ hold_wait_frame:
         AND A
         JR nz,hold_wait_frame
         DJNZ hold_wait_row
-        LD A,HOLD_FRAMES
+        LD A,(CFG_HOLD)         ; P35
         LD (FRAME_DELAY),A
         XOR A
         LD (SCROLLING),A
@@ -3827,7 +4034,7 @@ fxv_pause:
         LD A,(COL_COUNT)
         LD C,A
         LDIR
-        LD A,HOLD_FRAMES
+        LD A,(CFG_HOLD)         ; P35
         LD (FRAME_DELAY),A
         XOR A
         LD (SCROLLING),A
@@ -3908,7 +4115,7 @@ wipev_next_pass:
         POP AF
         DEC A
         JR nz,wipev_pass
-        LD A,HOLD_FRAMES
+        LD A,(CFG_HOLD)         ; P35
         LD (FRAME_DELAY),A
         XOR A
         LD (SCROLLING),A
@@ -4038,7 +4245,12 @@ ir_st_idle:
         PUSH AF
         IN A,(PORT_IN)
         BIT 1,A
-        JR nz,ir_reset
+        JR z,ir_idle_low
+        LD A,3
+        LD (IR_QUIET),A         ; P35: a high line while idle: sleep until it falls
+        JR ir_reset
+
+ir_idle_low:
         LD A,(IR_STATE_CNT)
         DEC A
         JR nz,ir_idle_count
@@ -4057,7 +4269,12 @@ ir_st_leader:
         PUSH AF
         IN A,(PORT_IN)
         BIT 1,A
-        JR z,ir_leader_ret
+        JR nz,ir_leader_seen
+        LD A,1
+        LD (IR_QUIET),A         ; P35: sleep until the ISR sees the line rise
+        JR ir_leader_ret
+
+ir_leader_seen:
         PUSH HL
         LD HL,ir_st_leader2
         LD (TICK_VECTOR),HL
@@ -4074,7 +4291,12 @@ ir_st_leader2:
         PUSH AF
         IN A,(PORT_IN)
         BIT 1,A
-        JR nz,ir_leader2_ret
+        JR z,ir_leader2_fell
+        LD A,3
+        LD (IR_QUIET),A         ; P35: a line that stays high (a receiver unplugged) parks the decoder here
+        JR ir_leader2_ret
+
+ir_leader2_fell:
         PUSH HL
         LD HL,ir_st_leader3
         LD (TICK_VECTOR),HL
@@ -4169,6 +4391,9 @@ ir_bit_count:
         RET
 
 ir_frame_done:
+        LD A,(CFG_LOCK)         ; P35: a locked sign drops the key here, before
+        AND A                   ; either consumer sees it
+        JP nz,ir_reset
         LD A,(IR_SHIFT)
         RRCA
         RRCA
@@ -4548,6 +4773,18 @@ rx_byte_end:
 ;      within 5 % of nominal: a window that lost interrupts to a long DI
 ;      stretch (an OTA page write, a restart) disagrees with its neighbors.
 baud_calibrate:
+        LD HL,LOST_MARKS        ; P35: the stutter meters, read by the timing query
+        LD A,(HL)
+        LD (HL),0
+        LD (LOST_MARKS_LAST),A
+        LD HL,STALL_MAX
+        LD A,(HL)
+        LD (HL),0
+        LD (STALL_MAX_LAST),A
+        LD HL,STALL_EVENTS
+        LD A,(HL)
+        LD (HL),0
+        LD (STALL_EVENTS_LAST),A
         LD HL,TICK6_CAL
         LD A,(HL)
         LD (HL),0
@@ -4613,6 +4850,8 @@ latch_blank:
         OR 15
         LD (CTRL_LATCH_SHADOW),A
         LD (CTRL_LATCH),A
+        XOR A                   ; P35: a row code still waiting for the ISR goes with the
+        LD (LATCH_PENDING),A    ; row, or a late service's next pass would light it mid-shift
         EI
         RET
 
@@ -4624,6 +4863,43 @@ latch_row:
         LD (CTRL_LATCH_SHADOW),A
         LD (CTRL_LATCH),A
         EI
+        RET
+
+; ---- latch_row_dim (P35): row_output's latch, C = the row code. At full
+;      brightness the row is lit here, as before. Dimmed, the code is left for
+;      the ISR, which lights the row on its next interrupt and parks the rows
+;      again after LIT_LIMIT interrupts: 1 or 2 of the single-tick pass, 3 or 6
+;      of the double-tick pass, for 1/3 and 2/3. A row is lit for 3 and 9
+;      interrupts of those passes, not 6 and 12: the next tick blanks it first
+;      and then spends three interrupts sending the next 86 bytes. Lighting on
+;      the interrupt grid makes the lit time exact; lit from the latch, it
+;      carried a 0-128 us remainder that drifted and pulsed at dim levels.
+;      Every pixel loses the same share, so no color shifts. TINY rows last two
+;      ticks, like the double-tick pass.
+latch_row_dim:
+        LD A,(ROW_PORT)
+        AND 8
+        LD B,A
+        JR latch_dim
+
+latch_row_dim_tiny:
+        LD B,8
+
+latch_dim:
+        LD A,(CFG_FLAGS)
+        AND 3
+        CP 3
+        JP z,latch_row          ; full: LIT_LIMIT is 0 (cmd_B6_config clears it)
+        BIT 3,B
+        JR z,lit_set
+        LD B,A
+        ADD A,A
+        ADD A,B
+
+lit_set:
+        LD (LIT_LIMIT),A
+        LD A,C
+        LD (LATCH_PENDING),A
         RET
 
 ; ---- rx_fifo_get: Pop one byte from RX_FIFO into RX_BYTE. Returns NC with A=byte, or C if empty
@@ -5455,7 +5731,7 @@ time_get_digit:
         LD (CLK_H1),A
 
 time_wait:
-        LD A,HOLD_FRAMES
+        LD A,(CFG_HOLD)         ; P35
         LD (FRAME_DELAY),A
 
 time_wait_loop:
@@ -5855,8 +6131,7 @@ addr_convert:
         CP 0
         JR z,menu_addr_invalid
         LD (MY_ADDRESS),A
-        CPL
-        LD (MY_ADDRESS_INV),A
+        CALL cfg_seal           ; P35
         JP editor_reshow2
 
 ; ---- ascii_dec_to_bin: Convert B ASCII digits at (HL) to binary in A (C set if invalid)
@@ -7183,7 +7458,7 @@ hold_wait_row2:
         LD A,(ROW_INDEX)
         CP 2
         JR nz,hold_wait_row2
-        LD A,HOLD_FRAMES
+        LD A,(CFG_HOLD)         ; P35
         LD (FRAME_DELAY),A
 
 hold_wait_frames:
@@ -7371,6 +7646,8 @@ pkt_byte_loop:
         JP z,cmd_B4_query
         CP CMD_OTA
         JP z,cmd_B5_ota
+        CP CMD_CONFIG
+        JP z,cmd_B6_config
 
 ; ---- pkt_insert_text: insert the plain text at the payload position into the
 ;      store after STORE_CURSOR. P21: the run of plain bytes that starts here
@@ -7661,9 +7938,13 @@ cmd_B4_query:
         CP QUERY_MEMORY
         JR z,pq_memory
         CP QUERY_DUMP
-        JR z,pq_dump
+        JP z,pq_dump
         CP QUERY_TIMING
         JR z,pq_timing
+        CP QUERY_CONFIG
+        JP z,pq_config
+        CP QUERY_SEQ
+        JP z,pq_seq
         JP pkt_done_pop
 
 pq_romid:
@@ -7700,8 +7981,39 @@ pq_timing:
         LD (IX+2),A
         LD A,(NMI_SEEN)
         LD (IX+3),A
+        LD A,(LOST_MARKS_LAST)  ; P35: display ticks merged last second, the longest
+        LD (IX+4),A             ; renderer stall in frames and the stalls of 3 frames or more
+        LD A,(STALL_MAX_LAST)
+        LD (IX+5),A
+        LD A,(STALL_EVENTS_LAST)
+        LD (IX+6),A
+        LD HL,STACK_TOP-STACK_SIZE  ; stack headroom: canary bytes still untouched
+        LD B,0
+
+pq_canary:
+        LD A,(HL)
+        CP 0x55
+        JR nz,pq_canary_done
+        INC HL
+        INC B
+        LD A,B
+        CP STACK_CANARY
+        JR nz,pq_canary
+
+pq_canary_done:
+        LD (IX+7),B
         LD HL,PKT_BUF+3
-        LD BC,4
+        LD BC,8
+        JR pq_reply
+
+pq_config:
+        LD HL,CFG               ; P35
+        LD BC,CFG_LEN
+        JR pq_reply
+
+pq_seq:
+        LD HL,SEQ_LIST
+        LD BC,SEQ_LIST_LEN
         JR pq_reply
 
 pq_dump:
@@ -7833,7 +8145,19 @@ ota_info:
 ota_trailer_copy:
         LD HL,TRAILER
         LD BC,10
-        JP lib_copy
+
+; ---- ota_copy: lib_copy with the NMI vector held off. The stub's NMI_VECTOR
+;      jumps to this image's nmi_entry, and with the idle bank mapped in that
+;      address holds whatever the other image has there (patch 35 moved it).
+ota_copy:
+        PUSH AF
+        XOR A
+        LD (NMI_MAGIC),A
+        POP AF
+        CALL lib_copy
+        LD A,IR_CODE_SPACE
+        LD (NMI_MAGIC),A
+        RET
 
 ; ---- ota_crc: 'C' page n -> 2n bytes of page CRCs from the idle bank
 ota_crc:
@@ -7884,7 +8208,7 @@ ota_fetch_page:
         LD DE,OTA_PAGE_BUF
         LD BC,64
         LD A,(OTA_IDLE)
-        CALL lib_copy
+        CALL ota_copy
         LD HL,OTA_PAGE_BUF
         RET
 
@@ -8184,6 +8508,43 @@ cmd_02_speed:
         LD (CUR_CHAR),A
         JP pkt_insert_one
 
+; ---- cmd_B6_config (P35): B6 index value -> the configuration block. The
+;      signature, the address and the sum are not writable; CFG_FLAGS keeps its
+;      live bits and takes only the brightness and mute bits.
+cmd_B6_config:
+        CALL pkt_next_byte
+        LD C,A
+        CALL pkt_next_byte
+        LD B,A
+        LD A,C
+        CP 2
+        JR c,cfg_cmd_done
+        CP CFG_LEN-1
+        JR nc,cfg_cmd_done
+        LD HL,CFG
+        LD E,A
+        LD D,0
+        ADD HL,DE
+        CP 2
+        JR nz,cfg_store
+        LD A,(HL)
+        AND 0xf0
+        LD C,A
+        LD A,B
+        AND 0x0f
+        OR C
+        LD B,A
+        XOR A
+        LD (LIT_LIMIT),A        ; a brightness change: latch_row_dim re-arms, or not at full
+        LD (LATCH_PENDING),A
+
+cfg_store:
+        LD (HL),B
+        CALL cfg_seal
+
+cfg_cmd_done:
+        JP pkt_next
+
 ; ---- cmd_B3_append: B3: move STORE_CURSOR to end of current channel.
 ;      B11: stock stepped back a second time when the byte before the 03 was a
 ;      marker byte (an empty channel), so the first insert split the marker.
@@ -8322,6 +8683,7 @@ IGNORE_TABLE:
 COMMAND_TABLE:
         db CMD_SPEED,CMD_CLEAR_ALL,CMD_SEQUENCE,CMD_CHANNEL,CMD_END,CMD_DELETE_TEXT
         db CMD_FORE_IDX,CMD_BACK_IDX,CMD_SET_TIME,CMD_COLOR_A0,CMD_APPEND,CMD_QUERY,CMD_OTA
+        db CMD_CONFIG
 COMMAND_TABLE_END:
 
 ; ---- is_plain_byte: Z if A is message text (neither ignored nor a command)
