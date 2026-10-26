@@ -337,11 +337,10 @@ def parse_reply(raw: bytes, kind: str):
               (raw[1], ln, "OK" if ok else "BAD/short", printable(data)))
         if kind == 'mem' and len(data) == 10:
             print("  total %s bytes, free %s bytes" % (data[:5].decode(), data[5:].decode()))
-        if kind == 'timing' and len(data) in (4, 8):
-            t300, step, last, nmi = data[:4]
-            print("  300-baud bit %d fifths of an interrupt (a %.2f us interrupt), step %d (%d baud), last second's count low byte %d, NMI %s%s"
-                  % (t300, 3333.3 / (t300 / 5.0), step, step * 60, last, 'seen' if nmi else 'none (DC supply: no calibration)',
-                     '; last second: %d display ticks merged, longest renderer stall %d frames, %d stalls of 3+ frames (the visible pauses); stack headroom %d bytes never used since boot' % (data[4], data[5], data[6], data[7]) if len(data) == 8 else ''))
+        if kind == 'timing' and len(data) == 4:
+            t300, step, last, nmi = data
+            print("  300-baud bit %d fifths of an interrupt (a %.2f us interrupt), step %d (%d baud), last second's count low byte %d, NMI %s"
+                  % (t300, 3333.3 / (t300 / 5.0), step, step * 60, last, 'seen' if nmi else 'none (DC supply without the add-in board: no calibration)'))
 
 def add_common_args(ap):
     ap.add_argument('-a', '--addr', default='*', help="sign address 0-255 or '*' (broadcast; a broadcast frame gets no ACK and no DONE)")

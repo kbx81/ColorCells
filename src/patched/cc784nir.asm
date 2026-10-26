@@ -308,8 +308,7 @@ GRAPH_BASE           equ 0xa0        ; A0-AF built-in graphics
 SPEED_BASE           equ 0xf0        ; F0-F7 scroll speed
 LATCH_TX             equ 0x10        ; CTRL_LATCH bit 4: serial TX
 LATCH_BLINK          equ 0x80        ; CTRL_LATCH bit 7: the FLASH blink clock
-STACK_SIZE           equ 160         ; P35: a 57-channel store fill used 130 bytes (the canary says); 128 overran into the TX segments
-STACK_CANARY         equ 128         ; P35: bytes of 0x55 laid at the bottom at boot; the timing query reports the untouched ones
+STACK_SIZE           equ 160         ; P35: a boot-time canary measured 130 bytes at most (a 57-channel store fill); 128 overran into the TX segments
 ; P21: packet processing runs in the render loop and replies go out in the
 ; background, so their state cannot share renderer scratch. 32 bytes below the
 ; stack, carved off the store.
@@ -333,18 +332,9 @@ PKT_SEQ_CHANGED      equ STREAM_AREA+28    ; P27: FF once the packet has rewritt
 DISP_STRETCH         equ STREAM_AREA+29    ; P26: sevenths of an interrupt added to every display tick: 2 x speed
 SVC_DUE              equ STREAM_AREA+30    ; P26: bit 0 = tick6 engines due, bit 1 = display tick due
 SVC_ACTIVE           equ STREAM_AREA+31    ; P26: FF while tick6_service runs; it drains SVC_DUE, so it never nests
-LOST_MARKS           equ STREAM_AREA+32    ; P35: display ticks that found the previous one still pending, this NMI second
-LOST_MARKS_LAST      equ STREAM_AREA+33    ; the previous second's count, for the timing query
-PORT_SAMPLE          equ STREAM_AREA+34    ; P35: PORT_IN as the ISR read it this interrupt
-IR_QUIET             equ STREAM_AREA+35    ; P35: 1 = the IR decoder waits for the line to rise, 3 = to fall: its handler is skipped meanwhile
-MAIN_BEAT            equ STREAM_AREA+36    ; P35: pkt_poll counts; the frame end sees the renderer stall when it stops
-BEAT_SEEN            equ STREAM_AREA+37
-STALL_FRAMES         equ STREAM_AREA+38    ; frames the renderer has not polled for
-STALL_MAX            equ STREAM_AREA+39    ; the longest this NMI second, and the count of stalls of 3 frames or more
-STALL_MAX_LAST       equ STREAM_AREA+40
-STALL_EVENTS         equ STREAM_AREA+41
-STALL_EVENTS_LAST    equ STREAM_AREA+42
-STREAM_AREA_SIZE     equ 43
+PORT_SAMPLE          equ STREAM_AREA+32    ; P35: PORT_IN as the ISR read it this interrupt
+IR_QUIET             equ STREAM_AREA+33    ; P35: 1 = the IR decoder waits for the line to rise, 3 = to fall: its handler is skipped meanwhile
+STREAM_AREA_SIZE     equ 34
 STORE_TOP            equ STREAM_AREA-1    ; with a 32 K chip (16 K usable)
 STORE_TOP_8K         equ STORE_TOP-0x2000         ; with the stock 8 K chip
 ; store_init derives the warning level, the text allowance (301 = framing) and
@@ -371,7 +361,7 @@ QUERY_ROMID          equ '0'
 QUERY_MEMORY         equ '1'
 QUERY_NOP            equ '2'
 QUERY_DUMP           equ '3'
-QUERY_TIMING         equ '4'         ; P30: BAUD_T, BAUD_STEP, BAUD_CAL_LAST, NMI_SEEN; P35: LOST_MARKS_LAST, STALL_MAX_LAST, STALL_EVENTS_LAST, stack headroom
+QUERY_TIMING         equ '4'         ; P30: BAUD_T, BAUD_STEP, BAUD_CAL_LAST, NMI_SEEN
 QUERY_CONFIG         equ '5'         ; P35: the 16-byte configuration block
 QUERY_SEQ            equ '6'         ; P35: SEQ_LIST, 104 bytes
 CMD_OTA              equ 0xb5        ; B5 c ... (patch 11)
@@ -850,13 +840,6 @@ int_disp_reload:
         LD (DISP_ACC),A
         LD (HL),B
         LD HL,SVC_DUE
-        BIT 1,(HL)              ; P35: a tick the service has not reached yet is merged: counted
-        JR z,int_disp_mark
-        LD A,(LOST_MARKS)
-        INC A
-        LD (LOST_MARKS),A
-
-int_disp_mark:
         SET 1,(HL)
 
 int_tick6:
@@ -931,9 +914,6 @@ render_loop:
 ; ---- pkt_poll (P21): process a pending packet here, between two render
 ;      steps. pkt_process returns unless the display has to restart.
 pkt_poll:
-        LD A,(MAIN_BEAT)        ; P35: the renderer's heartbeat (HL is the caller's)
-        INC A
-        LD (MAIN_BEAT),A
         LD A,(PKT_READY)
         AND A
         RET z
@@ -1132,34 +1112,6 @@ row_advance:
 
 frame_idle_held:
         CALL clock_bank         ; P31: the OTA library may have dropped the clock bit
-        PUSH HL                 ; P35: frames since the renderer last polled: a stall
-        LD A,(MAIN_BEAT)        ; of 3 or more is the pause seen on the panel
-        LD HL,BEAT_SEEN
-        CP (HL)
-        JR nz,beat_alive
-        LD HL,STALL_FRAMES
-        INC (HL)
-        LD A,(HL)
-        CP 3
-        JR nz,beat_not3
-        LD HL,STALL_EVENTS
-        INC (HL)
-        LD A,3
-
-beat_not3:
-        LD HL,STALL_MAX
-        CP (HL)
-        JR c,beat_done
-        LD (HL),A
-        JR beat_done
-
-beat_alive:
-        LD (HL),A
-        XOR A
-        LD (STALL_FRAMES),A
-
-beat_done:
-        POP HL
         LD A,(FRAME_DELAY)
         AND A
         JR z,frame_speed
@@ -1852,14 +1804,6 @@ init_clear_stream:
         LD (HL),A
         INC HL
         DJNZ init_clear_stream
-        LD HL,STACK_TOP-STACK_SIZE  ; P35: a canary over the bottom of the stack; the timing
-        LD B,STACK_CANARY       ; query counts how much of it was never reached
-
-init_canary:
-        LD (HL),0x55
-        INC HL
-        DJNZ init_canary
-        XOR A
         INC A
         LD (DISP_COUNT),A       ; P26: first display tick on the next interrupt
         LD A,0xff
@@ -4773,18 +4717,6 @@ rx_byte_end:
 ;      within 5 % of nominal: a window that lost interrupts to a long DI
 ;      stretch (an OTA page write, a restart) disagrees with its neighbors.
 baud_calibrate:
-        LD HL,LOST_MARKS        ; P35: the stutter meters, read by the timing query
-        LD A,(HL)
-        LD (HL),0
-        LD (LOST_MARKS_LAST),A
-        LD HL,STALL_MAX
-        LD A,(HL)
-        LD (HL),0
-        LD (STALL_MAX_LAST),A
-        LD HL,STALL_EVENTS
-        LD A,(HL)
-        LD (HL),0
-        LD (STALL_EVENTS_LAST),A
         LD HL,TICK6_CAL
         LD A,(HL)
         LD (HL),0
@@ -7981,29 +7913,8 @@ pq_timing:
         LD (IX+2),A
         LD A,(NMI_SEEN)
         LD (IX+3),A
-        LD A,(LOST_MARKS_LAST)  ; P35: display ticks merged last second, the longest
-        LD (IX+4),A             ; renderer stall in frames and the stalls of 3 frames or more
-        LD A,(STALL_MAX_LAST)
-        LD (IX+5),A
-        LD A,(STALL_EVENTS_LAST)
-        LD (IX+6),A
-        LD HL,STACK_TOP-STACK_SIZE  ; stack headroom: canary bytes still untouched
-        LD B,0
-
-pq_canary:
-        LD A,(HL)
-        CP 0x55
-        JR nz,pq_canary_done
-        INC HL
-        INC B
-        LD A,B
-        CP STACK_CANARY
-        JR nz,pq_canary
-
-pq_canary_done:
-        LD (IX+7),B
         LD HL,PKT_BUF+3
-        LD BC,8
+        LD BC,4
         JR pq_reply
 
 pq_config:
