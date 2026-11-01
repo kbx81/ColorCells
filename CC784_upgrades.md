@@ -8,8 +8,9 @@ Changes to the `CC784-4` controller board, each independent of the others. An ea
 | **RAM** (§3) | a 15246-byte message store instead of 7054 | AS6C62256-55 |
 | **NET to NIR** (§4) | a CC784NET runs the NIR firmware: 8 MHz timebase, and the remote if a receiver is fitted | 8.000 MHz crystal, IR receiver module, optionally a Z84C0008 |
 | **IR and clock add-in board** (§7) | the remote's receiver, and a 32 kHz crystal clock for signs on a DC supply | the assembled add-in board ([hardware/CC784NIR_IR+Clock/](hardware/CC784NIR_IR+Clock/)), a 7-wire cable |
+| **IR off the DB9** (§8) | the remote and a wired keypad on the same sign; required by the patched firmware from patch 36 | 74LS244 or 74HCT244, three 10 k resistors |
 
-All three run the patched firmware from `src/patched/` ([CC784_patched.md](CC784_patched.md)). The images and tasks are on the **`wip`** branch.
+All of them run the patched firmware from `src/patched/` ([CC784_patched.md](CC784_patched.md)). The images and tasks are on the **`wip`** branch.
 
 **Method.** Nothing here needs an IC leg bent or soldered to; with some effort, you can replace the 24-pin RAM socket with a 28-pin one and wire its four overhanging pins in Kynar. Every other connection can be made by cutting a track or by moving or removing the factory wire at a socket or pad. Every chip stays swappable, and the original M27C256B goes back in at any point as the fallback. The KiCad schematic ([hardware/CC784-4/](hardware/CC784-4/)) carries notes on where each track is cut and where the wires land.
 
@@ -140,8 +141,8 @@ The CC784NET is the same board with a 4 MHz crystal, the original interrupt gati
 - [ ] Crystal Y1: 4 MHz out, **8.000 MHz** in.
 - [ ] Cut the track from U14 pin 1 to U10 pin 12; bridge U10 pins 12 and 13. The interrupt is now Q11 of the HC4020 alone, the 7812.5 Hz tick.
 - [ ] CPU: the NET's Z8400A is a 4 MHz grade. It runs at 8 MHz in practice; a **Z84C0008** is the in-spec replacement and drops straight in.
-- [ ] Remote, if wanted: the IR and clock add-in board (§7), or the original way: U18 (CD74HC14), the 3-pin receiver header near it, a **30 kHz** receiver module (TSOP4830/TSOP38230 class; the remote's carrier is 31.25 kHz), and the wire from U18 pin 6 to the DB9 pin 1 net.
-- [ ] The NET firmware's cable detect is gone with it: no pin 2–5 short is needed on the serial cable, and the keypad is no longer scanned.
+- [ ] Remote, if wanted: the IR and clock add-in board (§7), or the original way: U18 (CD74HC14), the 3-pin receiver header near it and a **30 kHz** receiver module (TSOP4830/TSOP38230 class; the remote's carrier is 31.25 kHz). U18 pin 6 goes to the '244 of §8 (patched firmware), or to the DB9 pin 1 net (stock NIR firmware).
+- [ ] The NET firmware's cable detect is gone with it: no pin 2–5 short is needed on the serial cable. The patched firmware finds a keypad by itself (patch 36).
 
 Then §2 and §3 as for a NIR board.
 
@@ -196,7 +197,7 @@ Both outputs pass through 470 Ω on the add-in board.
 
 - [ ] Cut the track from U18 pin 4 to Z80 pin 17. The NMI now goes through the add-in board.
 - [ ] Wire J1 as in the table.
-- [ ] A NET board only: U18's spare gate needs the NIR's factory wire, **U18 pin 6 to the DB9 pin 1 net**. Check that pin 5 is not tied to a rail by a track first (a NIR has it on its header instead).
+- [ ] A NET board only: U18's spare gate needs a wire from **U18 pin 6** to the '244 of §8 (the NIR's factory wire to the DB9 pin 1 net serves only the stock firmware). Check that pin 5 is not tied to a rail by a track first (a NIR has it on its header instead).
 - [ ] A NIR board: unplug the old receiver from its header. The add-in board's receiver replaces it.
 
 ### Check before power — 5 min
@@ -211,7 +212,33 @@ Both outputs pass through 470 Ω on the add-in board.
 - [ ] On a DC supply, the patched firmware switches to the crystal; the clock runs. U2 pin 13 on the add-in board measures exactly 64 Hz.
 - [ ] The remote works: press a key, the sign answers.
 
-A NET board fitted with the receiver drives DB9 pin 1 from U18, so a keypad on the DB9 can no longer work; lift the pin 6 wire to go back to a keypad ([CC784_ideas.md §4](CC784_ideas.md#4-wired-keypad-support)). Keep the dongle's JP2 open on any sign with a receiver.
+With U18 pin 6 on the DB9 pin 1 net instead of §8's '244, a keypad on the DB9 cannot work, and the dongle's JP2 must stay open.
+
+---
+
+## 8. IR off the DB9
+
+The NIR's receiver output shares DB9 pin 1 with the keypad's column bit 1, so the two cannot be used together. This moves it to bit 4 of the same input port, through a second '244 whose read half shares U12's enable: a read of port `C0` returns U12's bits 0–3 and the new chip's bits 4–7. The patched firmware reads IR there from patch 36 on, so a sign running it needs this to keep its remote; the stock firmware reads bit 1 and loses the remote with it.
+
+### Wire — 30 min
+
+- [ ] Solder only the new chip's **pins 10 (GND), 20 (VCC) and 19** (half b's `/OE`) to U12's matching pins. Bend every other pin out horizontally.
+- [ ] Pin 1 (half a's `/OE`) must **not** touch U12's pin 1, which is grounded: bend it out and tie it to VCC, so half a stays off.
+- [ ] Half b to the data bus: pin 9 → D4 (Z80 pin 7), pin 7 → D5 (Z80 pin 9), pin 5 → D6 (Z80 pin 10), pin 3 → D7 (Z80 pin 13).
+- [ ] **U18 pin 6** (the HC14's output) → pin 11, the input for D4. Same polarity as before: the line idles low.
+- [ ] Remove the wire from U18 pin 6 to the DB9 pin 1 net.
+- [ ] Pins 13, 15 and 17: 10 k each to VCC.
+
+### Check before power — 5 min
+
+- [ ] New pin 1 ↔ U12 pin 1: must **not** beep. New pin 19 ↔ U12 pin 19: beep.
+- [ ] U18 pin 6 ↔ DB9 pin 1: must **not** beep.
+- [ ] Each of new pins 9, 7, 5, 3 ↔ its Z80 pin: beep.
+
+### Power on — 5 min
+
+- [ ] The remote works: STOP opens the editor.
+- [ ] A keypad on the DB9: after about 4 s with no host on the line, STOP on the keypad opens the editor.
 
 ---
 

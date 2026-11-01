@@ -66,7 +66,7 @@ DB9 wiring, from the schematic:
 
 | DB9 | Dir | Serial role | Keypad role ([§6](#6-connectors)) | Path |
 |---|---|---|---|---|
-| 1 | in | — | column code bit 1 | R8 pull-up → U12 → `PORT_IN` bit 1; shares the net with the IR receiver output (factory bodge, [§8](#8-factory-bodge-wires-h--from-the-schematic)) |
+| 1 | in | — | column code bit 1 | R8 pull-up → U12 → `PORT_IN` bit 1; shares the net with the IR receiver output (factory bodge, [§8](#8-factory-bodge-wires-h--from-the-schematic)) unless the receiver is moved to bit 4 ([CC784_upgrades.md §8](CC784_upgrades.md#8-ir-off-the-db9)) |
 | 2 | in | PC detect on the NET firmware: the factory cable ties it to pin 5 ([§6](#6-connectors)) | column code bit 0 | R9 pull-up → U12 → `PORT_IN` bit 0 |
 | 3 | out | **TX** (ACK/NAK, query replies) | row select bit 0 | U12 pin 18 (1Y1) ← `CTRL_LATCH` bit 4 |
 | 4 | out | — | row select bit 1 | U12 pin 16 (1Y2) ← latch bit 5; the NIR firmware never drives it |
@@ -90,7 +90,7 @@ Working setups (both verified with live ACKs): USB-RS232 adapter + crossover; [E
 
 ## 6. Connectors
 
-**SK2 (14-pin, to the LED panel)**, counted from the board's bottom corner (user's tracing): pins 1–7 LED rows (from TR1–TR7); 8–9 regulated +5 V for the panel logic (the '164s and ULN2003s); the LED current comes down the row pins from the unregulated rail; 10 column data, 11 column clock (port `0x40`); 12 is the port `0x80` strobe but is not connected on the panel; 13–14 GND.
+**SK2 (14-pin, to the LED panel)**, counted from the board's bottom corner (traced on the board): pins 1–7 LED rows (from TR1–TR7); 8–9 regulated +5 V for the panel logic (the '164s and ULN2003s); the LED current comes down the row pins from the unregulated rail; 10 column data, 11 column clock (port `0x40`); 12 is the port `0x80` strobe but is not connected on the panel; 13–14 GND.
 
 **IR header**: 3 pins — 5 V, GND, signal — glued near U18, cabled to the receiver module on a small add-in board beside the display PCBs, behind a window in the front acrylic. Signal → HC14 → `PORT_IN` bit 1 (one inversion; active-low module output becomes 1 = burst). Verified by capture: module output idles high, bursts low, and lengthens each burst by ~250 µs relative to the transmitted half-bit (512 µs → ~780 µs).
 
@@ -166,17 +166,17 @@ From the photos and the KiCad capture in [hardware/CC784-3A/](hardware/CC784-3A/
 | 5 | 7 | `CTRL_LATCH` bit 6 | row bit 2 | probe data out |
 | 6 | 8 | `PORT_IN` bit 3 | key pressed, active low | RX |
 | 7 | 6 | `PORT_IN` bit 2 | column bit 2 | must be high for TX to start |
-| 8 | 2 | `PORT_IN` bit 0 | column bit 0 | probe sample |
-| 9 | 1 | `PORT_IN` bit 1 | column bit 1 | must be high for TX to start and for RX to sample; low at power-up in keypad mode clears the store |
+| 8 | 1 | `PORT_IN` bit 1 | column bit 1 | must be high for TX to start and for RX to sample; low at power-up in keypad mode clears the store |
+| 9 | 2 | `PORT_IN` bit 0 | column bit 0 | probe sample |
 | 10 | — | unused | — | — |
 
 **Panel:** two PCBs, 7×42 and 7×21 with four unpopulated columns, 7×59 in all, ULN2003A column drivers as on the CC784 but a chain of 74HC595s latched by the port `80` strobe (SK2 pin 12, which the CC784's '164 panel ignores). The 7×42 PCB ends in one 74HC164 supplying the two stages a 42-column panel needs beyond five '595s, so the chain passes to the next PCB without extra bits. The firmware shifts 60 bits per row: 42 on the first PCB, 18 on the second, the last into an unpopulated position.
 
 **Battery:** the "NICAD BATTERY" position (a small blue 3-cell can marked 060 on this board, replaced with a 5 F supercapacitor) charges and discharges through R4 220 Ω to `+5VP`, as on the `CC784-4`.
 
-**Beeper:** the BZ1 footprint (silk for a 25 mm part, leads 12.5 mm apart) is unpopulated on this CC710. The firmware drives it as a plain on/off level, Q8 switching the low side from U9's Q7, so it needs an **internally driven** 5 V buzzer; a bare transducer would only click. Polarity: + on +5 V and − on Q8's collector, as the board's silk and the schematics show. The CC710 now has a VCC MI-TH12-0531-RK (12 mm, 5 V, 3.1 kHz, 30 mA), its leads bent out to the footprint's pads; it fits and sounds [H].
+**Beeper:** the BZ1 footprint (silk for a 25 mm part, leads 12.5 mm apart) is unpopulated on this CC710. The firmware drives it as a plain on/off level, Q8 switching the low side from U9's Q7, so it needs an **internally driven** 5 V buzzer; a bare transducer would only click. Polarity: + on +5 V and − on Q8's collector, as the board's silk and the schematics show. This CC710 has a VCC MI-TH12-0531-RK (12 mm, 5 V, 3.1 kHz, 30 mA), its leads bent out to the footprint's pads; it fits and sounds [H].
 
-**Store corruption on mains power cycles [H — measured].** Switching the sign off sometimes corrupts the message store, in any input mode; it took several cycles under the analyzer to catch one. A channel loses its `03` terminator or marker, and the display runs into the free store area, which the boot repair has filled with `?` and leftover characters. The firmware does not cause it (five emulated boots in a row leave an intact store unchanged); a capture of the 5 V rail, `/RESET`, the unregulated rail, U13 pin 5 and the RAM's `/CE` and `/WE` shows where it happens:
+**Store corruption on mains power cycles [H — measured].** Switching the sign off sometimes corrupts the message store, in any input mode. A channel loses its `03` terminator or marker, and the display runs into the free store area, which the boot repair has filled with `?` and leftover characters. The firmware does not cause it (five emulated boots in a row leave an intact store unchanged); a capture of the 5 V rail, `/RESET`, the unregulated rail, U13 pin 5 and the RAM's `/CE` and `/WE` shows where it happens:
 
 - **Switch-off:** the 7805 leaves regulation about 97 ms after the mains goes, with the unregulated rail near 6.3 V. RAM writes carry on at the normal rate as the 5 V rail falls through 4.5 V, then jump about fifteenfold between 3.9 V and 3.5 V: the CPU is running garbage. U13 only stops selecting the RAM when its input falls to about 1.3 V, which happens with the 5 V rail at 3.5 V and the unregulated rail near 4.9 V, some 75 ms after 5 V started to fall. About 3000 stray writes land in that window. `/RESET` stays above 4.5 V throughout, held up by C18: nothing stops the CPU.
 - **Switch-on** (after 29 s off): C18 had fully discharged, `/RESET` rose cleanly from 0 V, and the first RAM writes are the firmware's own, about 35 ms in. The power-on reset is not the problem.
@@ -185,7 +185,7 @@ So the lockout trips far too late: it watches the unregulated rail, whose ripple
 
 ## 12. Converting a CC784-3A board to a CC784-4
 
-What it takes for a `CC784-3A` board to run the CC784 firmware (stock NET, stock NIR or the patched build) the way a `CC784-4` does. Derived from comparing the two KiCad captures. Done on the CC710's board so far, all working with the stock CC710 firmware burned into both banks [H]: step 1 with an AS6C62256, step 2's lockout (no supervisor), and step 4 with the AT28C256 and bank register ([CC784_upgrades.md §2](CC784_upgrades.md#2-eeprom-and-bank-register)). Steps 3 and 5 are untried. The `CC784-3A` already has the NET's original timebase (4 MHz, `/INT` from Q11·Q12), so after this it is a `CC784NET` board and [CC784_upgrades.md](CC784_upgrades.md) applies from there.
+What it takes for a `CC784-3A` board to run the CC784 firmware (stock NET, stock NIR or the patched build) the way a `CC784-4` does. Derived from comparing the two KiCad captures. Verified on the CC710's board, all working with the stock CC710 firmware burned into both banks [H]: step 1 with an AS6C62256, step 2's lockout (no supervisor), step 3, and step 4 with the AT28C256 and bank register ([CC784_upgrades.md §2](CC784_upgrades.md#2-eeprom-and-bank-register)). Step 5 is untried. The `CC784-3A` already has the NET's original timebase (4 MHz, `/INT` from Q11·Q12), so after this it is a `CC784NET` board and [CC784_upgrades.md](CC784_upgrades.md) applies from there.
 
 | Step | Why | Parts | Time |
 |---|---|---|---|
@@ -239,7 +239,9 @@ No board change: a 10-pin IDC socket on SK1 to a DB9 male, to match the `CC784-4
 
 | SK1 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 |
 |---|---|---|---|---|---|---|---|---|---|---|
-| DB9 | 9 | 5 | 3 | 4 | 7 | 8 | 6 | 2 | 1 | — |
+| DB9 | 9 | 5 | 3 | 4 | 7 | 8 | 6 | 1 | 2 | — |
+
+With a CC784 serial cable on it (the factory crossover with its 2–5 short) the stock CC710 boots into terminal mode and talks both ways [H]. The same wiring in reverse, IDC socket to DB9 female, lets the CC100 keypad drive a CC784NET or a patched CC784NIR [H on the patched NIR].
 
 ### 4. ROM
 

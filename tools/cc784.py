@@ -18,6 +18,7 @@ Examples
     cc784.py clear 0 1 2                # clear channels
     cc784.py clearall
     cc784.py seq 0 1 2                  # display sequence; 'seq a' = all channels
+    cc784.py --channels 10 msg 1 "HI"   # ten-channel firmware (CC710): channels 0-9, one digit
     cc784.py time                       # set clock from the PC (12-hour)
     cc784.py time24                     # patched firmware: 24-hour clock, no AM/PM
     cc784.py raw 09 30 30 0e 48 49      # send an arbitrary payload
@@ -113,7 +114,11 @@ def frame(addr: int, payload: bytes, flag: int = 0x80) -> bytes:
         raise ValueError("payload must be 0..254 bytes")
     return bytes([START, addr, flag, len(payload)]) + payload + bytes([sum(payload) & 0xFF])
 
-def chan(n: int) -> bytes:
+def chan(n: int, ten: bool = False) -> bytes:
+    if ten:                       # ten-channel firmware (CC710): one ASCII digit, 0-9
+        if not 0 <= n <= 9:
+            sys.exit("channel %d out of range: --channels 10 takes 0-9" % n)
+        return b'%d' % n
     return b'%02d' % n            # two ASCII digits, 00-99
 
 def hexs(b: bytes) -> str:
@@ -301,7 +306,7 @@ def config_text(b: bytes) -> str:
                b[8], b[9], 'on' if b[10] else 'off', 'locked' if b[11] else 'unlocked', 'on' if b[12] else 'off',
                ('auto', 'mains', 'crystal')[b[13]] if b[13] < 3 else b[13], b[0], b[15]))
 
-def parse_reply(raw: bytes, kind: str):
+def parse_reply(raw: bytes, kind: str, ten: bool = False):
     if not raw:
         print("  (no reply)"); return
     if raw[:1] == bytes([ACK]): print("  ACK"); raw = raw[1:]
@@ -313,22 +318,26 @@ def parse_reply(raw: bytes, kind: str):
               (raw[1], cnt.decode(errors='replace'), len(data),
                "OK" if sum(data) & 0xFF == ck else "BAD"))
         # walk the store: a channel marker is TWO bytes, D0+tens then D0+units
-        # (channel 42 -> D4 D2); 03 ends a channel's text, DA ends the store.
+        # (channel 42 -> D4 D2), or one (D0-D9) on ten-channel firmware; 03 ends
+        # a channel's text, DA ends the store.
         i = 0; shown = 0
         while i < len(data):
             b = data[i]
             if b == 0xDA:
                 break
-            if 0xD0 <= b <= 0xD9 and i + 1 < len(data) and 0xD0 <= data[i + 1] <= 0xD9:
+            if ten and 0xD0 <= b <= 0xD9:
+                chn = b - 0xD0; i += 1
+            elif not ten and 0xD0 <= b <= 0xD9 and i + 1 < len(data) and 0xD0 <= data[i + 1] <= 0xD9:
                 chn = (b - 0xD0) * 10 + (data[i + 1] - 0xD0); i += 2
-                text = bytearray()
-                while i < len(data) and data[i] != 0x03:
-                    text.append(data[i]); i += 1
-                i += 1                                  # skip the 03
-                if text:
-                    print("   ch %2d: %s" % (chn, printable(text))); shown += 1
             else:
                 i += 1
+                continue
+            text = bytearray()
+            while i < len(data) and data[i] != 0x03:
+                text.append(data[i]); i += 1
+            i += 1                                      # skip the 03
+            if text:
+                print("   ch %2d: %s" % (chn, printable(text))); shown += 1
         print("   (%d channel%s with text)" % (shown, '' if shown == 1 else 's'))
     else:
         ln = raw[2]; data = raw[3:3 + ln]; ck = raw[3 + ln] if len(raw) > 3 + ln else None
@@ -349,6 +358,8 @@ def add_common_args(ap):
     ap.add_argument('-g', '--gap', type=float, default=0.0, help='gap between bytes (s)')
     ap.add_argument('-t', '--timeout', type=float, default=3.0, help='reply timeout (s)')
     ap.add_argument('-v', '--verbose', action='store_true')
+    ap.add_argument('--channels', type=int, default=100, choices=(10, 100),
+                    help='10 for ten-channel firmware (CC710): one-digit channel numbers and one-byte store markers')
     ap.add_argument('--done', action='store_true',
                     help='patched firmware (patch 16+): wait for its DONE byte after each frame instead of pausing')
     ap.add_argument('--unsafe', action='store_true',
@@ -364,6 +375,7 @@ def run(link, a, ap):
     s = Sign(link, addr, a.gap, a.timeout, a.verbose, baud=a.baud)
     s.done = a.done
     c, args = a.cmd, a.args
+    ten = a.channels == 10
 
     if c == 'sniff':
         print("listening (%d 8N2)... ctrl-C to stop" % a.baud)
@@ -377,7 +389,7 @@ def run(link, a, ap):
         if not a.unsafe:
             sys.exit("'%s' sends a B4 query, which crashes/corrupts the stock CC784NIR firmware "
                      "(stack overflow). Add --unsafe if you really want to." % c)
-        parse_reply(s.query({'id': '0', 'mem': '1', 'dump': '3', 'timing': '4'}[c]), c)
+        parse_reply(s.query({'id': '0', 'mem': '1', 'dump': '3', 'timing': '4'}[c]), c, ten)
 
     elif c == 'config':
         # patch 35: B4 '5' reads the 16-byte block, B4 '6' the sequence list,
@@ -412,25 +424,25 @@ def run(link, a, ap):
 
     elif c == 'msg':
         ch = int(args[0]); text = encode_text(' '.join(args[1:]))
-        body = b'\x09' + chan(ch) + b'\x0E' + text
+        body = b'\x09' + chan(ch, ten) + b'\x0E' + text
         if len(body) + 3 <= 254:
-            s.send_frame(body + b'\x04' + chan(ch))         # load and display
+            s.send_frame(body + b'\x04' + chan(ch, ten))    # load and display
         else:                                               # long: split like NETCC does
-            head, rest = body[:4], body[4:]
+            rest = text
             first = True
             while rest:
                 part, rest = rest[:250], rest[250:]
                 typ = b'\x0E' if first else b'\xB3'
-                s.send_frame(b'\x09' + chan(ch) + typ + part); first = False
-            s.send_frame(b'\x04' + chan(ch))
+                s.send_frame(b'\x09' + chan(ch, ten) + typ + part); first = False
+            s.send_frame(b'\x04' + chan(ch, ten))
 
     elif c == 'clear':
-        s.send_frame(b''.join(b'\x09' + chan(int(x)) + b'\x0E' for x in args))
+        s.send_frame(b''.join(b'\x09' + chan(int(x), ten) + b'\x0E' for x in args))
     elif c == 'clearall':
         s.send_frame(b'\x03')
     elif c == 'seq':
         # the firmware lays 0..99 first and stops at the first non-digit, so a bare 04 (or 'A') is all
-        s.send_frame(b'\x04' + (b'' if [x.lower() for x in args] in (['a'], ['all']) else b''.join(chan(int(x)) for x in args)))
+        s.send_frame(b'\x04' + (b'' if [x.lower() for x in args] in (['a'], ['all']) else b''.join(chan(int(x), ten) for x in args)))
     elif c in ('time', 'time24'):
         # the protocol carries no seconds, and the sign starts the new minute at
         # :00 (patch 23), so the frame is timed to be processed on the minute:
@@ -441,11 +453,15 @@ def run(link, a, ap):
         if wait > 0:
             print("  waiting %.0f s for the top of the minute" % wait); time.sleep(wait)
         if c == 'time24':                       # patch 32: 'H' = 24-hour, hours 00..23
+            if ten:
+                sys.exit("time24 needs the patched firmware; ten-channel firmware is 12-hour only")
             s.send_frame(b'\x17' + b'%02d%02d' % (target.hour, target.minute) + b'H')
             print("  set to %02d:%02d (24-hour)" % (target.hour, target.minute))
         else:
             h = target.hour % 12 or 12
-            s.send_frame(b'\x17' + b'%02d%02d' % (h, target.minute) + (b'Y' if target.hour < 12 else b'N'))
+            am = target.hour < 12
+            ampm = (b'A' if am else b'P') if ten else (b'Y' if am else b'N')   # ten-channel: A = AM, else PM
+            s.send_frame(b'\x17' + b'%02d%02d' % (h, target.minute) + ampm)
             print("  set to %02d:%02d %s" % (h, target.minute, 'AM' if target.hour < 12 else 'PM'))
     elif c == 'raw':
         s.send_frame(bytes(int(x, 16) for x in args))

@@ -307,6 +307,8 @@ BGRND_BASE           equ 0x90        ; 90-93 background
 GRAPH_BASE           equ 0xa0        ; A0-AF built-in graphics
 SPEED_BASE           equ 0xf0        ; F0-F7 scroll speed
 LATCH_TX             equ 0x10        ; CTRL_LATCH bit 4: serial TX
+IR_BIT               equ 4           ; P36: PORT_IN bit of the IR receiver, on a '244 piggybacked on U12; bit 1 is the keypad's
+PORT_IR              equ 1<<IR_BIT
 LATCH_BLINK          equ 0x80        ; CTRL_LATCH bit 7: the FLASH blink clock
 STACK_SIZE           equ 160         ; P35: a boot-time canary measured 130 bytes at most (a 57-channel store fill); 128 overran into the TX segments
 ; P21: packet processing runs in the render loop and replies go out in the
@@ -333,8 +335,11 @@ DISP_STRETCH         equ STREAM_AREA+29    ; P26: sevenths of an interrupt added
 SVC_DUE              equ STREAM_AREA+30    ; P26: bit 0 = tick6 engines due, bit 1 = display tick due
 SVC_ACTIVE           equ STREAM_AREA+31    ; P26: FF while tick6_service runs; it drains SVC_DUE, so it never nests
 PORT_SAMPLE          equ STREAM_AREA+32    ; P35: PORT_IN as the ISR read it this interrupt
-IR_QUIET             equ STREAM_AREA+33    ; P35: 1 = the IR decoder waits for the line to rise, 3 = to fall: its handler is skipped meanwhile
-STREAM_AREA_SIZE     equ 34
+IR_QUIET             equ STREAM_AREA+33    ; P35: 1 = the IR decoder waits for the line to rise, PORT_IR|1 = to fall: its handler is skipped meanwhile
+KP_MODE              equ STREAM_AREA+34    ; P36: 0 = serial, else the wired keypad is scanned
+KP_SPACE             equ STREAM_AREA+35    ; P36: frames in a row the RX line read space (serial mode)
+KP_HELD              equ STREAM_AREA+36    ; P36: empty scans left before a key's release is reported
+STREAM_AREA_SIZE     equ 37
 STORE_TOP            equ STREAM_AREA-1    ; with a 32 K chip (16 K usable)
 STORE_TOP_8K         equ STORE_TOP-0x2000         ; with the stock 8 K chip
 ; store_init derives the warning level, the text allowance (301 = framing) and
@@ -871,7 +876,7 @@ int_vector:
         JR z,int_vector_push    ; (a reset every interrupt on a sign with no receiver), is skipped
         LD C,A
         LD A,(PORT_SAMPLE)
-        AND 2
+        AND PORT_IR
         OR 1
         CP C
         JR z,int_vector_done
@@ -1230,6 +1235,97 @@ frame_bit7_set:
         LD (LATCH_BIT7),A
 
 frame_done:
+; ---- kp_poll (P36): the wired keypad. Serial until the RX line has read space
+;      (a keypad's idle, or nothing plugged in) for 256 frames; keypad until all
+;      eight rows read a key, which is a host's TX idling at mark. A key is
+;      handed to the remote's consumers as its remote code, so the editor,
+;      debounce, repeat and STOP/START treat both alike.
+        LD HL,KP_MODE
+        LD A,(HL)
+        AND A
+        JR nz,kp_scan
+        INC HL
+        IN A,(PORT_IN)
+        AND 8
+        JR nz,kp_space
+        LD (HL),A
+        JR rx_consume
+
+kp_space:
+        INC (HL)
+        JR nz,rx_consume
+        DEC HL
+        INC (HL)
+        JR rx_consume
+
+kp_scan:
+        LD BC,0x0800            ; B rows to go, C rows that read a key
+        LD D,C                  ; row x 8
+
+kp_row:
+        DI                      ; the rows are latch bits 4-6, which the ISR rewrites;
+        LD A,(CTRL_LATCH_SHADOW) ; a row at a time, so the IR decoder's ticks stay on time
+        AND 0x8f
+        LD E,A
+        LD A,D
+        ADD A,A
+        OR E
+        LD (CTRL_LATCH),A
+        IN A,(PORT_IN)
+        EI
+        BIT 3,A
+        JR nz,kp_next
+        INC C
+        AND 7
+        OR D
+        LD L,A                  ; key code: row x 8 + column
+
+kp_next:
+        LD A,D
+        ADD A,8
+        LD D,A
+        DJNZ kp_row
+        DI
+        LD A,(CTRL_LATCH_SHADOW)
+        LD (CTRL_LATCH),A
+        EI
+        LD A,C
+        CP B                    ; B is 0
+        JR z,kp_none
+        CP 8
+        JR nz,kp_key
+        XOR A
+        LD (KP_MODE),A
+        JR rx_consume
+
+kp_key:
+        LD A,L
+        CP 0x1e                 ; K has two positions; the remote's table holds 00
+        JR nz,kp_lookup
+        XOR A
+
+kp_lookup:
+        LD HL,IR_KEY_TABLE
+        LD BC,62
+        CPIR
+        JR nz,kp_none           ; 1F: an empty position
+        LD A,0x80+61
+        SUB C
+        LD (IR_CODE),A
+        LD A,2                  ; release after two empty scans: no contact bounce
+        LD (KP_HELD),A
+        JR rx_consume
+
+kp_none:
+        LD HL,KP_HELD
+        LD A,(HL)
+        AND A
+        JR z,rx_consume
+        DEC (HL)
+        JR nz,rx_consume
+        LD A,0x80+0x3e          ; the remote's release code
+        LD (IR_CODE),A
+
 ; ---- rx_consume: Pop a byte from RX_FIFO; in normal mode feed the packet parser (or if IR_CODE=A4/A5 handle keypad); packet start needs 0xB1 while idle
 ;      P30: runs once per display frame, so it drains the FIFO rather than taking
 ;      one byte: 62 bytes a second was enough for 300 baud only
@@ -4168,8 +4264,9 @@ ir_init:
         LD (IR_KEY),A
         LD (GEN_COUNTDOWN),A
         LD (GEN_COUNTDOWN+1),A
+        LD (IR_QUIET),A         ; P36: a gate left set by the leader wait would keep the idle count asleep and cost the next frame
 
-; ---- ir_reset: IR decoder: reset state, wait for leader (port C0 bit1)
+; ---- ir_reset: IR decoder: reset state, wait for leader (port C0 IR_BIT)
 ir_reset:
         LD A,0x82
         LD (IR_STATE_CNT),A
@@ -4188,9 +4285,9 @@ ir_reset:
 ir_st_idle:
         PUSH AF
         IN A,(PORT_IN)
-        BIT 1,A
+        BIT IR_BIT,A
         JR z,ir_idle_low
-        LD A,3
+        LD A,PORT_IR|1
         LD (IR_QUIET),A         ; P35: a high line while idle: sleep until it falls
         JR ir_reset
 
@@ -4212,7 +4309,7 @@ ir_idle_count:
 ir_st_leader:
         PUSH AF
         IN A,(PORT_IN)
-        BIT 1,A
+        BIT IR_BIT,A
         JR nz,ir_leader_seen
         LD A,1
         LD (IR_QUIET),A         ; P35: sleep until the ISR sees the line rise
@@ -4234,9 +4331,9 @@ ir_leader_ret:
 ir_st_leader2:
         PUSH AF
         IN A,(PORT_IN)
-        BIT 1,A
+        BIT IR_BIT,A
         JR z,ir_leader2_fell
-        LD A,3
+        LD A,PORT_IR|1
         LD (IR_QUIET),A         ; P35: a line that stays high (a receiver unplugged) parks the decoder here
         JR ir_leader2_ret
 
@@ -4259,7 +4356,7 @@ ir_st_leader3:
         DEC A
         JR nz,ir_leader3_count
         IN A,(PORT_IN)
-        BIT 1,A
+        BIT IR_BIT,A
         JR z,ir_reset
         PUSH HL
         LD HL,ir_st_start
@@ -4279,7 +4376,7 @@ ir_st_start:
         DEC A
         JR nz,ir_start_count
         IN A,(PORT_IN)
-        BIT 1,A
+        BIT IR_BIT,A
         JP nz,ir_reset
         PUSH HL
         LD HL,ir_st_bits
@@ -4292,7 +4389,7 @@ ir_start_count:
         POP AF
         RET
 
-; ---- ir_st_bits: sample a data bit (port C0 bit1) into IR_SHIFT every 4 ticks
+; ---- ir_st_bits: sample a data bit (port C0 IR_BIT) into IR_SHIFT every 4 ticks
 ir_st_bits:
         PUSH AF
         LD A,(IR_STATE_CNT)
@@ -4305,7 +4402,7 @@ ir_st_bits:
         LD HL,IR_SHIFT
         RRC (HL)
         IN A,(PORT_IN)
-        AND 2
+        AND PORT_IR
         OR (HL)
         LD (IR_SHIFT),A
         POP HL
@@ -4316,10 +4413,10 @@ ir_bit_verify:
         PUSH HL
         LD A,(IR_SHIFT)
         CPL
-        AND 2
+        AND PORT_IR
         LD L,A
         IN A,(PORT_IN)
-        AND 2
+        AND PORT_IR
         CP L
         POP HL
         JP nz,ir_reset
@@ -4339,10 +4436,7 @@ ir_frame_done:
         AND A                   ; either consumer sees it
         JP nz,ir_reset
         LD A,(IR_SHIFT)
-        RRCA
-        RRCA
-        RRCA
-        RRCA
+        RLCA                    ; P36: bits enter at IR_BIT, so the first lands in bit 7
         OR 0x80
         LD (IR_CODE),A
         JP ir_reset
@@ -4530,7 +4624,9 @@ tx_stream_idle:
 ;      is scheduled 1.5 bits out at the known rate. Times are in fifths of an
 ;      interrupt (BAUD_T, stepped BAUD_STEP per interrupt), so 1200 baud keeps its half.
 rx_start:
-        XOR A
+        LD A,(KP_MODE)          ; P36: a keypad holds the line at space between keys
+        AND A
+        RET nz
         LD (RX_SHIFT),A
         LD (RX_WIDTH),A
         LD A,8
@@ -6638,7 +6734,7 @@ getkey_return:
 ; ---- data 2427-2464: IR/keypad code -> character map
 IR_KEY_TABLE:
         db 0x0f,0x33,0x0c,0x0b,0x0d,0x09,0x0a,0x0e,0x03,0x3f,0x3c,0x3b,0x3d,0x39,0x3a,0x3e
-        db 0x2f,0x13,0x2c,0x2b,0x2d,0x29,0x2a,0x2e,0x24,0x23,0x1c,0x1b,0x1d,0x1d,0x1a,0x22
+        db 0x2f,0x13,0x2c,0x2b,0x2d,0x29,0x2a,0x2e,0x24,0x23,0x1c,0x1b,0x1d,0x19,0x1a,0x22   ; P36: 1D is SHIFT, caught before the table: its entry finds the keypad's SHIFT
         db 0x31,0x30,0x37,0x36,0x35,0x08,0x32,0x34,0x01,0x00,0x07,0x06,0x05,0x38,0x02,0x04
         db 0x11,0x10,0x17,0x16,0x15,0x28,0x12,0x14,0x21,0x20,0x27,0x26,0x25,0x18
 

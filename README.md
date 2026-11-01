@@ -2,7 +2,7 @@
 
 Reverse engineering, documentation and firmware work for the Color Cells / Innovative Sign Technology **CC784** family of scrolling LED signs (1991–1993): the **CC784NIR** ("NIR"), which has an infrared remote, and the **CC784NET** ("NET"), which has a wired, plug-in keypad which connects to the sign's DB9 that both models use for serial communication. Both are the same `CC784-4` controller board.
 
-The ten-channel **CC710** (same code base on the earlier `CC784-3A` board, a 10-pin header instead of the DB9, a 7×59 panel) is covered too: its firmware source, board notes and wire differences are in the same files. The *original* CC784 model (10 memory banks, 6 colors, 10-pin connector) is still unexamined.
+The ten-channel **CC710** (same code base on the earlier `CC784-3A` board, a 10-pin header instead of the DB9, a 7×59 panel) is covered too: its firmware source, board notes and wire differences are in the same files. Its panel is shorter than the CC784's, and it appears to be rare: no other unit or documentation has turned up. The *original* CC784 model (10 memory banks, 6 colors, 10-pin connector) is still unexamined.
 
 ## The hardware
 
@@ -24,7 +24,7 @@ To turn a NET into a NIR, follow [CC784_upgrades.md](CC784_upgrades.md) §4.
 - **Hardware.** The whole controller board is captured in KiCad from the PCB, with the factory bodge wires, the DB9 pinout, the panel connector, the battery path and the timebase explained. An add-in board replaces the NIR's IR receiver board and adds a 32.768 kHz clock source for signs on a DC supply ([hardware/CC784NIR_IR+Clock/](hardware/CC784NIR_IR+Clock/)).
 - **Thirteen stock firmware bugs** found and documented, from a `0x20` payload byte that releases a WAIT to the one that counts as a remote exploit: a single query frame on the serial line overflows the 64-byte stack into the ROM, the matching pops read ROM bytes back as return addresses, and the CPU runs off into whatever they point at.
 - **An emulator** ([tools/cc784_sim.py](tools/cc784_sim.py), on kosarev's Z80 core) with the serial line, the IR receiver, the mains tick, the watchdog and the EEPROM modeled, used as the regression gate for every firmware change.
-- **A patched firmware** ([src/patched/cc784nir.asm](src/patched/cc784nir.asm)): 35 patches that fix the bugs, support a 32 K RAM for a 15 K message store, add over-the-air firmware updates through the serial link into an A/B EEPROM layout with a boot stub, trial boots and rollback, process packets without blanking the display or going deaf, run the serial link at 300 to 1200 baud as the host chooses (the stock DOS software still works at 300), keep every row lit at the slow scroll speeds, add a 24-hour clock, set the clock to the second, keep a configuration block (brightness, mute, hold and flash timing, beeper, remote lock) that the host can read and write, and take the clock from the add-in board's crystal when there is no mains cycle to count. Both signs run it.
+- **A patched firmware** ([src/patched/cc784nir.asm](src/patched/cc784nir.asm)): 36 patches that fix the bugs, support a 32 K RAM for a 15 K message store, add over-the-air firmware updates through the serial link into an A/B EEPROM layout with a boot stub, trial boots and rollback, process packets without blanking the display or going deaf, run the serial link at 300 to 1200 baud as the host chooses (the stock DOS software still works at 300), keep every row lit at the slow scroll speeds, add a 24-hour clock, set the clock to the second, keep a configuration block (brightness, mute, hold and flash timing, beeper, remote lock) that the host can read and write, take the clock from the add-in board's crystal when there is no mains cycle to count, and scan the NET's wired keypad alongside the remote, switching between keypad and serial by itself. Both signs run it.
 - **Host tools** for loading messages, setting the clock, querying and dumping the sign, pushing firmware, and encoding remote keystrokes, over a USB serial adapter or an [ESPHome serial proxy](https://esphome.io/components/serial_proxy/).
 - **The remote** decoded from a logic-analyzer capture and the firmware: frame format, key map, carrier.
 
@@ -50,7 +50,7 @@ Source and tools:
 |---|---|
 | [src/stock/](src/stock/) | The stock firmware of all three signs, each reassembling to its dump: NIR (`md5 c021af14…`), NET (`872c8793…`), CC710 (`f346d39e…`); same labels throughout |
 | [src/patched/](src/patched/) | The patched firmware; `Build patched ROM` and `Pack OTA image` tasks produce the bank image for `push` and the chip image for a programmer |
-| [tools/cc784.py](tools/cc784.py) | Talk to a sign over serial: messages, clock, sequence, queries, dump |
+| [tools/cc784.py](tools/cc784.py) | Talk to a sign over serial: messages, clock, sequence, queries, dump; `--channels 10` for the CC710 |
 | [tools/cc784_esphome.py](tools/cc784_esphome.py) | As above but through an [ESPHome serial proxy](https://esphome.io/components/serial_proxy/) |
 | [tools/cc784_ota.py](tools/cc784_ota.py) | Pack, diff, push, confirm and roll back firmware over the air |
 | [tools/cc784_ir.py](tools/cc784_ir.py) | Remote key map and frame encoder, with ESPHome `remote_transmitter` output |

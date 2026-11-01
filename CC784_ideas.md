@@ -75,13 +75,7 @@ Totals: ~150 bytes for UP and DOWN, ~200 with RIGHT; RIGHT can be added later fo
 
 ## 4. Wired keypad support
 
-The keypad takes all seven DB9 signals, row select on latch bits 4 to 6 (bit 4 is serial TX) and key-pressed on `PORT_IN` bit 3 (serial RX), so keypad and serial can never run together, and with a PC cable idle on the line a keypad scan reads a key held down forever. That is why the NET firmware picks one mode at boot ([firmware notes §13](CC784_firmware.md#13-the-cc784net-firmware-h--from-a-rom-dump-78409n1401920145)).
-
-Decision: **one firmware image, not two.** Two builds are cheap to write, but pushing the keypad image to a sign makes it deaf to serial and OTA cannot fix it. One image with the factory's boot test does the same job with no trap: keypad mode unless the cable grounds pin 2; a sign reading pin 1 low at boot has an IR receiver and skips the test. About 120 bytes: the test from the stock source (~60), `keypad_scan` (47), the tick hook. IR costs nothing in keypad mode because the decoder idles on a high line.
-
-The keypad's chips are now known from the CC100 (a 74HC138 row decoder and a 74LS148 column encoder whose GS output is key-pressed, [hardware notes §6](CC784_hardware.md#6-connectors)); with no key down, the column bits and the key-pressed line idle high, which is what the boot test and the IR detect assume.
-
-A NIR used with a keypad needs the IR bodge wire lifted, not just the module removed: the HC14 drives the pin 1 net regardless.
+Done as patch 36 ([patched notes](CC784_patched.md#2-patches)), with the remote moved off the DB9 ([CC784_upgrades.md §8](CC784_upgrades.md#8-ir-off-the-db9)). Open: keypad keys ignore the remote lock; whether they should is a choice for whoever mounts a keypad in public.
 
 ## 5. Night mode by the clock
 
@@ -116,9 +110,9 @@ A Z84C0020 is a drop-in at 8 MHz. Faster clocks were worked through and set asid
 
 ## 10. Other models
 
-The CC710 turned out to be the NET's code base on the `CC784-3A` board ([firmware notes §14](CC784_firmware.md#14-the-cc710-firmware-h--from-a-rom-dump-id-710), [hardware notes §11](CC784_hardware.md#11-the-cc784-3a-board-cc710-h)). As shipped it cannot run the patched firmware: 2 KB of RAM in a 24-pin socket against the 16 KB the patched build uses. [Hardware notes §12](CC784_hardware.md#12-converting-a-cc784-3a-board-to-a-cc784-4) turns the board into a `CC784-4` (RAM, the later power-fail detect, a DB9 cable), after which the patched firmware runs on it, though the CC710's 59-column panel would need display changes. As it is, two things it could still get:
+The CC710 runs the NET's code base on the `CC784-3A` board ([firmware notes §14](CC784_firmware.md#14-the-cc710-firmware-h--from-a-rom-dump-id-710), [hardware notes §11](CC784_hardware.md#11-the-cc784-3a-board-cc710-h)). As shipped it cannot run the patched firmware: 2 KB of RAM in a 24-pin socket against the 16 KB the patched build uses. [Hardware notes §12](CC784_hardware.md#12-converting-a-cc784-3a-board-to-a-cc784-4) turns the board into a `CC784-4` (RAM, the later power-fail detect, a DB9 cable), after which the patched firmware runs on it, though the CC710's 59-column panel would need display changes. As it is, two things it could still get:
 
-- **A dongle on its header.** Packet mode needs the boot probe answered (SK1 pins 5, 4, 8) and the CTS/ready lines honoured (SK1 pins 9 and 7 high for TX; pin 4 is the sign's ready). An ESP on the header could do all of that in software, and the CC710 answers queries `0`–`3` once in packet mode. For bench tests there is a way in without an adapter: hold `1`, `7` or `U` on the keypad at power-up (address `*`).
+- **A dongle on its header.** Packet mode needs the boot probe answered (SK1 pins 5, 4, 9) and the CTS/ready lines honoured (SK1 pins 8 and 7 high for TX; pin 4 is the sign's ready). An ESP on the header could do all of that in software, and the CC710 answers queries `0`–`3` once in packet mode. For bench tests there is a way in without an adapter: hold `1`, `7` or `U` on the keypad at power-up (address `*`).
 - **Small patches of its own** (16 KB ROM, 3.9 KB free): the address-inversion bug in the probe's keep path, and the `17` AM/PM handling, if the sign is ever used with a host.
 ## 11. A configuration store
 
@@ -129,7 +123,6 @@ The block itself exists since patch 35 ([patched notes](CC784_patched.md#2-patch
 | Status reports | on, off | off | the sign emits a short frame on TX at each channel start, naming the channel, so a dongle knows exactly what is playing; the boundary line (§1) only says that something started. Framed like a query reply with a type byte, so the host tool can skip them while waiting for an ACK. Off by default because unsolicited bytes break the request-reply model for a stock host. In a chain (§2) they stay allowed but are best effort: a report is dropped when the link is busy at the moment it would be sent, and one that collides with a forwarded reply fails the host's checksum. A sign defers its own report while it is forwarding, which removes most collisions | ~40 |
 | Clock source | auto, mains, crystal | auto | overrides patch 31's boot-time detection on the add-in board | ~8 |
 | Night schedule | start, end, level | off | the clock-based night mode of §5 as three bytes in the reserved space instead of its own editor dialog | ~40 |
-| Mode override | auto, serial, keypad | auto | for the keypad work (§4): skip the boot test on a sign whose cable never grounds pin 2 | ~6 |
 | Chain forwarding | on, off | off | the bit repeater of §2 | 1 |
 
 The live bits of the flags byte (alert playing, editor open, wrapped) sit outside the sum so they can change without a reseal; the clock and the sequence beside the block are outside it for the same reason, and the sequence is read with `B4 '6'`.

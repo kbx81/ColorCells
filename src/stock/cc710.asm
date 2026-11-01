@@ -2708,8 +2708,8 @@ store_init:
         JR z,mode_packet
         JR mode_keypad
 
-; ---- mode_terminal: SK1 pin 8 (DB9 pin 2) held low, e.g. the NET cable's 2-5 short
-;      (SK1 8-2) -> FF
+; ---- mode_terminal: SK1 pin 9 (DB9 pin 2) held low, e.g. the NET cable's 2-5 short
+;      (SK1 9-2) -> FF
 mode_terminal:
         LD A,0xff
         JR store_init_keypad
@@ -2810,7 +2810,7 @@ SENTINEL_55:
 ; ---- mode_test: boot probe of the keypad/serial header. Sync to a tick (HALT with the
 ;      IX/IY sentinel), DI, pulse latch bit 4 1-0-1, then clock the 8 bits of C out twice
 ;      (15 clocks, MSB first, data on latch bit 6 = SK1 pin 5 (DB9 7), row bit 2; clock on
-;      bit 5 = SK1 pin 4 (DB9 4), row bit 1) sampling PORT_IN bit 0 = SK1 pin 8 (DB9 2)
+;      bit 5 = SK1 pin 4 (DB9 4), row bit 1) sampling PORT_IN bit 0 = SK1 pin 9 (DB9 2)
 ;      before the first clock and after each one: DE = 16 samples, D the first eight.
 ;      Leaves interrupts disabled and the last latch write in place: 30 (row 3) after
 ;      the 55 probe, 70 (row 7) after the AA probe
@@ -2888,7 +2888,7 @@ tx_try_queue:
 
 ; ---- tx_bit_engine: every tick: shift TX_SHIFT out on CTRL_LATCH bit 4 with the
 ;      TX_TIMING bit times (300 baud at 1302 Hz). A new byte starts only while PORT_IN
-;      bits 1 and 2 (SK1 pins 9 and 7, DB9 1 and 6) are both high: a CTS-style handshake the
+;      bits 1 and 2 (SK1 pins 8 and 7, DB9 1 and 6) are both high: a CTS-style handshake the
 ;      NIR does not have
 tx_bit_engine:
         LD HL,TX_STATUS

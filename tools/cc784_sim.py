@@ -32,13 +32,17 @@ cc784_sim.py - run the CC784NIR ROM under emulation (kosarev's z80 core) with a 
     uv run tools/cc784_sim.py ram
         The build on the stock 8 K RAM (mirrored) and on a 62256: sizes, fill, dump.
 
+    uv run tools/cc784_sim.py keypad
+        The wired keypad (patch 36): mode switching, editing against the remote.
+
     uv run tools/cc784_sim.py fuzz [RUNS]
         Cut the power at a random instant of an update, RUNS times (default 100);
         every reboot must land in a bank whose trailer and image CRC check out.
 
 Facts the model rests on (all traced in the firmware notes): INT every 1024 T
 (8 MHz / 1024; 4 MHz cannot keep up with the tick work, so the CPU is 8 MHz),
-NMI at 60 Hz, PORT_IN bit 3 = serial RX (1 = space), bit 1 = IR burst,
+NMI at 60 Hz, PORT_IN bit 3 = serial RX (1 = space), bit 1 = IR burst (bit 4
+on the patched build), a keypad's column code on bits 0-2 and GS on bit 3,
 CTRL_LATCH bit 4 = serial TX (1 = space). The stack watch counts only writes at
 SP, so store shuffles next to the stack do not register.
 
@@ -229,6 +233,11 @@ class Sign:
         self.rx_i = self.ir_i = 0
         self.rx_level = self.ir_level = 0
         self.rx_busy_until = self.ir_busy_until = 0
+        self.ir_mask = syms.get('PORT_IR', 0x02)   # bit 1 on stock; the patched build moves it
+        self.tied_high = 0xE0 if self.ir_mask == 0x10 else 0   # the second '244's unused inputs
+        self.keypad = False                 # True: a keypad on the DB9 instead of a host
+        self.kp_events, self.kp_i, self.kp_level = [], 0, None
+        self.kp_busy_until = 0
         self.int_pending = False
         self.tick_t = TICK_T + int(2 * US)  # 128 us + ~2 us of acknowledge latency, as measured on the board
         self.strict_int = strict_int        # /INT follows Q11: a request not taken within 128 us is lost
@@ -322,9 +331,15 @@ class Sign:
 
     def _on_input(self, port):
         if port & 0xff == 0xc0:
+            ir = self._level(self.ir_events, 'ir_i', 'ir_level') * self.ir_mask | self.tied_high
+            if self.keypad:
+                # a CC100: the '148 drives bits 0-2 and GS (bit 3, low = key) for the row on latch bits 4-6
+                key = self._level(self.kp_events, 'kp_i', 'kp_level')
+                if key is not None and key >> 3 == (self.latch >> 4) & 7:
+                    return (key & 7) | ir
+                return 0x0f | ir
             rx = self._level(self.rx_events, 'rx_i', 'rx_level')
-            ir = self._level(self.ir_events, 'ir_i', 'ir_level')
-            return (rx << 3) | (ir << 1)
+            return (rx << 3) | ir
         return 0xff
 
     def _on_output(self, port, value):
@@ -436,6 +451,24 @@ class Sign:
             else:
                 t += int((-seg - stretch_us) * US)
         self.ir_busy_until = t + int(100_000 * US)
+
+    def kp_key(self, code, hold_ms=150, bounce=0):
+        """one keystroke on the keypad by its key code (row x 8 + column), with
+        bounce chattering edges of 0.5 ms at the press and the release"""
+        t = max(self.t, self.kp_busy_until)
+        def chatter(t, final):
+            for _ in range(bounce):
+                self.kp_events.append((t, None if final is not None else code)); t += int(500 * US)
+                self.kp_events.append((t, final)); t += int(500 * US)
+            return t
+        self.kp_events.append((t, code)); t += int(500 * US)
+        t = chatter(t, code) + int(hold_ms * 1000 * US)
+        self.kp_events.append((t, None)); t += int(500 * US)
+        t = chatter(t, None)
+        self.kp_busy_until = t + int(100_000 * US)
+
+    def kp_wait(self):
+        if self.kp_busy_until > self.t: self.run(self.kp_busy_until - self.t)
 
     def ir_wait(self):
         if self.ir_busy_until > self.t: self.run(self.ir_busy_until - self.t)
@@ -908,7 +941,7 @@ def cmd_ram():
             if s.tx_bytes().endswith(b'\x04'): break
         s.tx_edges.clear(); s.run_ms(200)
 
-    for ram8k, want_total in ((True, 7003), (False, 15195)):     # P21 took 32 bytes for the reply stream, P35 17 for the configuration block and the brightness clock, 64 more of stack and 2 for the IR gate
+    for ram8k, want_total in ((True, 7000), (False, 15192)):     # P21 took 32 bytes for the reply stream, P35 17 for the configuration block and the brightness clock, 64 more of stack and 2 for the IR gate, P36 3 for the keypad
         name = '8 K' if ram8k else '16 K'
         s = Sign(rom, syms, fresh_ram=True, ram8k=ram8k)
         s.run_ms(2500)
@@ -999,7 +1032,7 @@ def cmd_quiet():
           % (tx.hex(), s.ram('PKT_RESTART')[0], s.wdog_clears, before, after),
           tx == b'\x06\x04' and s.ram('PKT_RESTART')[0] == 0 and s.wdog_clears == 0 and after != before)
     tx = send(s, b'\xb4\x31')
-    check("B4 '1' mid-scroll: reply %s, no restart" % tx[4:14], tx[:4] == b'\x06\xb1\x01\x0a' and tx[4:9] == b'15195' and s.ram('PKT_RESTART')[0] == 0)
+    check("B4 '1' mid-scroll: reply %s, no restart" % tx[4:14], tx[:4] == b'\x06\xb1\x01\x0a' and tx[4:9] == b'15192' and s.ram('PKT_RESTART')[0] == 0)
     tx = send(s, b'\x17' + b'1045' + b'P', wait_ms=300)
     check('set time mid-scroll: clock %s, seconds %d and ticks %d zeroed (P23), no restart, no watchdog clear'
           % (s.ram('CLK_H10', 4).hex(), s.ram('CLK_SEC')[0], s.ram('NMI_COUNT')[0]),
@@ -1110,7 +1143,7 @@ def cmd_baud():
         s = Sign(rom, syms, fresh_ram=True, baud=baud); s.run_ms(2500)
         tx = send(s, b'\xb4\x31', wait_ms=int(16 * 10000 / baud) + 500)
         rate = s.ram('BAUD_STEP')[0]
-        check('%4d baud from cold: query reply %s, BAUD_STEP %d, BAUD_T %d' % (baud, tx[:9], rate, s.ram('BAUD_T')[0]), tx[:4] == b'\x06\xb1\x01\x0a' and tx[4:9] == b'15195' and rate == baud // 60)
+        check('%4d baud from cold: query reply %s, BAUD_STEP %d, BAUD_T %d' % (baud, tx[:9], rate, s.ram('BAUD_T')[0]), tx[:4] == b'\x06\xb1\x01\x0a' and tx[4:9] == b'15192' and rate == baud // 60)
         tx = send(s, b'\x09\x30\x31\x0e' + text, wait_ms=500)
         d = bytes(s.m.memory[syms['MSG_STORE']:int.from_bytes(s.ram('STORE_END', 2), 'little')])
         check('%4d baud: 220-byte load intact, ACK+DONE %s' % (baud, tx.hex()), text in d and tx == b'\x06\x04')
@@ -1398,6 +1431,91 @@ def cmd_config():
     return all(checks)
 
 
+def cmd_keypad():
+    """P36: the wired keypad. Serial at boot, keypad mode once the RX line has read
+    space for 256 frames, keys that edit exactly as the same keys on the remote do
+    (with contact bounce), the remote still working alongside, and serial again as
+    soon as a host idles on the line. Fine slices: the scan's short DI windows
+    would otherwise hold interrupts to the next 128 T and cost the remote frames."""
+    global SLICE
+    SLICE, coarse = 16, SLICE
+    try:
+        return _keypad()
+    finally:
+        SLICE = coarse
+
+
+def _keypad():
+    rom, syms = assemble(HERE.parent / 'src' / 'patched')
+    checks = []
+    def check(name, cond):
+        checks.append(cond); print('  %s %s' % ('ok  ' if cond else 'FAIL', name))
+    table = rom[syms['IR_KEY_TABLE']:syms['IR_KEY_TABLE'] + 62]
+    code = lambda k: table[cc784_ir.key_index(k)]
+    typed = ('H', 'I', 'SPACE', 'BOLD', 'W', 'O', 'W', 'FLASH', 'COLOR', '3', 'LEFT', 'DEL',
+             'SHIFT', 'PROG', '1', 'SHIFT', 'H', 'K', '0')
+
+    def edit(s, press, wait):
+        press('STOP'); wait(); s.run_ms(800)
+        opened = s.ram('MENU_ACTIVE')[0]
+        for k in typed:
+            press(k); wait(); s.run_ms(300)
+        press('STOP'); wait()
+        for _ in range(50):
+            if not s.ram('MENU_ACTIVE')[0]: break
+            s.run_ms(100)
+        return opened, s.ram('MSG_STORE', 64)
+
+    def boot():
+        # a plain message: the demo's effects pause the frame path, and STOP with it
+        s = Sign(rom, syms, fresh_ram=False); s.run_ms(2500)
+        s.send_frame(b'\x09\x30\x30\x0ePLAIN\x04\x30\x30'); s.rx_wait(); s.run_ms(2500)
+        return s
+
+    ref = boot()
+    blank = ref.ram('MSG_STORE', 64)
+    r_open, r_store = edit(ref, lambda k: ref.ir_key(k, stretch_us=100), ref.ir_wait)
+
+    s = boot()
+    check('boots in serial mode with a host on the line', s.ram('KP_MODE')[0] == 0)
+    s.keypad = True
+    t0 = s.t
+    while not s.ram('KP_MODE')[0] and s.t - t0 < 20_000 * 1000 * US:
+        s.run_ms(100)
+    secs = (s.t - t0) / CPU_HZ
+    check('keypad plugged in: keypad mode after %.1f s' % secs, s.ram('KP_MODE')[0] and 2 < secs < 10)
+    k_open, k_store = edit(s, lambda k: s.kp_key(code(k), bounce=3), s.kp_wait)
+    check('STOP on the keypad opens the editor (%02x), as on the remote (%02x)' % (k_open, r_open), k_open == r_open == 0xFF)
+    check('the same keys, bouncing, leave the same store as the remote: %s / %s' % (k_store[:24].hex(), r_store[:24].hex()),
+          k_store == r_store != blank)
+
+    # a held key repeats like a held remote key; the remote works in keypad mode
+    s.kp_key(code('STOP')); s.kp_wait(); s.run_ms(800)
+    before = bytes(s.m.memory[syms['MSG_STORE']:syms['MSG_STORE'] + 256])
+    s.kp_key(code('X'), hold_ms=2500); s.kp_wait(); s.run_ms(300)
+    s.ir_key('Y', stretch_us=100); s.ir_wait(); s.run_ms(300)
+    s.kp_key(code('STOP')); s.kp_wait()
+    for _ in range(50):
+        if not s.ram('MENU_ACTIVE')[0]: break
+        s.run_ms(100)
+    after = bytes(s.m.memory[syms['MSG_STORE']:syms['MSG_STORE'] + 256])
+    xs, ys = after.count(b'X') - before.count(b'X'), after.count(b'Y') - before.count(b'Y')
+    check('a held key repeats (%d X), the remote types alongside (%d Y), editor closed' % (xs, ys),
+          xs > 2 and ys == 1 and not s.ram('MENU_ACTIVE')[0])
+
+    # unplug the keypad, a host idles at mark: serial at once, and it answers
+    s.keypad = False
+    s.run_ms(200)
+    check('host back on the line: serial mode within 200 ms', s.ram('KP_MODE')[0] == 0)
+    s.tx_edges.clear()
+    s.send_frame(b'\xb4\x31', flag=0x80); s.rx_wait(); s.run_ms(2500)
+    tx = s.tx_bytes()
+    check("then answers B4 '1': %s" % tx[:12].hex(), tx[:4] == b'\x06\xb1\x01\x0a')
+    check('no faults, stack depth %d' % s.depth(), not s.faults and not ref.faults and s.depth() < 160)
+    print('keypad: %d/%d checks pass' % (sum(1 for c in checks if c), len(checks)))
+    return all(checks)
+
+
 def cmd_eeprom():
     """exercise the chip model against the AT28C256 datasheet rules"""
     us = lambda n: int(n * US)
@@ -1546,7 +1664,7 @@ def cmd_compare(dir_a, dir_b):
 
 if __name__ == '__main__':
     args = sys.argv[1:]
-    if not args or args[0] not in ('stack', 'compare', 'eeprom', 'ota', 'update', 'push', 'fuzz', 'ram', 'quiet', 'speed', 'baud', 'clock', 'config'):
+    if not args or args[0] not in ('stack', 'compare', 'eeprom', 'ota', 'update', 'push', 'fuzz', 'ram', 'quiet', 'speed', 'baud', 'clock', 'config', 'keypad'):
         sys.exit(__doc__)
     if args[0] == 'ram':
         sys.exit(0 if cmd_ram() else 1)
@@ -1556,6 +1674,8 @@ if __name__ == '__main__':
         sys.exit(0 if cmd_baud() else 1)
     if args[0] == 'clock':
         sys.exit(0 if cmd_clock() else 1)
+    if args[0] == 'keypad':
+        sys.exit(0 if cmd_keypad() else 1)
     if args[0] == 'config':
         sys.exit(0 if cmd_config() else 1)
     if args[0] == 'quiet':
