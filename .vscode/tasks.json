@@ -150,6 +150,69 @@
       "problemMatcher": []
     },
     {
+      "label": "Build patched ROM (CC710)",
+      "detail": "The same source for the CC710's 59-column panel (-DCC710), on a CC784-3A board converted per CC784_hardware.md §12.",
+      "type": "shell",
+      "command": "sjasmplus",
+      "args": [
+        "--fullpath",
+        "-DCC710",
+        "--lst=cc710_patched.lst",
+        "cc784nir.asm"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}/src/patched"
+      },
+      "group": "build",
+      "problemMatcher": "$zx-macroasm-sjasmplus"
+    },
+    {
+      "label": "Pack OTA image (CC710)",
+      "type": "shell",
+      "command": "uv",
+      "args": [
+        "run",
+        "tools/cc784_ota.py",
+        "pack",
+        "src/patched/cc710_patched.bin",
+        "-o",
+        "src/patched/cc710_bank.bin",
+        "--t48",
+        "src/patched/cc710_chip.bin"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "dependsOn": "Build patched ROM (CC710)",
+      "presentation": {
+        "reveal": "always",
+        "clear": true
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "AT28C256-15PU -- program (CC710)",
+      "type": "shell",
+      "command": "minipro",
+      "args": [
+        "-p",
+        "AT28C256",
+        "-u",
+        "-P",
+        "-w",
+        "cc710_chip.bin"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}/src/patched"
+      },
+      "dependsOn": "Pack OTA image (CC710)",
+      "presentation": {
+        "reveal": "always",
+        "clear": true
+      },
+      "problemMatcher": []
+    },
+    {
       "label": "OTA: emulator regression",
       "detail": "EEPROM model self-test, boot stub scenarios, a full B5 update, the host tool's push, all against the emulated sign. fuzz [RUNS] is separate (slow).",
       "type": "shell",

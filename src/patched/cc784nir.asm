@@ -1,6 +1,7 @@
 ; ============================================================================
 ;  Color Cells CC784NIR LED sign - PATCHED firmware source
 ;  Assemble:  sjasmplus cc784nir.asm   (produces cc784nir_patched.bin, 32768 B)
+;             sjasmplus -DCC710 cc784nir.asm   (cc710_patched.bin: the 59-column panel)
 ;  NOT byte-identical to the dump. The untouched reconstruction is
 ;  ../stock/cc784nir.asm; diff the two to see the patches.
 ;
@@ -15,12 +16,16 @@
 ; differ from stock). Diff against ../stock/cc784nir.asm to see exactly what
 ; changed; everything else is intentionally kept identical.
 
+    IFDEF CC710
+        OUTPUT "cc710_patched.bin"
+    ELSE
         OUTPUT "cc784nir_patched.bin"
+    ENDIF
 
 FRAMEBUF             equ 0x4000
 FRAMEBUF_SIZE        equ 0xc0   ; column ring: 86 visible + the glyph being written; also the TINY line
-FRAMEBUF_ROW1        equ FRAMEBUF+0x56
-FRAMEBUF_TINY        equ FRAMEBUF+0xab   ; TINY line buffer inside the ring
+FRAMEBUF_ROW1        equ FRAMEBUF+FRAME_COLS
+FRAMEBUF_TINY        equ FRAMEBUF+2*FRAME_COLS-1   ; TINY line buffer inside the ring
 ; ---- variables follow the ring, packed with no gaps (P8). INIT_DATA mirrors
 ;      this order in four runs, so keep the two in step.
 RAM_VARS             equ FRAMEBUF+FRAMEBUF_SIZE
@@ -29,6 +34,7 @@ FB_COL               equ RAM_VARS+0x002   ; scroll position: the column the outp
 BGRND_PENDING        equ RAM_VARS+0x004   ; editor: BGRND key pressed, next key is the color digit
 TXBUF                equ RAM_VARS+0x005   ; reply frames, and the effect staging frame (86 columns)
 STAGE_PTR            equ RAM_VARS+0x05b   ; next free column in TXBUF while an effect stages text
+STAGE_END            equ TXBUF+FRAME_COLS ; end of the staging frame (STAGE_PTR itself on the CC784)
 STAGE_OFFSET         equ RAM_VARS+0x05d   ; centering offset of the staged text (free columns / 2)
 ROW_PORT             equ RAM_VARS+0x05f   ; port group for the row data: 40 first pass, 48 second
 BEEP_TICKS           equ RAM_VARS+0x060   ; beeper on while non-zero (port bit 5); beep_start loads BEEP_LEN
@@ -70,7 +76,7 @@ FB_EXTRA_LEN         equ RAM_VARS+0x08c   ; bytes to send from FRAMEBUF after th
 STORE_END            equ RAM_VARS+0x08e
 EFFECT_ID            equ RAM_VARS+0x090   ; 0 LEFT, 1 PAUSE, 2 UP, 3 DOWN, 4 RIGHT, 5 HOLD
 EFFECT_VECTOR        equ RAM_VARS+0x091
-MENU_TEXT_PTR        equ RAM_VARS+0x093
+MENU_TEXT_PTR        equ RAM_VARS+0x093   ; unused: menu_show_text takes HL
 SHIFT_LABEL          equ RAM_VARS+0x095   ; FF = redraw shows the SHIFT indicator
 FLUSH_PENDING        equ RAM_VARS+0x096   ; FF = staged text must be shown before the next effect runs
 FRAME_DELAY          equ RAM_VARS+0x097   ; frames to hold before the next column step (1, 3 or 0x50)
@@ -237,7 +243,11 @@ STACK_TOP            equ PKT_READY   ; first PUSH lands two below
 ; 7 gave a visible ~5 Hz on the sign (2026-09-19), which is what proved bit 7
 ; is the blink clock. Change here to retune, nothing else references it.
 FLASH_HALF_PERIOD    equ 13          ; P35: the default of CFG_FLASH
+    IFDEF CC710
+FRAME_COLS           equ 60          ; columns sent per row: the CC710 panel's 59 plus one that falls off the chain
+    ELSE
 FRAME_COLS           equ 86          ; columns sent per row: the panel's 84 plus two that fall off the chain
+    ENDIF
 HOLD_FRAMES          equ 80          ; frames a PAUSE, HOLD, wipe or clock holds the panel (~1.3 s); P35: the default of CFG_HOLD
 BEEP_LEN             equ 150         ; beeper on for this many tick6 periods (~115 ms)
 IR_REPEAT_DELAY      equ 1300        ; tick6 periods a held remote key waits before repeating (~1 s)
@@ -1541,11 +1551,7 @@ seq_open_channel:
         CP TEXT_END
         JR z,seq_chan_empty
         PUSH HL
-        LD B,0
-        LD C,A
-        LD IX,CHAR_FLAGS
-        ADD IX,BC
-        BIT 1,(IX+0)
+        CALL char_flag1
         JR z,seq_set_cursor
 
 seq_skip_attrs:
@@ -1557,11 +1563,7 @@ seq_skip_attrs:
         JR seq_chan_empty
 
 seq_skip_attrs_next:
-        LD B,0
-        LD C,A
-        LD IX,CHAR_FLAGS
-        ADD IX,BC
-        BIT 1,(IX+0)
+        CALL char_flag1
         JR nz,seq_skip_attrs
 
 seq_set_cursor:
@@ -2050,7 +2052,7 @@ INIT_DATA:
         db 0x00                ; RX_BYTE
         db 0x00                ; IR_KEY_CHAR
         db 0x00                ; CTRL_LATCH_SHADOW
-        dw 0x5600              ; FB_OUT_LEN
+        dw FRAME_COLS<<8       ; FB_OUT_LEN
         dw 0x0000              ; FB_EXTRA_LEN
         dw 0xff00              ; STORE_END
         db 0x00                ; EFFECT_ID
@@ -2246,18 +2248,7 @@ class_high:
 
 ; ---- glyph_lookup: HL = FONT + 8*glyph_index(CUR_CHAR); GLYPH_WIDTH = byte 7 of the glyph
 glyph_lookup:
-        LD HL,FONT
-        LD A,(CUR_CHAR)
-        CALL char_to_glyph
-        LD E,A
-        LD D,0
-        SLA E
-        RL D
-        SLA E
-        RL D
-        SLA E
-        RL D
-        ADD HL,DE
+        CALL glyph_addr
         LD (GLYPH_PTR),HL
         LD (GLYPH_PTR_ORIG),HL
         LD DE,7
@@ -2409,7 +2400,7 @@ glyph_stage:
         LD D,0
         LD E,A
         ADD HL,DE
-        LD DE,STAGE_PTR
+        LD DE,STAGE_END
         XOR A
         SBC HL,DE
         JP nc,fx_flush_stage
@@ -2463,6 +2454,40 @@ glyph_base_sel:
         POP AF
         AND 15
         EX DE,HL
+        RET
+
+; ---- glyph_put_next: draw A, keeping BC, then HL+1
+glyph_put_next:
+        LD (CUR_CHAR),A
+        PUSH HL
+        PUSH BC
+        CALL glyph_lookup
+        POP BC
+        POP HL
+        INC HL
+        RET
+
+; ---- char_flag1: NZ if char A has CHAR_FLAGS bit 1 (BC, IX clobbered)
+char_flag1:
+        LD B,0
+        LD C,A
+        LD IX,CHAR_FLAGS
+        ADD IX,BC
+        BIT 1,(IX+0)
+        RET
+
+; ---- glyph_addr: HL = the glyph of CUR_CHAR
+glyph_addr:
+        LD HL,FONT
+        LD A,(CUR_CHAR)
+        CALL char_to_glyph
+        EX DE,HL
+        LD L,A
+        LD H,0
+        ADD HL,HL
+        ADD HL,HL
+        ADD HL,HL
+        ADD HL,DE
         RET
 
 ; ---- fetch_char: CUR_CHAR = next store byte (LEFT substituted after a clock)
@@ -2838,24 +2863,7 @@ magic_effect_attr:
         RET z
         LD A,(CUR_CHAR)
         PUSH AF
-        LD B,14
-
-magic_push_off:
-        PUSH BC
-        LD A,' '
-        LD (CUR_CHAR),A
-        XOR A
-        LD (EFFECT_ID),A
-        LD HL,fxv_none
-        LD (EFFECT_VECTOR),HL
-        LD A,6
-        LD (GLYPH_WIDTH),A
-        LD HL,FONT+8*32
-        LD (GLYPH_PTR),HL
-        CALL glyph_blit
-        CALL effect_step
-        POP BC
-        DJNZ magic_push_off
+        CALL tiny_scroll_off    ; push the text off: a panel width of spaces
         POP AF
         LD (CUR_CHAR),A
         RET
@@ -3302,7 +3310,7 @@ fx_wait_row6:
         JR nz,fx_wait_row6
         LD HL,(STAGE_OFFSET)
         LD A,L
-        CP 0x2b
+        CP FRAME_COLS/2
         JR z,fx_stage_empty
         LD HL,(EFFECT_VECTOR)
         JP (HL)
@@ -3402,7 +3410,7 @@ fx_attr:
 
 fx_flush_stage:
         LD HL,(STAGE_PTR)
-        LD DE,STAGE_PTR
+        LD DE,STAGE_END
         XOR A
         EX DE,HL
         SBC HL,DE
@@ -3740,12 +3748,12 @@ tiny_end:
         CALL init_render
         JP render_loop
 
-; ---- tiny_scroll_off: push existing text off before TINY text
+; ---- tiny_scroll_off: push existing text off before TINY text or a MAGIC effect
 tiny_scroll_off:
         ; Stock scanned 86 bytes from the ADDRESS of FB_COL (LD HL,FB_COL, a typo
         ; for the pointer) looking for a color byte; a 0x95 constant sat three
         ; bytes in, so the test never failed. P8 drops the scan and the bytes.
-        LD B,14
+        LD B,FRAME_COLS/6
 
 tinyoff_loop:
         PUSH BC
@@ -3798,18 +3806,7 @@ tinyg_check:
         JR nz,tinyg_stop
 
 tinyg_lookup:
-        LD HL,FONT
-        LD A,(CUR_CHAR)
-        CALL char_to_glyph
-        LD E,A
-        LD D,0
-        SLA E
-        RL D
-        SLA E
-        RL D
-        SLA E
-        RL D
-        ADD HL,DE
+        CALL glyph_addr
         PUSH HL
         LD DE,7
         ADD HL,DE
@@ -3842,7 +3839,7 @@ tiny_scroll_cols:
 tinysc_loop:
         LD HL,FRAMEBUF+1
         LD DE,FRAMEBUF
-        LD BC,0xbc
+        LD BC,2*FRAME_COLS+16
         LDIR
         PUSH AF
         CALL tiny_copy_frame
@@ -3873,7 +3870,7 @@ tinycp_loop:
 
 ; ---- tiny_scroll_out: 28 spaces to clear the tiny line
 tiny_scroll_out:
-        LD B,0x1c
+        LD B,2*FRAME_COLS/6
 
 tinyout_loop:
         PUSH BC
@@ -4005,11 +4002,7 @@ right_wait_frame:
         AND A
         JR nz,right_wait_frame
         DJNZ right_wait_row
-        LD A,(CFG_HOLD)         ; P35
-        LD (FRAME_DELAY),A
-        XOR A
-        LD (SCROLLING),A
-        JP fx_done
+        JR fx_hold_done
 
 ; ---- fxv_none: effect handler: nothing (straight to render loop)
 fxv_none:
@@ -4061,11 +4054,7 @@ hold_wait_frame:
         AND A
         JR nz,hold_wait_frame
         DJNZ hold_wait_row
-        LD A,(CFG_HOLD)         ; P35
-        LD (FRAME_DELAY),A
-        XOR A
-        LD (SCROLLING),A
-        JP fx_done
+        JR fx_hold_done
 
 ; ---- fxv_pause: effect 1: copy the whole stage, then FRAME_DELAY 0x50
 fxv_pause:
@@ -4074,6 +4063,9 @@ fxv_pause:
         LD A,(COL_COUNT)
         LD C,A
         LDIR
+
+; ---- fx_hold_done: an effect has its frame up: hold it, then end the effect
+fx_hold_done:
         LD A,(CFG_HOLD)         ; P35
         LD (FRAME_DELAY),A
         XOR A
@@ -4155,11 +4147,7 @@ wipev_next_pass:
         POP AF
         DEC A
         JR nz,wipev_pass
-        LD A,(CFG_HOLD)         ; P35
-        LD (FRAME_DELAY),A
-        XOR A
-        LD (SCROLLING),A
-        JP fx_done
+        JR fx_hold_done
 
 ; ---- store_clear_all: Reset MSG_STORE: 100 empty channels D0..? then DA
 store_clear_all:
@@ -5512,11 +5500,7 @@ newmsg_try_chan:
         LD A,(HL)
         CP TEXT_END
         JR z,newmsg_empty_found
-        LD B,0
-        LD C,A
-        LD IX,CHAR_FLAGS
-        ADD IX,BC
-        BIT 1,(IX+0)
+        CALL char_flag1
         JR z,newmsg_next_chan
 
 newmsg_skip_attrs:
@@ -5528,11 +5512,7 @@ newmsg_skip_attrs:
         JR newmsg_select
 
 newmsg_skip_next:
-        LD B,0
-        LD C,A
-        LD IX,CHAR_FLAGS
-        ADD IX,BC
-        BIT 1,(IX+0)
+        CALL char_flag1
         JR z,newmsg_next_chan
         JR newmsg_skip_attrs
 
@@ -5716,12 +5696,8 @@ exit_to_display:
 
 ; ---- menu_time: 17: TIME? HHMM then AM? Y/N
 menu_time:
-        CALL init_render
-        LD HL,(FB_COL)
-        LD (FB_COLPTR),HL
         LD HL,MENU_STR_TIME
-        LD (MENU_TEXT_PTR),HL
-        CALL menu_show_text
+        CALL menu_prompt
         XOR A
         LD (CLK_RUN),A
         LD HL,CLK_H10
@@ -5767,12 +5743,8 @@ time_wait_loop:
         LD A,(FRAME_DELAY)
         AND A
         JR nz,time_wait_loop
-        CALL init_render
-        LD HL,(FB_COL)
-        LD (FB_COLPTR),HL
         LD HL,MENU_STR_AM_PM
-        LD (MENU_TEXT_PTR),HL
-        CALL menu_show_text
+        CALL menu_prompt
 
 time_get_ampm:
         CALL menu_getchar
@@ -5938,24 +5910,14 @@ askchan_store_tens:
         LD (CHAN_D10),A
 
 askchan_show:
-        CALL init_render
-        LD HL,(FB_COL)
-        LD (FB_COLPTR),HL
         LD HL,(ASK_CHAN_PROMPT)
-        LD (MENU_TEXT_PTR),HL
-        CALL menu_show_text
+        CALL menu_prompt
         LD B,2
         LD HL,CHAN_D10
 
 askchan_digits_loop:
         LD A,(HL)
-        LD (CUR_CHAR),A
-        PUSH HL
-        PUSH BC
-        CALL glyph_lookup
-        POP BC
-        POP HL
-        INC HL
+        CALL glyph_put_next
         DJNZ askchan_digits_loop
 
 askchan_key:
@@ -6055,12 +6017,8 @@ askchan_magic_key:
 
 ; ---- menu_address: 5E (FUNC+MAGIC): ADDRESS? 1-255, never 0 or 2A
 menu_address:
-        CALL init_render
-        LD HL,(FB_COL)
-        LD (FB_COLPTR),HL
         LD HL,MENU_STRINGS
-        LD (MENU_TEXT_PTR),HL
-        CALL menu_show_text
+        CALL menu_prompt
         LD H,0
         LD A,(MY_ADDRESS)
         CP 0
@@ -6097,13 +6055,7 @@ addr_show_loop:
         LD (HL),A
 
 addr_show_digit:
-        LD (CUR_CHAR),A
-        PUSH HL
-        PUSH BC
-        CALL glyph_lookup
-        POP BC
-        POP HL
-        INC HL
+        CALL glyph_put_next
         DJNZ addr_show_loop
         LD HL,MENU_ENTRY_BUF
         LD B,0
@@ -6137,7 +6089,6 @@ addr_key:
         LD HL,(FB_COL)
         LD (FB_COLPTR),HL
         LD HL,MENU_STRINGS
-        LD (MENU_TEXT_PTR),HL
         CALL menu_show_text
 
 addr_echo_digit:
@@ -6160,7 +6111,7 @@ addr_convert:
         JR z,menu_addr_invalid
         LD (MY_ADDRESS),A
         CALL cfg_seal           ; P35
-        JP editor_reshow2
+        JR editor_reshow
 
 ; ---- ascii_dec_to_bin: Convert B ASCII digits at (HL) to binary in A (C set if invalid)
 ascii_dec_to_bin:
@@ -6240,7 +6191,9 @@ gotoend_loop:
 gotoend_back:
         DEC HL
         LD (STORE_CURSOR),HL
-        LD HL,(STORE_CURSOR)
+
+; ---- editor_back_if_mark: HL = STORE_CURSOR; on a channel marker step back and show TOP
+editor_back_if_mark:
         LD A,(HL)
         CP MARK_LO
         JP c,editor_loop
@@ -6260,12 +6213,8 @@ editor_reshow:
 
 ; ---- show_top_of_msg: 05 and after most edits: "TOP OF MSG nn"
 show_top_of_msg:
-        CALL init_render
-        LD HL,(FB_COL)
-        LD (FB_COLPTR),HL
         LD HL,STR_TOP_OF_MSG
-        LD (MENU_TEXT_PTR),HL
-        CALL menu_show_text
+        CALL menu_prompt
         LD B,2
         LD HL,(STORE_CURSOR)
 
@@ -6285,24 +6234,14 @@ top_digit:
         LD (HL),A
 
 top_emit:
-        LD (CUR_CHAR),A
-        PUSH HL
-        PUSH BC
-        CALL glyph_lookup
-        POP BC
-        POP HL
-        INC HL
+        CALL glyph_put_next
         DJNZ top_digit_loop
         JP editor_next_key
 
 ; ---- menu_clear_all: 03: CLR ALL Y/N
 menu_clear_all:
-        CALL init_render
-        LD HL,(FB_COL)
-        LD (FB_COLPTR),HL
         LD HL,MENU_STR_CLR_ALL
-        LD (MENU_TEXT_PTR),HL
-        CALL menu_show_text
+        CALL menu_prompt
         CALL menu_getchar
         AND 0x5f
         CP 'Y'
@@ -6398,62 +6337,25 @@ editor_toggle_caps:
         CPL
         LD (CAPS_LOCK),A
 
-editor_reshow2:
-        LD HL,(STORE_CURSOR)
-        LD A,(HL)
-        CP MARK_LO
-        JP c,editor_loop
-        CP MARK_HI+1
-        JP nc,editor_loop
-        JP show_top_of_msg
+        JP editor_reshow
 
 editor_toggle_euro:
         LD A,(EURO_STATE)
         CPL
         LD (EURO_STATE),A
-        LD HL,(STORE_CURSOR)
-        LD A,(HL)
-        CP MARK_LO
-        JP c,editor_loop
-        CP MARK_HI+1
-        JP nc,editor_loop
-        JP show_top_of_msg
+        JP editor_reshow
 
 editor_key_speed:
-        LD HL,(STORE_CURSOR)
-        LD A,(HL)
-        CP TEXT_END
-        JP z,editor_loop
-        LD A,(CHAN_LOCK)
-        OR A
-        JP nz,editor_show_invalid
-        LD A,0xff
-        LD (SPEED_PENDING),A
-        JP editor_loop
+        LD DE,SPEED_PENDING
+        JR editor_set_pending
 
 editor_key_graph:
-        LD HL,(STORE_CURSOR)
-        LD A,(HL)
-        CP TEXT_END
-        JP z,editor_loop
-        LD A,(CHAN_LOCK)
-        OR A
-        JP nz,editor_show_invalid
-        LD A,0xff
-        LD (GRAPH_PENDING),A
-        JP editor_loop
+        LD DE,GRAPH_PENDING
+        JR editor_set_pending
 
 editor_key_color:
-        LD HL,(STORE_CURSOR)
-        LD A,(HL)
-        CP TEXT_END
-        JP z,editor_loop
-        LD A,(CHAN_LOCK)
-        OR A
-        JP nz,editor_show_invalid
-        LD A,0xff
-        LD (COLOR_PENDING),A
-        JP editor_loop
+        LD DE,COLOR_PENDING
+        JR editor_set_pending
 
 editor_key_func:
         LD A,0xff
@@ -6461,6 +6363,10 @@ editor_key_func:
         JP editor_loop
 
 editor_key_bgrnd:
+        LD DE,BGRND_PENDING
+
+; ---- editor_set_pending: DE = a prefix flag; set it unless at the end or on a locked channel
+editor_set_pending:
         LD HL,(STORE_CURSOR)
         LD A,(HL)
         CP TEXT_END
@@ -6469,7 +6375,7 @@ editor_key_bgrnd:
         OR A
         JP nz,editor_show_invalid
         LD A,0xff
-        LD (BGRND_PENDING),A
+        LD (DE),A
         JP editor_loop
 
 ; ---- menu_prog_msg: 09: PROG MSG? channel
@@ -6547,20 +6453,13 @@ seqmenu_result:
         DJNZ seqmenu_loop
         LD HL,MENU_STR_SEQ_FULL
         INC HL
-        LD (MENU_TEXT_PTR),HL
         CALL menu_show_text
         CALL fb_rewind_window
 
 seqmenu_done:
         XOR A
         LD (SEQ_MENU_ACTIVE),A
-        LD HL,(STORE_CURSOR)
-        LD A,(HL)
-        CP MARK_LO
-        JP c,editor_loop
-        CP MARK_HI+1
-        JP nc,editor_loop
-        JP show_top_of_msg
+        JP editor_reshow
 
 seqmenu_all:
         LD HL,SEQ_LIST
@@ -6794,14 +6693,7 @@ delete_do:
         LD A,0xff
         LD (DISP_ON),A
         LD HL,(STORE_CURSOR)
-        LD A,(HL)
-        CP MARK_LO
-        JP c,editor_loop
-        CP MARK_HI+1
-        JP nc,editor_loop
-        DEC HL
-        LD (STORE_CURSOR),HL
-        JP show_top_of_msg
+        JP editor_back_if_mark
 
 ; ---- cursor_right: 0A
 cursor_right:
@@ -7305,7 +7197,7 @@ redraw_show_label:
         LD E,(HL)
         INC HL
         LD D,(HL)
-        LD (MENU_TEXT_PTR),DE
+        EX DE,HL
         CALL menu_show_text
         LD A,(CUR_CHAR)
         JR redraw_next
@@ -7397,12 +7289,8 @@ status_not_speed:
         JR z,status_shift_msg
         XOR A
         LD (MAGIC_MSG_CHAN),A
-        CALL init_render
-        LD HL,(FB_COL)
-        LD (FB_COLPTR),HL
         LD HL,STR_MAGIC_MSG
-        LD (MENU_TEXT_PTR),HL
-        CALL menu_show_text
+        CALL menu_prompt
         LD B,2
         LD HL,(INS_PTR)
         DEC HL
@@ -7412,22 +7300,11 @@ magicmsg_digits:
         LD A,(HL)
         AND 15
         OR '0'
-        LD (CUR_CHAR),A
-        PUSH HL
-        PUSH BC
-        CALL glyph_lookup
-        POP BC
-        POP HL
-        INC HL
+        CALL glyph_put_next
         DJNZ magicmsg_digits
         JR status_shift_msg
 
-; ---- data 2979-2987:
-STR_MAGIC_MSG:
-        db "    MAGIC MSG ",0x00
-
 status_show:
-        LD (MENU_TEXT_PTR),HL
         CALL menu_show_text
 
 status_shift_msg:
@@ -7435,7 +7312,6 @@ status_shift_msg:
         AND A
         JR z,status_menu_msg
         LD HL,(MENU_MSG_PTR)
-        LD (MENU_TEXT_PTR),HL
         CALL menu_show_text
 
 status_menu_msg:
@@ -7444,7 +7320,6 @@ status_menu_msg:
         JR z,redraw_finish
         LD HL,(MENU_MSG_PTR)
         INC HL
-        LD (MENU_TEXT_PTR),HL
         CALL menu_show_text
 
 redraw_finish:
@@ -7496,9 +7371,16 @@ hold_wait_frames:
         JR nz,hold_wait_frames
         RET
 
-; ---- menu_show_text: Render the NUL-terminated string at MENU_TEXT_PTR in tiny font
+; ---- menu_prompt: HL = string: start a fresh frame and show it
+menu_prompt:
+        PUSH HL
+        CALL init_render
+        LD HL,(FB_COL)
+        LD (FB_COLPTR),HL
+        POP HL
+
+; ---- menu_show_text: Render the NUL-terminated string at HL in tiny font
 menu_show_text:
-        LD HL,(MENU_TEXT_PTR)
         LD A,(TINY_MODE)
         PUSH AF
         LD A,(CUR_CHAR)
@@ -8928,6 +8810,36 @@ SPEED_STR_TABLE:
         dw STR_SPEED_5                            ; 05  .S5.
         dw STR_SPEED_6                            ; 06  .S6.
         dw STR_SPEED_7                            ; 07  .S7.
+    IFDEF CC710
+; Prompts plus their typed digits fit 59 columns; the right-aligned messages
+; are padded to the window as on the CC784 (the factory CC710 wordings where it has them).
+STR_TOP_OF_MSG:                 ; show_top_of_msg adds the channel digits
+        db "MSG ",0x00
+MENU_STRINGS:
+        db "ADDR? ",0x00
+MENU_STR_MSG_FULL:
+        db " FULL? ",0x00
+MENU_STR_CLR_ALL:
+        db " CLR? Y/N",0x00
+MENU_STR_TIME:
+        db "TIME? ",0x00
+MENU_STR_AM_PM:
+        db " AM? Y/N ",0x00
+MENU_STR_PROG_MSG:
+        db " PROG? ",0x00
+MENU_STR_SEQ_MSG:
+        db " SEQ? ",0x00
+MENU_STR_INVALID:
+        db 0x03,"  INVALID  ",0x00
+MENU_STR_MEM_FULL:
+        db 0x0a," MEM FULL ",0x00
+MENU_STR_100_KEYS:
+        db 0x05," 100 LEFT ",0x00
+MENU_STR_SEQ_FULL:
+        db 0x03," SEQ FULL ",0x00
+STR_MAGIC_MSG:                  ; the redraw adds the channel digits
+        db "  MAGIC ",0x00
+    ELSE
 STR_TOP_OF_MSG:                 ; show_top_of_msg adds the channel digits
         db "TOP OF MSG ",0x00
 MENU_STRINGS:
@@ -8952,6 +8864,9 @@ MENU_STR_100_KEYS:
         db 0x05," 100 KEYS LEFT ",0x00
 MENU_STR_SEQ_FULL:
         db 0x03," SEQUENCE FULL",0x00
+STR_MAGIC_MSG:                  ; the redraw adds the channel digits
+        db "    MAGIC MSG ",0x00
+    ENDIF
 STR_C_D_ORA:
         db 0x15,"D-ORA",0x16,0x00
 STR_C_M_YEL:
@@ -9291,7 +9206,7 @@ DEMO_MESSAGE:
 ;      test-mode buffer (28 bytes max). PAUSE, THIN, the word, WAIT: parked until
 ;      a key. Last thing before the trailer, so editing it moves nothing else.
 ota_updating_msg:
-        db 0x19,0xb9,">FW UPDATE<",0xba,0x03
+        db 0x19,0xb9,">FW ^<",0xba,0x03     ; ^ is the up-arrow glyph; fits 59 columns
 
 ; ---- trailer page 3FC0-3FFF (CC784_ota.md §3): magic, sequence number, state
 ;      and image CRC, filled in by tools/cc784_ota.py pack. Erased in the build.

@@ -52,7 +52,7 @@ Sent inside the normal packet frame (`B1 addr 81 len payload cksum`), addressed;
 |---|---|
 | `B5 'I'` | `ROM_BANK`, the first 10 trailer bytes of bank 0 and of bank 1, then a features byte: bit 0 DONE handshake, bit 1 the mains NMI has fired since reset, bit 2 trial/confirm |
 | `B5 'C' page n` | `n` CRC-16s of idle-bank pages starting at `page`, n ≤ 42 |
-| `B5 'B'` | status; erases the idle bank's trailer and parks the display on "> FW UPDATE <" until the reboot |
+| `B5 'B'` | status; erases the idle bank's trailer and parks the display on `>FW ↑<` (`^` is the up-arrow glyph; it fits both panels) until the reboot |
 | `B5 'W' page crc16 data` | status; writes 1–3 consecutive pages, `crc16` over the data, pages 0–8 (the stub) refused |
 | `B5 'F' seq crc16` | status; CRCs the idle bank's `0240–3FBF`, and if it matches writes the trailer (TRIAL, `seq`) |
 | `B5 'K' state seq` | status; rewrites the running bank's trailer with that state and sequence number: `K 3 seq` confirms, `K 3 other−1` makes the other bank boot next |

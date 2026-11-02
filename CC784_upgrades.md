@@ -140,6 +140,7 @@ The CC784NET is the same board with a 4 MHz crystal, the original interrupt gati
 
 - [ ] Crystal Y1: 4 MHz out, **8.000 MHz** in.
 - [ ] Cut the track from U14 pin 1 to U10 pin 12; bridge U10 pins 12 and 13. The interrupt is now Q11 of the HC4020 alone, the 7812.5 Hz tick.
+- [ ] Buffer the panel column clock as on the NIR ([CC784_hardware.md §8](CC784_hardware.md#8-factory-bodge-wires-h--from-the-schematic)): cut the track at J2 (SK2) pin 11 only, so U11 and U19 stay on the clock; wire U4 pin 5 (or U11 pin 11) to U18 pin 11; bridge U18 pins 10 and 9; wire U18 pin 8 to J2 pin 11. Check: J2 pin 11 ↔ U4 pin 5 must **not** beep, U18 pin 8 ↔ J2 pin 11 and U18 pin 11 ↔ U4 pin 5 beep.
 - [ ] CPU: the NET's Z8400A is a 4 MHz grade. It runs at 8 MHz in practice; a **Z84C0008** is the in-spec replacement and drops straight in.
 - [ ] Remote, if wanted: the IR and clock add-in board (§7), or the original way: U18 (CD74HC14), the 3-pin receiver header near it and a **30 kHz** receiver module (TSOP4830/TSOP38230 class; the remote's carrier is 31.25 kHz). U18 pin 6 goes to the '244 of §8 (patched firmware), or to the DB9 pin 1 net (stock NIR firmware).
 - [ ] The NET firmware's cable detect is gone with it: no pin 2–5 short is needed on the serial cable. The patched firmware finds a keypad by itself (patch 36).

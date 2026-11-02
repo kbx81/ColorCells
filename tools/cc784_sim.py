@@ -169,16 +169,16 @@ def assemble(src_dir):
     with tempfile.TemporaryDirectory() as tmp:
         sym = pathlib.Path(tmp) / 'out.sym'
         text = asm.read_text()
-        import re
-        m = re.search(r'OUTPUT\s+"([^"]+)"', text)
-        out_name = m.group(1) if m else 'cc784nir.bin'
         # assemble a copy so the source tree is untouched
         (pathlib.Path(tmp) / 'cc784nir.asm').write_text(text)
         r = subprocess.run(['sjasmplus', '--sym=%s' % sym, 'cc784nir.asm'], cwd=tmp,
                            capture_output=True, text=True)
         if r.returncode:
             sys.exit(r.stdout + r.stderr)
-        rom = (pathlib.Path(tmp) / out_name).read_bytes()
+        bins = list(pathlib.Path(tmp).glob('*.bin'))    # the OUTPUT name depends on IFDEFs
+        if len(bins) != 1:
+            sys.exit('expected one image, got %s' % [b.name for b in bins])
+        rom = bins[0].read_bytes()
         syms = {}
         for line in sym.read_text().splitlines():
             name, _, val = line.partition(': EQU ')

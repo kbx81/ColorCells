@@ -127,7 +127,7 @@ The replacement fitted on both boards is a **5 F 5.5 V supercapacitor (ADCM-S05R
 - The RAM footprint is a 24-pin socket. The 6264's pins 1, 2, 27 and 28 hang outside it, with the wires below soldered straight to the legs.
 - Z80 pin 22 (`/WR`) → RAM pin 27 (`/WE`).
 - U13 pin 8 (CS2) → RAM pin 26.
-- U18 pin 11 → J2 pin 11 (the panel column clock), cut from its original route.
+- The panel column clock is buffered: J2 pin 11 is cut from the U4 pin 5 net (U11 pin 11, U19 pin 8), that net is wired to U18 pin 11, pins 10 and 9 are bridged, and U18 pin 8 drives J2 pin 11. Two Schmitt inverters in series, so the clock keeps its polarity.
 - U10 pin 12 cut from HC4020 pin 1 and bridged to pin 13: the `/INT` gate became an inverter on Q11.
 - U18 pin 6 (IR, after the inverter) → the DB9 pin 1 net, which is how IR reaches `PORT_IN` bit 1.
 
@@ -185,7 +185,7 @@ So the lockout trips far too late: it watches the unregulated rail, whose ripple
 
 ## 12. Converting a CC784-3A board to a CC784-4
 
-What it takes for a `CC784-3A` board to run the CC784 firmware (stock NET, stock NIR or the patched build) the way a `CC784-4` does. Derived from comparing the two KiCad captures. Verified on the CC710's board, all working with the stock CC710 firmware burned into both banks [H]: step 1 with an AS6C62256, step 2's lockout (no supervisor), step 3, and step 4 with the AT28C256 and bank register ([CC784_upgrades.md §2](CC784_upgrades.md#2-eeprom-and-bank-register)). Step 5 is untried. The `CC784-3A` already has the NET's original timebase (4 MHz, `/INT` from Q11·Q12), so after this it is a `CC784NET` board and [CC784_upgrades.md](CC784_upgrades.md) applies from there.
+What it takes for a `CC784-3A` board to run the CC784 firmware (stock NET, stock NIR or the patched build) the way a `CC784-4` does. Derived from comparing the two KiCad captures. Verified on the CC710's board [H]: steps 1–4 with the stock CC710 firmware in both banks (step 1 with an AS6C62256, step 2's lockout without a supervisor, step 4 with the AT28C256 and bank register, [CC784_upgrades.md §2](CC784_upgrades.md#2-eeprom-and-bank-register)), then step 5 with a Z84C0020 in place of the Z8400A, after which it runs the patched firmware's CC710 build ([CC784_patched.md](CC784_patched.md#2-patches), patch 37). The `CC784-3A` already has the NET's original timebase (4 MHz, `/INT` from Q11·Q12), so after this it is a `CC784NET` board and [CC784_upgrades.md](CC784_upgrades.md) applies from there.
 
 | Step | Why | Parts | Time |
 |---|---|---|---|
@@ -252,11 +252,11 @@ Unmodified, the hardware can only read 16 KB of ROM ([§2](#2-memory-and-io-deco
 
 ### 5. Timebase and IR
 
-Exactly as for a `CC784NET`: [CC784_upgrades.md §4](CC784_upgrades.md#4-net-to-nir). U18 (CD74HC14) is fitted with two gates in use; the IR path needs gate pins 5 and 6 and a receiver header. The `CC784-4` also takes the panel column clock (SK2 pin 11) through a spare U18 gate ([§8](#8-factory-bodge-wires-h--from-the-schematic)); the `CC784-3A` drives it from U11 directly, which works as it is.
+Exactly as for a `CC784NET`: [CC784_upgrades.md §4](CC784_upgrades.md#4-net-to-nir). U18 (CD74HC14) is fitted with two gates in use; the IR path needs gate pins 5 and 6 and a receiver header. That includes buffering the panel column clock (SK2 pin 11) through U18's gates at pins 8–11, which are unused on this board.
 
 ### The panel
 
-Converting the board does not convert the CC710's display. The CC784 firmware shifts 86 columns per row; on the CC710's 60-stage panel the first 26 fall off the far end, so only the right-hand part of each frame shows [M]. A full CC784 needs a CC784 panel, or firmware that knows the 59-column geometry.
+Converting the board does not convert the CC710's display. The CC784 firmware shifts 86 columns per row; on the CC710's 60-stage panel the first 26 fall off the far end, so only the right-hand part of each frame shows [M]. The patched firmware's CC710 build shifts 60 and strobes the '595s after each row ([CC784_patched.md](CC784_patched.md#2-patches), patch 37) [H].
 
 ### Checks after conversion — 10 min
 
