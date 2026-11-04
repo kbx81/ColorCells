@@ -25,7 +25,7 @@ Alternatives considered for pin 2 and set aside:
 
 Facts that shape the patches:
 
-- All four are serial-mode features. In keypad mode on a NET they are the keypad's lines, so the patches check the mode flag first ([firmware notes §13](CC784_firmware.md#13-the-cc784net-firmware-h--from-a-rom-dump-78409n1401920145)).
+- All four are serial-mode features. In keypad mode on a NET they are the keypad's lines, so the patches check the mode flag first ([firmware notes §14](CC784_firmware.md#14-the-cc784net-firmware-h--from-a-rom-dump-78409n1401920145)).
 - Pin 2 low is the stock NET firmware's "a PC is attached" test. The patched firmware ignores it; the dongle's JP1 grounds it for the stock case.
 - Pins 4 and 7 come from the control latch, which the HC4020 watchdog clears whenever the firmware stops servicing interrupts ([hardware notes §3](CC784_hardware.md#3-timebase-h)). A crashed sign therefore reads as a flat heartbeat even if the bit was left high.
 - The ESPHome side: two `binary_sensor` GPIO inputs with `inverted: true` (the dongle's 2G14s invert), two `switch` outputs where "on" is GPIO low (the 2G07s pull down).
@@ -58,7 +58,7 @@ Caveats:
 
 ## 3. Scrolling up, down and right
 
-Today only LEFT scrolls; UP, DOWN, RIGHT and HOLD are wipes. The engine stages every non-LEFT effect as an 86-column page in `TXBUF` and hands it to the routine in `EFFECT_VECTOR` ([firmware notes §7](CC784_firmware.md#7-rendering-h)), so the scrolls are three more page routines. Like the wipes, each acts on the text between one movement attribute and the next, at most a screenful, centered by `STAGE_OFFSET`.
+Today only LEFT scrolls; UP, DOWN, RIGHT and HOLD are wipes. The engine stages every non-LEFT effect as an 86-column page in `TXBUF` and hands it to the routine in `EFFECT_VECTOR` ([firmware notes §8](CC784_firmware.md#8-rendering-h)), so the scrolls are three more page routines. Like the wipes, each acts on the text between one movement attribute and the next, at most a screenful, centered by `STAGE_OFFSET`.
 
 | Piece | Design | ROM |
 |---|---|---|
@@ -105,12 +105,12 @@ A Z84C0020 is a drop-in at 8 MHz. Faster clocks were worked through and set asid
 
 - **ESPHome config:** `serial_proxy` at 1200 baud with `tx_pin` `inverted: true` only; `remote_receiver` on IO7 with `dump: raw` to read a NIR's remote through U5B; `power_save_mode: light`, since the sign's 10 Ω R31 caps the average current near 130 mA. Bridge R31 on the sign if a dongle ever browns out.
 - **IR keystroke injection** on a receiver-less NET: close JP2, drive pin 1 from IO2 with the encoder in [tools/cc784_ir.py](tools/cc784_ir.py). Never on a NIR, where the HC14 drives that net.
-- **Remote decoding on the ESP:** the frame format is known ([firmware notes §8](CC784_firmware.md#8-ir-remote-decoder-ir_-14821571-h--verified-against-a-capture-of-the-signs-own-receiver)); a custom `remote_receiver` protocol would turn remote keypresses into Home Assistant events.
+- **Remote decoding on the ESP:** the frame format is known ([firmware notes §9](CC784_firmware.md#9-ir-remote-decoder-ir_-14821571-h--verified-against-a-capture-of-the-signs-own-receiver)); a custom `remote_receiver` protocol would turn remote keypresses into Home Assistant events.
 - **Declined, recorded:** the LM66200 ideal diode in place of the two MBR120s (better headroom, but raises the WS2812's data threshold above 3.3 V unless the LED keeps a diode of its own); a solder jumper to run the LED from 3.3 V (out of the LED's VDD spec by 0.2 V, blue may be weak).
 
 ## 10. Other models
 
-The CC710 runs the NET's code base on the `CC784-3A` board ([firmware notes §14](CC784_firmware.md#14-the-cc710-firmware-h--from-a-rom-dump-id-710), [hardware notes §11](CC784_hardware.md#11-the-cc784-3a-board-cc710-h)). As shipped it cannot run the patched firmware: 2 KB of RAM in a 24-pin socket against the 16 KB the patched build uses. [Hardware notes §12](CC784_hardware.md#12-converting-a-cc784-3a-board-to-a-cc784-4) turns the board into a `CC784-4` (RAM, the later power-fail detect, a DB9 cable), after which the patched firmware's CC710 build runs on it ([CC784_patched.md](CC784_patched.md#2-patches), patch 37). On its stock firmware, two things it could still get:
+The CC710 runs the NET's code base on the `CC784-3A` board ([firmware notes §15](CC784_firmware.md#15-the-cc710-firmware-h--from-a-rom-dump-id-710), [hardware notes §11](CC784_hardware.md#11-the-cc784-3a-board-cc710-h)). As shipped it cannot run the patched firmware: 2 KB of RAM in a 24-pin socket against the 16 KB the patched build uses. [Hardware notes §12](CC784_hardware.md#12-converting-a-cc784-3a-board-to-a-cc784-4) turns the board into a `CC784-4` (RAM, the later power-fail detect, a DB9 cable), after which the patched firmware's CC710 build runs on it ([CC784_patched.md](CC784_patched.md#2-patches), patch 37). On its stock firmware, two things it could still get:
 
 - **A dongle on its header.** Packet mode needs the boot probe answered (SK1 pins 5, 4, 9) and the CTS/ready lines honoured (SK1 pins 8 and 7 high for TX; pin 4 is the sign's ready). An ESP on the header could do all of that in software, and the CC710 answers queries `0`–`3` once in packet mode. For bench tests there is a way in without an adapter: hold `1`, `7` or `U` on the keypad at power-up (address `*`).
 - **Small patches of its own** (16 KB ROM, 3.9 KB free): the address-inversion bug in the probe's keep path, and the `17` AM/PM handling, if the sign is ever used with a host.

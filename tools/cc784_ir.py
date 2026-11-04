@@ -39,7 +39,7 @@ RELEASE = 0x3E
 # Key index -> (unshifted, shifted) as the firmware's charsets resolve them
 # (IR_KEY_TABLE -> glyph index -> CHARSET_UPPER / CHARSET_UPPER2). Control values are
 # the editor/message control bytes; labels in <> are the remote's key legends
-# (confirmed by the owner) or the sign's own attribute names.
+# (read off the remote) or the sign's own attribute names.
 KEYS = {
      0: ('T', 'T'),          1: ('C', 'C'),          2: ('Z', 'Z'),          3: ('%', "'"),
      4: ('W', 'W'),          5: ('<DEL 7F>', '<DEL 7F>'), 6: (')', '&'),      7: ('Y', 'Y'),

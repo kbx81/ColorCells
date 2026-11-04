@@ -261,7 +261,7 @@ CHANNELS             equ 100         ; message channels 0-99
 CHAN_DEMO            equ 100         ; the pseudo-channel that plays DEMO_MESSAGE
 SEQ_LIST_LEN         equ 104         ; SEQ_LIST: up to 100 entries plus FF terminators
 
-; ---- Message attribute bytes (the sign's own names, CC784_firmware.md §7) --------
+; ---- Message attribute bytes (the sign's own names, CC784_firmware.md §8) --------
 ATTR_BIG             equ 0x10
 ATTR_NORM            equ 0x11
 ATTR_BOLD            equ 0x12

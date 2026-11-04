@@ -54,7 +54,7 @@ Substitutes, given the above:
 
 ## 3. Timebase [H]
 
-8.000 MHz crystal → HC04 oscillator → the Z80 clock and the HC4020 (U14). The counter is **reset by every interrupt acknowledge** (`M1·IORQ`, U17 → U11 → pin 11), and `/INT` is its Q11 output inverted: it asserts 1024 clocks = 128 µs after the last acknowledge, which is the 7812.5 Hz tick. Q13 goes high 4096 clocks = 512 µs after the last acknowledge and, inverted by U17, **clears U5**, the control latch, for the next 512 µs: a watchdog that blanks the rows and parks TX whenever the firmware stops servicing interrupts, for instance for the whole of `pkt_process`. It is why the OTA bank register is a separate chip ([CC784_ota.md §1](CC784_ota.md#1-hardware)). The Z80 runs at the full 8 MHz: the firmware's per-tick work does not fit 4 MHz ([firmware notes §2](CC784_firmware.md#2-execution-architecture-h)).
+8.000 MHz crystal → HC04 oscillator → the Z80 clock and the HC4020 (U14). The counter is **reset by every interrupt acknowledge** (`M1·IORQ`, U17 → U11 → pin 11), and `/INT` is its Q11 output inverted: it asserts 1024 clocks = 128 µs after the last acknowledge, which is the 7812.5 Hz tick. Q13 goes high 4096 clocks = 512 µs after the last acknowledge and, inverted by U17, **clears U5**, the control latch, for the next 512 µs: a watchdog that blanks the rows and parks TX whenever the firmware stops servicing interrupts, for instance for the whole of `pkt_process`. It is why the OTA bank register is a separate chip ([CC784_ota.md §1](CC784_ota.md#1-hardware)). The Z80 runs at the full 8 MHz: the firmware's per-tick work does not fit 4 MHz ([firmware notes §3](CC784_firmware.md#3-execution-architecture-h)).
 
 **As designed (the CC784NET board):** 4 MHz crystal, and U10 NANDs Q11 with Q12 (pin 1, the trace the NIR cuts), so `/INT` asserts 3072 clocks = 768 µs after the acknowledge: 1302 Hz, the rate the NET firmware runs its serial engines and row scan at directly. The NIR's 8 MHz crystal and the Q11-only bodge give the 7812.5 Hz tick its IR decoder needs; its firmware divides by 6 to get the same 1302 Hz for everything else. A NET board needs both the crystal and the bodge before it can run the NIR firmware. The converted board here runs the patched firmware on its original Z8400A, a 4 MHz grade part, at 8 MHz; that is one sample outside its rating, so expect to need a Z84C0008 if yours does not.
 
@@ -82,10 +82,10 @@ Working setups (both verified with live ACKs): USB-RS232 adapter + crossover; [E
 
 ## 5. Display drive [H — from the schematic and the firmware]
 
-- **Row select:** U5 Q0–Q3 → U6 (LS145) → TR1–TR7 → J2 pins 1–7. `ROW_INDEX` counts 0–6 once per frame, each row written twice (the two intensity passes) before it advances. Both the data-pass port and the latch code are `6 − ROW_INDEX`, except that the latch gets 7 instead of 0, so LS145 output n carries frame-buffer bit n for n = 1–6 and output 7 carries bit 0, the top of every glyph; the scan runs bottom to top. The panel's rows are in SK2 pin order, top row on pin 1 [H — owner], so output 7 feeds pin 1 and outputs 1–6 feed pins 2–7. Code 0's output is unconnected and `0x0F` decodes to nothing, so both blank. U5 Q4 is serial TX, Q5/Q6 go to DB9 pins 4/7 (unused), Q7 is the 2.4 Hz FLASH clock.
-- **Column data:** one `OTIR` of 86 bytes per row, the same 86 column bytes for every row. U7 (LS151, data = D0–D7, select = A0–A2 = the row) picks the current row's bit out of each byte and feeds it to the on-board HC164 and to U16, whose output is J2 pin 10, the panel's serial data. Each row is written twice, to `0x40+row` then `0x48+row`, displayed for one and two ticks respectively ([firmware notes §7](CC784_firmware.md#7-rendering-h)): A3 selects intensity bit 0 or bit 1 of the color, giving four levels with 1:2 weights.
+- **Row select:** U5 Q0–Q3 → U6 (LS145) → TR1–TR7 → J2 pins 1–7. `ROW_INDEX` counts 0–6 once per frame, each row written twice (the two intensity passes) before it advances. Both the data-pass port and the latch code are `6 − ROW_INDEX`, except that the latch gets 7 instead of 0, so LS145 output n carries frame-buffer bit n for n = 1–6 and output 7 carries bit 0, the top of every glyph; the scan runs bottom to top. The panel's rows are in SK2 pin order, top row on pin 1 [H — checked on the panel], so output 7 feeds pin 1 and outputs 1–6 feed pins 2–7. Code 0's output is unconnected and `0x0F` decodes to nothing, so both blank. U5 Q4 is serial TX, Q5/Q6 go to DB9 pins 4/7 (unused), Q7 is the 2.4 Hz FLASH clock.
+- **Column data:** one `OTIR` of 86 bytes per row, the same 86 column bytes for every row. U7 (LS151, data = D0–D7, select = A0–A2 = the row) picks the current row's bit out of each byte and feeds it to the on-board HC164 and to U16, whose output is J2 pin 10, the panel's serial data. Each row is written twice, to `0x40+row` then `0x48+row`, displayed for one and two ticks respectively ([firmware notes §8](CC784_firmware.md#8-rendering-h)): A3 selects intensity bit 0 or bit 1 of the color, giving four levels with 1:2 weights.
 - **Color:** a byte with bit 7 set is latched by U9 instead of being shifted (U10 gates the `0x40`-group clock with D7). Bits 0–1 green and 2–3 red intensity, bit 4 FLASH, bits 5–6 background red/green (one bit each, so the four background names). U8 (LS151) takes U9's outputs: for a lit pixel it selects the foreground bit chosen by A3 (which intensity bit) and A8 (green or red, alternating per column because `B` counts down on A8–A15 during `OTIR`); for an unlit pixel it selects the background bit. The FLASH bit is ANDed with U5 Q7 in U10 to blank flashing columns on the off phase. U9 Q7 is latched from **A5**, not the data bus, and drives the beeper through Q8: `OUT (0x68+row)` beeps.
-- **The panel** [H — owner]: two PCBs of 7 × 42, red and green LEDs alternating per column (right-most green, left-most red), common anode per row from TR1–TR7 at +9 V, cathodes per column into ULN2003As (six per PCB) driven by 74LS164s (six per PCB) in one daisy chain. Each PCB's last '164 uses two outputs and passes the second on to the next PCB, so the six unused outputs are off the data path and the chain is exactly 84 stages with no latch. SK2 lands on the right-hand PCB and the data shifts right to left, so of the firmware's 86 bits per row the first two sent fall off the left edge, the third is the left-most (red) column and the last is the right-most (green): `FRAMEBUF` reads left to right with a two-column margin at its start. The 85 zeros of `shift_chain_clear` flush the chain; the row is blanked while shifting and selected after. Single-color text therefore lights every other column; yellow lights both.
+- **The panel** [H — inspected]: two PCBs of 7 × 42, red and green LEDs alternating per column (right-most green, left-most red), common anode per row from TR1–TR7 at +9 V, cathodes per column into ULN2003As (six per PCB) driven by 74LS164s (six per PCB) in one daisy chain. Each PCB's last '164 uses two outputs and passes the second on to the next PCB, so the six unused outputs are off the data path and the chain is exactly 84 stages with no latch. SK2 lands on the right-hand PCB and the data shifts right to left, so of the firmware's 86 bits per row the first two sent fall off the left edge, the third is the left-most (red) column and the last is the right-most (green): `FRAMEBUF` reads left to right with a two-column margin at its start. The 85 zeros of `shift_chain_clear` flush the chain; the row is blanked while shifting and selected after. Single-color text therefore lights every other column; yellow lights both.
 - **Background codes** `0x94–0x9F` draw no background (watched on the sign); the two hardware background bits make only `0x90–0x93` useful.
 
 ## 6. Connectors
@@ -96,7 +96,7 @@ Working setups (both verified with live ACKs): USB-RS232 adapter + crossover; [E
 
 **The IR carrier is 31.25 kHz nominal, 31.4 measured.** The remote is a Motorola MC14497P PCM transmitter on a 500 kHz ceramic resonator (board BP0300346B, 62 keys, two IR LEDs); the chip's carrier is the oscillator divided by 16 and its bit cell is 512 oscillator cycles, 1024 µs. Logic analyzer on its driver output: 31.88 µs period, 29 % duty, every burst 16 cycles = 510 µs, start burst 3.06 ms after the leader, frames every 89.8 ms. A 30 kHz receiver (TSOP4830/TSOP38230 class) is the closest replacement, 33 kHz the next; a 38 kHz part is 17 % off and chops the bursts.
 
-**Keypad**: plugs into the DB9. The same `CC784-4` board ships as the CC784NET (keypad or PC, no IR), and that firmware scans a keypad over the seven DB9 signals [H — from the NET ROM, see [firmware notes §13](CC784_firmware.md#13-the-cc784net-firmware-h--from-a-rom-dump-78409n1401920145)]:
+**Keypad**: plugs into the DB9. The same `CC784-4` board ships as the CC784NET (keypad or PC, no IR), and that firmware scans a keypad over the seven DB9 signals [H — from the NET ROM, see [firmware notes §14](CC784_firmware.md#14-the-cc784net-firmware-h--from-a-rom-dump-78409n1401920145)]:
 
 **The CC100 keypad (PCB `CC-KP1`) [H — photo]:** 63 keys, an MC74HC138 decoding the three row-select bits into eight row lines and an SN74LS148 priority encoder turning the eight column lines (pulled up by RN1) into the 3-bit column code, its GS output being the active-low key-pressed line. With no key pressed the '148 outputs are all high, so the column bits and the key-pressed line idle high: `PORT_IN` bit 0 reads 1 at boot (keypad mode) and bit 1 reads 1 (no boot clear). The '148 outputs are active low, so the column code the firmware reads is the inverted column number; `keypad_scan`'s key codes already include that.
 
@@ -117,7 +117,7 @@ Key code = row × 8 + column (`keypad_scan`, identical in both ROMs; key 0 is re
 **Filter capacitors C1/C2.** The originals are 4700 µF 16 V (Marcon on the CC710). They carry the LED rows' ripple current, so replace them with 105 °C parts rated for at least 2 A of ripple at 120 Hz, at 25 V for margin over the unloaded rail. The CC710 has a pair of Chemi-Con EKY-250ELL562MM40S (5600 µF 25 V, 18 × 40 mm) [H]; at that size they still hang off the board edge on their leads like the originals.
 
 > [!WARNING]
-> The factory 3-cell NiCd pack leaks with age and its electrolyte attacks the board around it. Both boards seen here had leaked. Remove the pack and clean the area before doing anything else, even if the sign still works.
+> The factory 3-cell NiCd pack leaks with age and its electrolyte attacks the board around it. Every board seen here had leaked. Remove the pack and clean the area before doing anything else, even if the sign still works.
 
 The replacement fitted on both boards is a **5 F 5.5 V supercapacitor (ADCM-S05R5SA505RB)** in the existing charge path through R4, which needs no other change. Other options: a same-chemistry pack off-board, or a CR2032 **with a series diode** (a lithium primary must not be charged). With nothing on `+5VP` the sign boots with an empty store and its default address: 0 on the stock firmware, 1 on the patched.
 
@@ -155,7 +155,7 @@ From the photos and the KiCad capture in [hardware/CC784-3A/](hardware/CC784-3A/
 | Pull-ups R6–R9 | 3.9 k | 3.3 k |
 | IR | none, no header | NIR only |
 
-**SK1 (2×5), traced on the board [H].** The same signals as the `CC784-4`'s DB9, so the DB9 numbers used elsewhere in these notes still apply. The CC710's roles are from [firmware notes §14](CC784_firmware.md#14-the-cc710-firmware-h--from-a-rom-dump-id-710).
+**SK1 (2×5), traced on the board [H].** The same signals as the `CC784-4`'s DB9, so the DB9 numbers used elsewhere in these notes still apply. The CC710's roles are from [firmware notes §15](CC784_firmware.md#15-the-cc710-firmware-h--from-a-rom-dump-id-710).
 
 | SK1 | DB9 | Firmware side | Keypad | CC710 serial and boot probe |
 |---|---|---|---|---|
@@ -174,7 +174,7 @@ From the photos and the KiCad capture in [hardware/CC784-3A/](hardware/CC784-3A/
 
 **Battery:** the "NICAD BATTERY" position (a small blue 3-cell can marked 060 on this board, replaced with a 5 F supercapacitor) charges and discharges through R4 220 Ω to `+5VP`, as on the `CC784-4`.
 
-**Beeper:** the BZ1 footprint (silk for a 25 mm part, leads 12.5 mm apart) is unpopulated on this CC710. The firmware drives it as a plain on/off level, Q8 switching the low side from U9's Q7, so it needs an **internally driven** 5 V buzzer; a bare transducer would only click. Polarity: + on +5 V and − on Q8's collector, as the board's silk and the schematics show. This CC710 has a VCC MI-TH12-0531-RK (12 mm, 5 V, 3.1 kHz, 30 mA), its leads bent out to the footprint's pads; it fits and sounds [H].
+**Beeper:** the CC710 shipped with BZ1, its driver Q8 (BC548) and Q8's base resistor R27 (1 k) all unpopulated; BZ1's silk is for a 25 mm part, leads 12.5 mm apart. The firmware drives it as a plain on/off level, Q8 switching the low side from U9's Q7, so it needs an **internally driven** 5 V buzzer; a bare transducer would only click. Polarity: + on +5 V and − on Q8's collector, as the board's silk and the schematics show. This CC710 now has Q8 and R27 fitted and a VCC MI-TH12-0531-RK (12 mm, 5 V, 3.1 kHz, 30 mA) on BZ1, its leads bent out to the footprint's pads; it fits and sounds [H].
 
 **Store corruption on mains power cycles [H — measured].** Switching the sign off sometimes corrupts the message store, in any input mode. A channel loses its `03` terminator or marker, and the display runs into the free store area, which the boot repair has filled with `?` and leftover characters. The firmware does not cause it (five emulated boots in a row leave an intact store unchanged); a capture of the 5 V rail, `/RESET`, the unregulated rail, U13 pin 5 and the RAM's `/CE` and `/WE` shows where it happens:
 
@@ -254,6 +254,8 @@ Unmodified, the hardware can only read 16 KB of ROM ([§2](#2-memory-and-io-deco
 
 Exactly as for a `CC784NET`: [CC784_upgrades.md §4](CC784_upgrades.md#4-net-to-nir). U18 (CD74HC14) is fitted with two gates in use; the IR path needs gate pins 5 and 6 and a receiver header. That includes buffering the panel column clock (SK2 pin 11) through U18's gates at pins 8–11, which are unused on this board.
 
+- [ ] A board with the original CC784's `/M1` bodge ([§13](#13-the-original-cc784s-board-h)) has U18 pins 5 and 6 taken. Move it to pins 13 and 12 first, where the `CC784-4` has it: U17 pins 3 and 4 to **U18 pin 13**, U17 pin 9 to **U18 pin 12**. Check: U18 pin 5 ↔ U17 pin 3 and U18 pin 6 ↔ U17 pin 9 must **not** beep. 10 min.
+
 ### The panel
 
 Converting the board does not convert the CC710's display. The CC784 firmware shifts 86 columns per row; on the CC710's 60-stage panel the first 26 fall off the far end, so only the right-hand part of each frame shows [M]. The patched firmware's CC710 build shifts 60 and strobes the '595s after each row ([CC784_patched.md](CC784_patched.md#2-patches), patch 37) [H].
@@ -262,3 +264,54 @@ Converting the board does not convert the CC710's display. The CC784 firmware sh
 
 - [ ] Power up with the NET firmware: the demo scrolls; [CC784_upgrades.md §5](CC784_upgrades.md#5-checks-after-any-upgrade--5-min) for the rest.
 - [ ] Load a short message, then switch the mains off and on twenty times: the message must survive every cycle. The fault is intermittent, so more cycles make a pass more convincing. This is the test the stock lockout fails.
+
+## 13. The original CC784's board [H]
+
+From photos and inspection of the board, matched against the KiCad capture in [hardware/CC784-3A/](hardware/CC784-3A/). A second `CC784-3A` board, populated as the CC710's ([§11](#11-the-cc784-3a-board-cc710-h)): ST Z8400AB1, HM3-6116L-5 in the 24-pin socket, SK1 header, 1990 date codes. Differences:
+
+- ROM labelled `CC784-9E-USA ©1990 COLOR CELLS INT'L`; the ID inside it is `9g` ([firmware notes §16](CC784_firmware.md#16-the-original-cc784-firmware-h--from-a-rom-dump-id-9g)).
+- BZ1 is fitted: a round magnetic buzzer of the size the silk is drawn for.
+- The sign arrived new and sealed in its box, never used, so everything on the board is as it left the factory.
+- Its NiCd had leaked like the others ([§7](#7-power--battery)), in the sealed box, and is removed.
+- C3, the 1 µF tantalum on the 7805's input, failed short and burned about a minute after the first power-up. C3, C4 and the bulk caps C1/C2 are replaced with electrolytics; C18, the reset capacitor, is still the original, since R3 (10 k) limits any fault there to 0.5 mA [H].
+- Three factory modifications the CC710's board does not have, below. No other wires or cut tracks found.
+
+**Delayed `/M1` into the I/O decoder.** U17 pin 9 is cut from Z80 pin 27 (`/M1`) and wired to U18 pin 6; U17 pins 3 and 4 are wired to U18 pin 5.
+
+- On the bare `CC784-3A`, U17's gate at pins 8–10 enables U4A with `/M1·IORQ`: `/M1` straight from the Z80 on pin 9, `IORQ` from U11 (HC04) on pin 10.
+- With the bodge, pin 9 gets `/M1` through U17's first gate (pins 1–3, `M1`) and U18's pins 5 → 6: two inversions, the same polarity, two gate delays later.
+- The `CC784-4` has the same circuit in copper on U18's other spare gate: U17 pins 3 and 4 to U18 pin 13, U18 pin 12 to U17 pin 9.
+- Why [M]: at the end of an interrupt acknowledge `/M1` and `/IORQ` rise together, but `IORQ` comes through U11's inverter. With `/M1` direct, U4A is enabled for a few nanoseconds: a stray I/O strobe in whichever group A7/A6 select, a panel column clock, the port `80` strobe or a color latch write (whose Q7 is the beeper). Delaying `/M1` closes that window.
+
+**100 µF on the beeper drive.** An electrolytic from U9 pin 19 (Q7, the beeper bit) to GND, soldered at R27 (Q8's base resistor) and U4 pin 8. Not on the `CC784-4`.
+
+- Why [M]: it slows Q7's edges to milliseconds, so a microsecond pulse on Q7 never turns Q8 on, while the firmware's 115 ms beep still sounds. Probably the first fix for the same stray strobes, heard as beeper clicks. It loads U9's output heavily.
+- For the conversion ([§12](#12-converting-a-cc784-3a-board-to-a-cc784-4)) it can stay; the `CC784-4` does without it. The `/M1` bodge must move to U18 pins 13 and 12 before the IR goes on 5 and 6 ([§12](#12-converting-a-cc784-3a-board-to-a-cc784-4), step 5).
+
+## 14. The four boards side by side [H — from photos]
+
+From photos of each board and its rating label. Chip dates are the usual YYWW codes.
+
+| | Original CC784 | CC710 | CC784NET | CC784NIR |
+|---|---|---|---|---|
+| Board | `CC784-3A` | `CC784-3A` | `CC784-4` | `CC784-4` |
+| Chip dates | 8844 (RAM), 9005–9026 | 8840 (RAM), 9009–9027 | 9119–9204; TIP125s 9214 | 9150 (RAM), 9235–9246 |
+| ROM label | `CC784-9E-USA ©1990 COLOR CELLS INT'L` | `CC710-9L-USA COPYRIGHT 1990 COLOR CELLS INT'L` | `CC784NET#167`, `#6288` (the line between is unclear) | none; a windowed ST M27C256B |
+| CPU | ST Z8400AB1, `29017` | ST Z8400AB1, `29017` | ST Z80 under a paper sticker | Zilog Z0840008PSC, `9246` |
+| RAM | MHS HM3-6116L-5 | MHS HM3-6116L-5 | Hyundai HY6264ALP-10, `9144T` | Hyundai HY6264ALP-10, `9150A` |
+| Battery | blue 3-cell, `060` | blue 3-cell, `060` | GP 3.6 V 60 mAh | Varta 3.6 V 70 mAh `3/V80H` |
+| C1, C2 | Marcon CF-SE 4700 µF 16 V, `9014` | two axial 105 °C parts marked `8427` on bent leads | Orient 4700 µF 16 V | Orient 4700 µF 16 V |
+| C3, C4, C18 | dipped tantalum | dipped tantalum | dipped tantalum | dipped tantalum |
+| Beeper | BZ1 fitted | BZ1, Q8 and R27 empty as shipped (since fitted, [§11](#11-the-cc784-3a-board-cc710-h)) | BZ1 fitted | BZ1 fitted |
+| Factory wires | `/M1` delay, 100 µF on U9 Q7 ([§13](#13-the-original-cc784s-board-h)) | none | the 6264 wires ([§8](#8-factory-bodge-wires-h--from-the-schematic)) | the 6264 wires, the column clock buffer, `/INT` and IR ([§8](#8-factory-bodge-wires-h--from-the-schematic)) |
+| Rating label | `MODEL CC784`, "manufactured under licence from COLOUR CELLS INTERNATIONAL" | `MODEL CC710`, "… COLOR CELLS INTERNATIONAL LTD." | Color Cells "Innovative Sign Technology" logo, label part `784 NET-L01`, ©1992 | as the NET's, `784 NIR-L01`, ©1992 |
+| Serial sticker | `CC784-9E-USA ©1990 COLOR CELLS INT'L`, `A23458` | `AB10235`, no other text | `©1992 COLOR CELLS INT'L`, `A00634` | `©1993 COLOR CELLS INT'L`, `A 09119` |
+| Keyboard named | CC100 | CC100 | CC110 NET | CC110 NET |
+| Patents listed | US 4162493, Australia 493435, pending PJ6641 | plus Japan 1136058 | plus Canada 1082825 | as the NET's |
+
+- **The two `CC784-3A` boards are from one build period.** They share exact lots: the LS00s (`XXFU9013`), the LS273s (`XXEM9020`), the LS139 (`KKCG9020`), the 74145 (`9022BS`), the HC14 (`H 9014`) and the Z80 (`29017`). Their newest chips are a week apart (`9026`, `9027`). So the `/M1` and beeper bodges were not a later board revision: one board of the batch got them and the other did not.
+- **The CC710 shipped without a beeper driver,** and both its bodge targets concern the beeper path (U9's Q7) or stray strobes the beeper would make audible. That may be why it went without [M].
+- **Every board has dipped tantalums at C3, C4 and C18.** The original CC784's C3 failed short and burned on its first power-up ([§13](#13-the-original-cc784s-board-h)): replace C3 and C4 before powering any of these.
+- **The rating labels** all read AC 9 V, 30 W nominal, 40 W max, 0–35 °C, the CC710's too despite its shorter panel. The two `CC784-3A` signs name the CC100 keyboard (PCB `CC-KP1`, [§6](#6-connectors)); the two `CC784-4` signs name a "CC110 NET", not seen here. The NIR's label names it as well, so the NET and NIR probably shared label text [M].
+- **The patent list grows by one country per sign** along the firmware's lineage: US and Australia, then Japan, then Canada ([firmware notes §1](CC784_firmware.md#1-lineage-of-the-stock-firmware-m--from-the-four-roms-their-labels-and-the-boards)).
+- **Serial numbers:** the `CC784-4` signs' are low (`A00634` on a 1992 NET, `A 09119` on a 1993 NIR) next to the original CC784's `A23458` from 1990, so the numbering restarted with the new board or each model had its own series [L]. The original CC784's serial sticker repeats its ROM label, `CC784-9E-USA`.

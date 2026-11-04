@@ -13,7 +13,7 @@
 ;  same CC784-4 board as the NIR with a 4 MHz crystal and no IR hardware.
 ;  The timer ISR runs at 1302 Hz and does per interrupt what the NIR's
 ;  tick6_service does every sixth tick; input mode (serial or keypad) is
-;  chosen once at boot by mode_test. See CC784_firmware.md section 13.
+;  chosen once at boot by mode_test. See CC784_firmware.md section 14.
 ; ============================================================================
         DEVICE NONE
         OUTPUT "cc784net.bin"
@@ -225,7 +225,7 @@ CHANNELS             equ 100   ; message channels 0-99
 CHAN_DEMO            equ 100   ; the pseudo-channel that plays DEMO_MESSAGE
 SEQ_LIST_LEN         equ 104   ; SEQ_LIST: up to 100 entries plus FF terminators
 
-; ---- Message attribute bytes (the sign's own names, CC784_firmware.md §7) --------
+; ---- Message attribute bytes (the sign's own names, CC784_firmware.md §8) --------
 ATTR_BIG             equ 0x10
 ATTR_NORM            equ 0x11
 ATTR_BOLD            equ 0x12
