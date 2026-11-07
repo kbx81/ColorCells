@@ -48,7 +48,7 @@
     },
     {
       "label": "Diff stock vs patched source",
-      "detail": "The diff is the changelog: everything outside the patches is kept identical on purpose.",
+      "detail": "Up to the tag patched-v39 this diff shows exactly what the patches change; after it the code is restructured freely.",
       "type": "shell",
       "command": "diff -u stock/cc784nir.asm patched/cc784nir.asm; true",
       "options": {

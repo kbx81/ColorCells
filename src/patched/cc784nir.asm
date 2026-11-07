@@ -11,10 +11,10 @@
 ; ============================================================================
         DEVICE NONE
 
-; Patched build: the fixes described in CC784_firmware.md §11 are applied here,
-; all written inline (the source is relocatable, so addresses above 0x144A
-; differ from stock). Diff against ../stock/cc784nir.asm to see exactly what
-; changed; everything else is intentionally kept identical.
+; Patched build: the stock reconstruction (../stock/cc784nir.asm) plus the
+; patches in CC784_patched.md. Up to the tag patched-v39 the rest was kept
+; identical to stock; after it the code is restructured freely and the git
+; history is the changelog. Addresses differ from stock throughout.
 
     IFDEF CC710
         OUTPUT "cc710_patched.bin"
@@ -26,149 +26,158 @@ FRAMEBUF             equ 0x4000
 FRAMEBUF_SIZE        equ 0xc0   ; column ring: 86 visible + the glyph being written; also the TINY line
 FRAMEBUF_ROW1        equ FRAMEBUF+FRAME_COLS
 FRAMEBUF_TINY        equ FRAMEBUF+2*FRAME_COLS-1   ; TINY line buffer inside the ring
-; ---- variables follow the ring, packed with no gaps (P8). INIT_DATA mirrors
-;      this order in four runs, so keep the two in step.
+; ---- variables follow the ring, packed with no gaps (P8), grouped by how they
+;      start: IMAGE (one INIT_DATA copy), BOOT_ZERO (one clear, its head cleared
+;      again for every message), scratch, then what survives a reset.
 RAM_VARS             equ FRAMEBUF+FRAMEBUF_SIZE
-FB_COLPTR            equ RAM_VARS+0x000   ; frame-buffer write pointer (next glyph column)
-FB_COL               equ RAM_VARS+0x002   ; scroll position: the column the output window is moving toward
-BGRND_PENDING        equ RAM_VARS+0x004   ; editor: BGRND key pressed, next key is the color digit
-TXBUF                equ RAM_VARS+0x005   ; reply frames, and the effect staging frame (86 columns)
-STAGE_PTR            equ RAM_VARS+0x05b   ; next free column in TXBUF while an effect stages text
+FRAMEBUF_END         equ RAM_VARS         ; the column ring ends where the variables begin
+TXBUF                equ RAM_VARS+0x000   ; reply frames, and the effect staging frame (86 columns)
 STAGE_END            equ TXBUF+FRAME_COLS ; end of the staging frame (STAGE_PTR itself on the CC784)
-STAGE_OFFSET         equ RAM_VARS+0x05d   ; centering offset of the staged text (free columns / 2)
-ROW_PORT             equ RAM_VARS+0x05f   ; port group for the row data: 40 first pass, 48 second
-BEEP_TICKS           equ RAM_VARS+0x060   ; beeper on while non-zero (port bit 5); beep_start loads BEEP_LEN
-GLYPH_PTR_ORIG       equ RAM_VARS+0x062   ; glyph address before bold/italic/big copies
-ASK_CHAN_RESULT      equ RAM_VARS+0x064   ; menu_ask_chan return value
-ASK_CHAN_PROMPT      equ RAM_VARS+0x065   ; menu_ask_chan prompt string
-THIN_MODE            equ RAM_VARS+0x067   ; non-zero after THIN (B9): no bold in effects
-CLK_RUN              equ RAM_VARS+0x068   ; set on every boot by the init image copy
-GLYPH_WIDTH          equ RAM_VARS+0x069
-GLYPH_PTR            equ RAM_VARS+0x06a
-MENU_MSG_PTR         equ RAM_VARS+0x06c   ; message the editor is showing (set with MENU_MSG_FLAG)
-CUR_COLOR            equ RAM_VARS+0x06e
-SCROLLING            equ RAM_VARS+0x06f   ; FF while the output window is catching up with FB_COLPTR
-CUR_CHAR             equ RAM_VARS+0x070
-TEST_MODE            equ RAM_VARS+0x071   ; FF = display TEST_MSG_BUF instead of the sequence; P29: only the OTA parked message sets it
-FB_OUT_PTR           equ RAM_VARS+0x072   ; first column sent to the panel (start of the output window)
-DISP_ON              equ RAM_VARS+0x074   ; 0 suppresses row output (effects rewrite FRAMEBUF meanwhile)
+; ---- IMAGE: the variables with a non-zero boot value; init_vars copies INIT_DATA over them
+IMAGE                equ RAM_VARS+0x056
+FB_COLPTR            equ RAM_VARS+0x056   ; frame-buffer write pointer (next glyph column)
+FB_COL               equ RAM_VARS+0x058   ; scroll position: the column the output window is moving toward
+STAGE_PTR            equ RAM_VARS+0x05a   ; next free column in TXBUF while an effect stages text
+FB_OUT_PTR           equ RAM_VARS+0x05c   ; first column sent to the panel (start of the output window)
+STORE_CURSOR         equ RAM_VARS+0x05e
+CLK_RUN              equ RAM_VARS+0x060   ; set on every boot by the init image copy
+CUR_COLOR            equ RAM_VARS+0x061
+DISP_ON              equ RAM_VARS+0x062   ; 0 suppresses row output (effects rewrite FRAMEBUF meanwhile)
+COL_COUNT            equ RAM_VARS+0x063   ; columns still free in the staging frame; 0 = no staging (LEFT)
+LATCH_BIT7           equ RAM_VARS+0x064   ; 00/80 toggled every 13 frames, OR-ed into CTRL_LATCH bit 7
+FLUSH_PENDING        equ RAM_VARS+0x065   ; FF = staged text must be shown before the next effect runs
+BAUD_T               equ RAM_VARS+0x066   ; P30: the 300-baud bit in fifths of an interrupt, calibrated from the NMI, 128 by default (was RX_TIMING_PTR)
+BAUD_STEP            equ RAM_VARS+0x067   ; P30: fifths of an interrupt per interrupt at the current rate: 5, 10 or 20 (was TX_TIMING_PTR)
+BAUD_CAL_LAST        equ RAM_VARS+0x068   ; P30: the previous second's tick count, for the agreement test
+RX_IDLE              equ RAM_VARS+0x069   ; P30: frames since the last start bit, held at 255 (was TX_BITMASK)
+CAPS_LOCK            equ RAM_VARS+0x06a
+ROW_OUT_PENDING      equ RAM_VARS+0x06b   ; FF = the current row still has to be sent
+DISP_COUNT           equ RAM_VARS+0x06c   ; P26: interrupts to the next display tick (was TICK1_COUNT, a divider by 1)
+NEXT_CHAN            equ RAM_VARS+0x06d   ; channel to show first after the editor (FF = none)
+MAGIC_LAST_CHAR      equ RAM_VARS+0x06e   ; magic mode: last char of the current word (punctuation check)
+IMAGE_LEN            equ 25
+; ---- BOOT_ZERO: cleared at boot; its first RENDER_ZERO_LEN bytes again by init_render
+BOOT_ZERO            equ RAM_VARS+0x06f
+RENDER_ZERO          equ BOOT_ZERO
+DRAW_NO_GAP          equ RAM_VARS+0x06f   ; FF = butt this DRAW graphic against the previous one
+DRAW_PREV            equ RAM_VARS+0x070   ; FF = previous item was a DRAW graphic
+TINY_RENDER          equ RAM_VARS+0x071   ; FF while attr_tiny drives the display
+TINY_FRAME_READY     equ RAM_VARS+0x072   ; tiny mode: a frame is in FRAMEBUF_TINY
+MAGIC_MODE           equ RAM_VARS+0x073   ; FF between MAGIC (1F) and MAGIC OFF (BD)
+SCROLLING            equ RAM_VARS+0x074   ; FF while the output window is catching up with FB_COLPTR
 CLK_RENDER_STEP      equ RAM_VARS+0x075   ; clock (5F) render step 0..8; FF = finished
-CLK_RENDER_PTR       equ RAM_VARS+0x076   ; clock render: next CLK_ digit to emit
-MENU_ACTIVE          equ RAM_VARS+0x078
-INS_PTR              equ RAM_VARS+0x079
-MAGIC_MODE           equ RAM_VARS+0x07b   ; FF between MAGIC (1F) and MAGIC OFF (BD)
-WINDOW_COLOR         equ RAM_VARS+0x07c   ; last color byte at the output window start (bit 4 = flash)
-COL_COUNT            equ RAM_VARS+0x07d   ; columns still free in the staging frame; 0 = no staging (LEFT)
-FRAME_COUNT          equ RAM_VARS+0x07e   ; frames since LATCH_BIT7 last toggled (mod 13)
-FLASH_BIT            equ RAM_VARS+0x07f   ; 0x10 while the current word flashes; OR-ed into color bytes
-LATCH_BIT7           equ RAM_VARS+0x080   ; 00/80 toggled every 13 frames, OR-ed into CTRL_LATCH bit 7
-COLOR_PENDING        equ RAM_VARS+0x081   ; editor: COLOR key pressed, next key is the color digit
-GRAPH_PENDING        equ RAM_VARS+0x082   ; editor: GRAPH key pressed, next key selects A0-AF
-ROW_COLOR            equ RAM_VARS+0x083   ; color byte sent ahead of each row
-QUERIES_ENABLED      equ RAM_VARS+0x084   ; unused since P22 (gated the editor's typed queries)
-MENU_MSG_FLAG        equ RAM_VARS+0x085   ; FF = editor has a message to display
-EDIT_KEY             equ RAM_VARS+0x086   ; key/character the editor is processing (0 = none)
-RX_BYTE              equ RAM_VARS+0x087
-IR_KEY_CHAR          equ RAM_VARS+0x088   ; character decoded from the IR key via the CHARSET_ tables
-CTRL_LATCH_SHADOW    equ RAM_VARS+0x089
-FB_OUT_LEN           equ RAM_VARS+0x08a   ; bytes to send from FB_OUT_PTR before wrapping to FRAMEBUF
-FB_EXTRA_LEN         equ RAM_VARS+0x08c   ; bytes to send from FRAMEBUF after the wrap
-STORE_END            equ RAM_VARS+0x08e
-EFFECT_ID            equ RAM_VARS+0x090   ; 0 LEFT, 1 PAUSE, 2 UP, 3 DOWN, 4 RIGHT, 5 HOLD
-EFFECT_VECTOR        equ RAM_VARS+0x091
-CHAN_HINT            equ RAM_VARS+0x093   ; P39: the marker chan_select found last (was MENU_TEXT_PTR)
-SHIFT_LABEL          equ RAM_VARS+0x095   ; FF = redraw shows the SHIFT indicator
-FLUSH_PENDING        equ RAM_VARS+0x096   ; FF = staged text must be shown before the next effect runs
-FRAME_DELAY          equ RAM_VARS+0x097   ; frames to hold before the next column step (1, 3 or 0x50)
-ROW_INDEX            equ RAM_VARS+0x098
-RX_BITS              equ RAM_VARS+0x099   ; P30: data bits still to sample (was RX_BITMASK)
-RX_SHIFT             equ RAM_VARS+0x09a
-RX_ACC               equ RAM_VARS+0x09b   ; P30: fifths of an interrupt to the next sample (was RX_TICKS)
-RX_FIFO              equ RAM_VARS+0x09c
-RX_COUNT             equ RAM_VARS+0x0a4
-BAUD_T               equ RAM_VARS+0x0a5   ; P30: the 300-baud bit in fifths of an interrupt, calibrated from the NMI, 128 by default (was RX_TIMING_PTR)
-RX_WIDTH             equ RAM_VARS+0x0a6   ; P30: interrupts the start pulse has lasted while it sets the rate
-REDRAW_PTR           equ RAM_VARS+0x0a7   ; editor redraw: byte being rendered
-RX_PHASE             equ RAM_VARS+0x0a9   ; P30: 0 idle, 1 timing the start pulse, 2 sampling bits (was the RX_STATE vector)
-TICK6_CAL            equ RAM_VARS+0x0aa   ; P30: low byte of the tick6 runs this second, read and zeroed by baud_calibrate
-CHAN_LOCK            equ RAM_VARS+0x0ab
-SEQ_LIST             equ RAM_VARS+0x0ac
-SEQ_PTR              equ RAM_VARS+0x114
-SEQ_ALL_EMPTY        equ RAM_VARS+0x116   ; 10 = every listed channel is empty, play the demo
-GLYPH_BUF            equ RAM_VARS+0x117   ; working copy of the glyph (bold/plain), 32 bytes
-GLYPH_BUF_ITALIC     equ RAM_VARS+0x137   ; sheared copy for ITALIC, 32 bytes
-GLYPH_BUF_BIG        equ RAM_VARS+0x157   ; widened copy for BIG, 32 bytes
-SEQ_MENU_ACTIVE      equ RAM_VARS+0x177   ; FF while the SEQ MSG? dialogue runs
-SHIFT_STATE          equ RAM_VARS+0x178   ; SHIFT latch, toggled by key 29 (see section 9)
-PREV_SPACE           equ RAM_VARS+0x179   ; 1 = previous char was a space (two in a row reset the background)
-FONT_MODE            equ RAM_VARS+0x17a   ; bit 1 BOLD, bit 2 ITALIC, bit 3 BIG
-TINY_MODE            equ RAM_VARS+0x17b   ; FF = glyphs go to the tiny buffer (menus, TINY)
-FORCE_BOLD           equ RAM_VARS+0x17c   ; editor redraw: FF = effect text is drawn bold (unless THIN)
-NMI_COUNT            equ RAM_VARS+0x17d   ; two bytes: magic_short_word reads through it as a pointer, so the 04 high byte is a ROM page
-STORE_TMP            equ RAM_VARS+0x17f
-MOVE_DST             equ RAM_VARS+0x181
-MOVE_SRC             equ RAM_VARS+0x183
-REDRAW_FROM          equ RAM_VARS+0x185   ; editor redraw: first byte actually displayed (cursor-21, >= INS_PTR)
-STORE_CURSOR         equ RAM_VARS+0x187
-TX_BITIDX            equ RAM_VARS+0x189
-RX_IDLE              equ RAM_VARS+0x18a   ; P30: frames since the last start bit, held at 255 (was TX_BITMASK)
-TX_PENDING           equ RAM_VARS+0x18b
-TX_ACC               equ RAM_VARS+0x18c   ; P30: fifths of an interrupt to the next edge (was TX_TICKS)
-TX_SHIFT             equ RAM_VARS+0x18d
-TX_STATUS            equ RAM_VARS+0x18e
-BAUD_STEP            equ RAM_VARS+0x18f   ; P30: fifths of an interrupt per interrupt at the current rate: 5, 10 or 20 (was TX_TIMING_PTR)
-BAUD_CAL_LAST        equ RAM_VARS+0x190   ; P30: the previous second's tick count, for the agreement test
-CAPS_LOCK            equ RAM_VARS+0x191
-ROW_OUT_PENDING      equ RAM_VARS+0x192   ; FF = the current row still has to be sent
-SEQ_SET              equ RAM_VARS+0x193   ; FF = sequence set by hand; do not auto-add the edited channel
-NEXT_CHAN            equ RAM_VARS+0x194   ; channel to show first after the editor (FF = none)
-NMI_PER_SEC          equ RAM_VARS+0x195
-TINY_FRAME_READY     equ RAM_VARS+0x196   ; tiny mode: a frame is in FRAMEBUF_TINY
-TINY_RENDER          equ RAM_VARS+0x197   ; FF while attr_tiny drives the display
-DRAW_PREV            equ RAM_VARS+0x198   ; FF = previous item was a DRAW graphic
-CLK_RENDERED         equ RAM_VARS+0x199   ; FF just after a clock display; forces LEFT in an effect
-MAGIC_COLOR_IDX      equ RAM_VARS+0x19a   ; index into MAGIC_COLOR_CYCLE
-EURO_STATE           equ RAM_VARS+0x19b
-DRAW_BUF             equ RAM_VARS+0x19c   ; 16 packed hex columns of a DRAW graphic
-IR_DEBOUNCE          equ RAM_VARS+0x1ac   ; key number seen once, awaiting its second frame
-TICK6_COUNT          equ RAM_VARS+0x1ad
-DISP_COUNT           equ RAM_VARS+0x1ae   ; P26: interrupts to the next display tick (was TICK1_COUNT, a divider by 1)
-GEN_COUNTDOWN        equ RAM_VARS+0x1af   ; IR repeat/hold timer, counts down in tick6 (word)
-IR_STATE_CNT         equ RAM_VARS+0x1b1
-IR_BITCNT            equ RAM_VARS+0x1b2
-IR_KEY               equ RAM_VARS+0x1b3   ; last accepted key number
-IR_SHIFT             equ RAM_VARS+0x1b4
-IR_CODE              equ RAM_VARS+0x1b5
-IR_KEYNUM            equ RAM_VARS+0x1b6   ; IR_CODE & 3F = key number 0..63
-TICK_VECTOR          equ RAM_VARS+0x1b7
-NEW_MSG_CHAN         equ RAM_VARS+0x1b9   ; channel chosen for a new MAGIC message
-MAGIC_FX_PREV        equ RAM_VARS+0x1ba   ; FF = last byte was a movement attribute (magic mode)
-MAGIC_FLASH_WORD     equ RAM_VARS+0x1bb   ; '$' = flash the word that starts with $ (magic mode)
-EDITOR_FIRST_KEY     equ RAM_VARS+0x1bc   ; FF until the first key in the editor is processed
-MAGIC_LAST_CHAR      equ RAM_VARS+0x1bd   ; magic mode: last char of the current word (punctuation check)
-MAGIC_COLOR_SET      equ RAM_VARS+0x1be   ; magic mode: color set by an attribute, skip the auto change
-MAGIC_WORD_COUNT     equ RAM_VARS+0x1bf   ; words since the last color change (magic mode)
-RND_SEED             equ RAM_VARS+0x1c0
-MAGIC_FONT_SET       equ RAM_VARS+0x1c1   ; magic mode: font set by an attribute, skip the random pick
-RND_VAL              equ RAM_VARS+0x1c2   ; magic mode: words until the next color change
-MAGIC_MSG_CHAN       equ RAM_VARS+0x1c3   ; channel to announce as MAGIC MSG nn on redraw (0 = none)
-REDRAW_MAGIC         equ RAM_VARS+0x1c4   ; editor redraw: MAGIC seen, font resets at each word
-DRAW_NO_GAP          equ RAM_VARS+0x1c5   ; FF = butt this DRAW graphic against the previous one
-CHAN_D10             equ RAM_VARS+0x1c6
-CHAN_D1              equ RAM_VARS+0x1c7
-FLASH_PENDING        equ RAM_VARS+0x1c8   ; 0x10 after FLASH until the next printable char
-TEXT_DRAWN           equ RAM_VARS+0x1c9   ; FF once a printable char has been drawn since init_render
-RAINBOW_IDX          equ RAM_VARS+0x1ca   ; RAINBOW per-char color index 1..5, 0 = off; bit 7 = P28 reverse
+FLASH_BIT            equ RAM_VARS+0x076   ; 0x10 while the current word flashes; OR-ed into color bytes
+MAGIC_COLOR_SET      equ RAM_VARS+0x077   ; magic mode: color set by an attribute, skip the auto change
+REDRAW_MAGIC         equ RAM_VARS+0x078   ; editor redraw: MAGIC seen, font resets at each word
+MAGIC_FONT_SET       equ RAM_VARS+0x079   ; magic mode: font set by an attribute, skip the random pick
+RND_VAL              equ RAM_VARS+0x07a   ; magic mode: words until the next color change
+FRAME_DELAY          equ RAM_VARS+0x07b   ; frames to hold before the next column step (1, 3 or 0x50)
+FLASH_PENDING        equ RAM_VARS+0x07c   ; 0x10 after FLASH until the next printable char
+TEXT_DRAWN           equ RAM_VARS+0x07d   ; FF once a printable char has been drawn since init_render
+RAINBOW_IDX          equ RAM_VARS+0x07e   ; RAINBOW per-char color index 1..5, 0 = off; bit 7 = P28 reverse
 RAINBOW_REVERSE      equ 0x80
-TEST_MSG_BUF         equ RAM_VARS+0x1cb   ; the message shown in TEST_MODE, 28 bytes (stock: the test pattern plus the ROM checksum)
-MENU_ENTRY_BUF       equ RAM_VARS+0x1e7
-FUNC_PENDING         equ RAM_VARS+0x1ec   ; editor: FUNC (B7) pressed, next key picks the second function
-LIT_COUNT            equ RAM_VARS+0x1ed   ; P35: interrupts the lit row has left
-LIT_LIMIT            equ RAM_VARS+0x1ee   ; P35: the row's share of interrupts; 0 = full brightness or parked
-LATCH_PENDING        equ RAM_VARS+0x1ef   ; P35: row select code the ISR latches on its next interrupt; 0 = none
-SCROLL_SPEED         equ RAM_VARS+0x1f0   ; 0..7 from F0-F7; blank ticks inserted after every frame
-DISP_ACC             equ RAM_VARS+0x1f1   ; P26: sevenths of an interrupt carried to the next display tick (was BLANK_TIMER)
-SPEED_PENDING        equ RAM_VARS+0x1f2   ; editor: SPEED key pressed, next key is the digit
+SCROLL_SPEED         equ RAM_VARS+0x07f   ; 0..7 from F0-F7; blank ticks inserted after every frame
+FORCE_BOLD           equ RAM_VARS+0x080   ; editor redraw: FF = effect text is drawn bold (unless THIN)
+TINY_MODE            equ RAM_VARS+0x081   ; FF = glyphs go to the tiny buffer (menus, TINY)
+FONT_MODE            equ RAM_VARS+0x082   ; bit 1 BOLD, bit 2 ITALIC, bit 3 BIG
+THIN_MODE            equ RAM_VARS+0x083   ; non-zero after THIN (B9): no bold in effects
+RENDER_ZERO_LEN      equ 21
+BGRND_PENDING        equ RAM_VARS+0x084   ; editor: BGRND key pressed, next key is the color digit
+STAGE_OFFSET         equ RAM_VARS+0x085   ; centering offset of the staged text (free columns / 2)
+ROW_PORT             equ RAM_VARS+0x087   ; port group for the row data: 40 first pass, 48 second
+BEEP_TICKS           equ RAM_VARS+0x088   ; beeper on while non-zero (port bit 5); beep_start loads BEEP_LEN
+ASK_CHAN_PROMPT      equ RAM_VARS+0x08a   ; menu_ask_chan prompt string
+GLYPH_WIDTH          equ RAM_VARS+0x08c
+GLYPH_PTR            equ RAM_VARS+0x08d
+MENU_MSG_PTR         equ RAM_VARS+0x08f   ; message the editor is showing (set with MENU_MSG_FLAG)
+CUR_CHAR             equ RAM_VARS+0x091
+TEST_MODE            equ RAM_VARS+0x092   ; FF = display TEST_MSG_BUF instead of the sequence; P29: only the OTA parked message sets it
+CLK_RENDER_PTR       equ RAM_VARS+0x093   ; clock render: next CLK_ digit to emit
+MENU_ACTIVE          equ RAM_VARS+0x095
+INS_PTR              equ RAM_VARS+0x096
+WINDOW_COLOR         equ RAM_VARS+0x098   ; last color byte at the output window start (bit 4 = flash)
+FRAME_COUNT          equ RAM_VARS+0x099   ; frames since LATCH_BIT7 last toggled (mod 13)
+COLOR_PENDING        equ RAM_VARS+0x09a   ; editor: COLOR key pressed, next key is the color digit
+GRAPH_PENDING        equ RAM_VARS+0x09b   ; editor: GRAPH key pressed, next key selects A0-AF
+ROW_COLOR            equ RAM_VARS+0x09c   ; color byte sent ahead of each row
+MENU_MSG_FLAG        equ RAM_VARS+0x09d   ; FF = editor has a message to display
+EDIT_KEY             equ RAM_VARS+0x09e   ; key/character the editor is processing (0 = none)
+RX_BYTE              equ RAM_VARS+0x09f
+IR_KEY_CHAR          equ RAM_VARS+0x0a0   ; character decoded from the IR key via the CHARSET_ tables
+CTRL_LATCH_SHADOW    equ RAM_VARS+0x0a1
+FB_OUT_LEN           equ RAM_VARS+0x0a2   ; bytes to send from FB_OUT_PTR before wrapping to FRAMEBUF
+FB_EXTRA_LEN         equ RAM_VARS+0x0a4   ; bytes to send from FRAMEBUF after the wrap
+STORE_END            equ RAM_VARS+0x0a6
+EFFECT_ID            equ RAM_VARS+0x0a8   ; 0 LEFT, 1 PAUSE, 2 UP, 3 DOWN, 4 RIGHT, 5 HOLD
+EFFECT_VECTOR        equ RAM_VARS+0x0a9
+CHAN_HINT            equ RAM_VARS+0x0ab   ; P39: the marker chan_select found last (was MENU_TEXT_PTR)
+SHIFT_LABEL          equ RAM_VARS+0x0ad   ; FF = redraw shows the SHIFT indicator
+ROW_INDEX            equ RAM_VARS+0x0ae
+RX_BITS              equ RAM_VARS+0x0af   ; P30: data bits still to sample (was RX_BITMASK)
+RX_SHIFT             equ RAM_VARS+0x0b0
+RX_ACC               equ RAM_VARS+0x0b1   ; P30: fifths of an interrupt to the next sample (was RX_TICKS)
+RX_FIFO              equ RAM_VARS+0x0b2
+RX_COUNT             equ RAM_VARS+0x0ba
+RX_WIDTH             equ RAM_VARS+0x0bb   ; P30: interrupts the start pulse has lasted while it sets the rate
+REDRAW_PTR           equ RAM_VARS+0x0bc   ; editor redraw: byte being rendered
+RX_PHASE             equ RAM_VARS+0x0be   ; P30: 0 idle, 1 timing the start pulse, 2 sampling bits (was the RX_STATE vector)
+TICK6_CAL            equ RAM_VARS+0x0bf   ; P30: low byte of the tick6 runs this second, read and zeroed by baud_calibrate
+CHAN_LOCK            equ RAM_VARS+0x0c0
+SEQ_PTR              equ RAM_VARS+0x0c1
+SEQ_ALL_EMPTY        equ RAM_VARS+0x0c3   ; 10 = every listed channel is empty, play the demo
+SEQ_MENU_ACTIVE      equ RAM_VARS+0x0c4   ; FF while the SEQ MSG? dialogue runs
+SHIFT_STATE          equ RAM_VARS+0x0c5   ; SHIFT latch, toggled by key 29 (see section 9)
+PREV_SPACE           equ RAM_VARS+0x0c6   ; 1 = previous char was a space (two in a row reset the background)
+NMI_COUNT            equ RAM_VARS+0x0c7   ; two bytes: magic_short_word reads through it as a pointer, so the 04 high byte is a ROM page
+STORE_TMP            equ RAM_VARS+0x0c8
+REDRAW_FROM          equ RAM_VARS+0x0ca   ; editor redraw: first byte actually displayed (cursor-21, >= INS_PTR)
+TX_BITIDX            equ RAM_VARS+0x0cc
+TX_PENDING           equ RAM_VARS+0x0cd
+TX_ACC               equ RAM_VARS+0x0ce   ; P30: fifths of an interrupt to the next edge (was TX_TICKS)
+TX_SHIFT             equ RAM_VARS+0x0cf
+TX_STATUS            equ RAM_VARS+0x0d0
+SEQ_SET              equ RAM_VARS+0x0d1   ; FF = sequence set by hand; do not auto-add the edited channel
+NMI_PER_SEC          equ RAM_VARS+0x0d2
+CLK_RENDERED         equ RAM_VARS+0x0d3   ; FF just after a clock display; forces LEFT in an effect
+MAGIC_COLOR_IDX      equ RAM_VARS+0x0d4   ; index into MAGIC_COLOR_CYCLE
+EURO_STATE           equ RAM_VARS+0x0d5
+IR_DEBOUNCE          equ RAM_VARS+0x0d6   ; key number seen once, awaiting its second frame
+TICK6_COUNT          equ RAM_VARS+0x0d7
+GEN_COUNTDOWN        equ RAM_VARS+0x0d8   ; IR repeat/hold timer, counts down in tick6 (word)
+IR_STATE_CNT         equ RAM_VARS+0x0da
+IR_BITCNT            equ RAM_VARS+0x0db
+IR_KEY               equ RAM_VARS+0x0dc   ; last accepted key number
+IR_SHIFT             equ RAM_VARS+0x0dd
+IR_CODE              equ RAM_VARS+0x0de
+IR_KEYNUM            equ RAM_VARS+0x0df   ; IR_CODE & 3F = key number 0..63
+TICK_VECTOR          equ RAM_VARS+0x0e0
+NEW_MSG_CHAN         equ RAM_VARS+0x0e2   ; channel chosen for a new MAGIC message
+MAGIC_FX_PREV        equ RAM_VARS+0x0e3   ; FF = last byte was a movement attribute (magic mode)
+MAGIC_FLASH_WORD     equ RAM_VARS+0x0e4   ; '$' = flash the word that starts with $ (magic mode)
+EDITOR_FIRST_KEY     equ RAM_VARS+0x0e5   ; FF until the first key in the editor is processed
+MAGIC_WORD_COUNT     equ RAM_VARS+0x0e6   ; words since the last color change (magic mode)
+RND_SEED             equ RAM_VARS+0x0e7
+MAGIC_MSG_CHAN       equ RAM_VARS+0x0e8   ; channel to announce as MAGIC MSG nn on redraw (0 = none)
+CHAN_D10             equ RAM_VARS+0x0e9
+CHAN_D1              equ RAM_VARS+0x0ea
+MENU_ENTRY_BUF       equ RAM_VARS+0x0eb
+FUNC_PENDING         equ RAM_VARS+0x0f0   ; editor: FUNC (B7) pressed, next key picks the second function
+LIT_COUNT            equ RAM_VARS+0x0f1   ; P35: interrupts the lit row has left
+LIT_LIMIT            equ RAM_VARS+0x0f2   ; P35: the row's share of interrupts; 0 = full brightness or parked
+LATCH_PENDING        equ RAM_VARS+0x0f3   ; P35: row select code the ISR latches on its next interrupt; 0 = none
+DISP_ACC             equ RAM_VARS+0x0f4   ; P26: sevenths of an interrupt carried to the next display tick (was BLANK_TIMER)
+SPEED_PENDING        equ RAM_VARS+0x0f5   ; editor: SPEED key pressed, next key is the digit
+KEY_ECHO_TX          equ RAM_VARS+0x0f6   ; non-zero = echo accepted keys on serial TX
+BOOT_ZERO_LEN        equ 136
+; ---- scratch, never initialized
+GLYPH_BUF            equ RAM_VARS+0x0f7   ; working copy of the glyph (bold/plain), 32 bytes
+GLYPH_BUF_ITALIC     equ RAM_VARS+0x117   ; sheared copy for ITALIC, 32 bytes
+GLYPH_BUF_BIG        equ RAM_VARS+0x137   ; widened copy for BIG, 32 bytes
+TEST_MSG_BUF         equ RAM_VARS+0x157   ; the message shown in TEST_MODE, 28 bytes (stock: the test pattern plus the ROM checksum)
+DRAW_BUF             equ RAM_VARS+0x173   ; 16 packed hex columns of a DRAW graphic
+; ---- SEQ_LIST survives a reset: it must stay above the stub's library copy (RAM_VARS+00..81)
+SEQ_LIST             equ RAM_VARS+0x183
+; RAM_VARS+0x1eb .. 0x1f2: 8 bytes free
 ; P20: the clock digits must survive a power cycle, so they live up here next
 ; to the store, out of reach of the stub's library copy (RAM_VARS+00..81).
 CLK_H10              equ RAM_VARS+0x1f3
@@ -177,7 +186,7 @@ CLK_M10              equ RAM_VARS+0x1f5
 CLK_M1               equ RAM_VARS+0x1f6
 CLK_SEC              equ RAM_VARS+0x1f7
 CLK_PM               equ RAM_VARS+0x1f8
-KEY_ECHO_TX          equ RAM_VARS+0x1f9   ; non-zero = echo accepted keys on serial TX
+; RAM_VARS+0x1f9: one byte free (KEY_ECHO_TX moved into BOOT_ZERO)
 STORE_LIMIT          equ RAM_VARS+0x1fa
 STORE_SIZE           equ RAM_VARS+0x1fc
 STORE_TEXT_LIMIT     equ RAM_VARS+0x1fe   ; free text bytes; scan bound for store_repair
@@ -402,6 +411,12 @@ STATE_GOOD           equ 3
 OTA_IDLE             equ TXBUF+0x55     ; the idle bank; replies never reach this byte
 OTA_PAGE_BUF         equ PKT_BUF+0x80   ; 64-byte scratch; the commands using it have short payloads
 OTA_FEATURES         equ 0x05           ; 'I' reply byte 21: bit 0 = DONE handshake (patch 16), bit 2 = trial/confirm (patch 18); bit 1 is NMI_SEEN
+
+; ---- DKEY: one entry of a dispatch table (see dispatch)
+        MACRO DKEY zk, zt
+        db zk
+        dw zt
+        ENDM
 
         org 0x0000
 
@@ -734,7 +749,7 @@ boot_go:
 stub_lib_end:
         ; the boot copy overwrites RAM_VARS from the start: keep it below the
         ; first variable that must survive a reset
-        ASSERT STUB_RAM+STUB_LIB_SIZE <= STORE_END
+        ASSERT STUB_RAM+STUB_LIB_SIZE <= SEQ_LIST
 
         ds STUB_END-$,0xff
 
@@ -766,14 +781,12 @@ restart_display:
         JP main_loop
 
 ; ---- nmi_entry: NMI = real-time clock tick (mains frequency); calls clock_tick
-nmi_entry:
+nmi_entry:                      ; clock_tick and baud_calibrate use A, BC and HL
         PUSH AF
         PUSH BC
-        PUSH DE
         PUSH HL
         CALL clock_tick
         POP HL
-        POP DE
         POP BC
         POP AF
         RETN
@@ -919,11 +932,8 @@ render_loop:
         ; not MAGIC_MODE. A is loaded for whatever runs after the branch.
         LD A,(MAGIC_MODE)
         JR nz,render_loop
-        XOR A
+        CALL effect_none
         LD (COL_COUNT),A
-        LD HL,fxv_none
-        LD (EFFECT_ID),A
-        LD (EFFECT_VECTOR),HL
         JR render_loop
 
 ; ---- pkt_poll (P21): process a pending packet here, between two render
@@ -948,13 +958,11 @@ pkt_poll:
         RET
 
 ; ---- tick6_service: Runs every 6 timer ticks: serial RX/TX bit engines, countdowns, display column refresh & flashing, then the RX byte consumer.
-tick6_service:
+tick6_service:                  ; nothing it runs touches IX or IY
         PUSH AF
         PUSH BC
         PUSH DE
         PUSH HL
-        PUSH IX
-        PUSH IY
 
 svc_loop:
         LD HL,SVC_DUE           ; P26: the engines on the tick6 mark, the display on its own
@@ -1034,11 +1042,9 @@ row_output:
         DEC A
         OR C
         LD C,A
-        PUSH IX
-        LD IX,BEEP_TICKS
-        LD A,(IX+0)
-        OR (IX+1)
-        POP IX
+        LD DE,(BEEP_TICKS)
+        LD A,D
+        OR E
         JR z,row_out_color
         SET 5,C
 
@@ -1111,14 +1117,8 @@ row_exit:
         JP tick6_restore
 
 row_advance:
-        LD A,(ROW_INDEX)
-        LD C,A
-        INC A
-        LD (ROW_INDEX),A
-        CP 7
+        CALL row_step
         JP c,tick6_arm_row
-        XOR A
-        LD (ROW_INDEX),A
         LD (DISP_STRETCH),A     ; P26: full rate unless the plain crawl below asks
         LD HL,RX_IDLE           ; P30: frames since the last start bit, held at 255
         INC (HL)
@@ -1203,7 +1203,7 @@ frame_set_window:
         LD (ROW_COLOR),A
         LD HL,(FB_COL)
         LD (FB_OUT_PTR),HL
-        LD HL,FB_COLPTR
+        LD HL,FRAMEBUF_END      ; the window runs to the ring's end, then wraps
         LD BC,(FB_COL)
         LD DE,FRAME_COLS
         XOR A
@@ -1213,8 +1213,7 @@ frame_set_window:
         EX DE,HL
         SBC HL,DE
         JR z,frame_window_wrap
-        JR c,frame_window_wrap
-        JR frame_set_extra
+        JR nc,frame_set_extra
 
 frame_window_wrap:
         LD HL,FRAME_COLS
@@ -1356,6 +1355,8 @@ rx_consume:
 
 rx_ir_stop_key:
         LD (IR_KEY),A
+
+key_handler_jr1:
         JP key_handler
 
 rx_have_byte:
@@ -1397,7 +1398,7 @@ rx_frame_start:
 rx_not_start:
         LD A,(RX_BYTE)
         CP 1
-        JP z,key_handler
+        JR z,key_handler_jr1
         JR rx_consume
 
 ; ---- tick6_exit
@@ -1415,8 +1416,6 @@ tick6_restore:
         JR nz,svc_again
         LD (SVC_ACTIVE),A
         EI
-        POP IY
-        POP IX
         POP HL
         POP DE
         POP BC
@@ -1453,22 +1452,7 @@ seq_scan_end:
         JR z,seq_check_first
 
 seq_reset_default:
-        LD HL,SEQ_LIST
-        XOR A
-        LD B,CHANNELS
-
-seq_fill:
-        LD (HL),A
-        INC HL
-        INC A
-        DJNZ seq_fill
-        LD (HL),0xff
-        INC HL
-        LD (HL),0xff
-        INC HL
-        LD (HL),0xff
-        INC HL
-        LD (HL),0xff
+        CALL seq_list_default
 
 seq_check_first:
         LD HL,SEQ_LIST
@@ -1492,6 +1476,38 @@ seq_all_empty:
         POP HL
         LD A,10
         LD (SEQ_ALL_EMPTY),A
+        RET
+
+; ---- seq_list_default: SEQ_LIST = channels 0..99, then four FF
+seq_list_default:
+        LD HL,SEQ_LIST
+        XOR A
+        LD B,CHANNELS
+
+seq_fill:
+        LD (HL),A
+        INC HL
+        INC A
+        DJNZ seq_fill
+        LD (HL),0xff
+        INC HL
+        LD (HL),0xff
+        INC HL
+        LD (HL),0xff
+        INC HL
+        LD (HL),0xff
+        RET
+
+; ---- seq_list_one: SEQ_LIST = A, then FF to the end (A kept)
+seq_list_one:
+        LD HL,SEQ_LIST
+        LD (HL),A
+        LD B,SEQ_LIST_LEN-1
+
+seq_one_loop:
+        INC HL
+        LD (HL),0xff
+        DJNZ seq_one_loop
         RET
 
 ; ---- seq_next_channel: pick the channel to display next: NEXT_CHAN once, else the
@@ -1551,7 +1567,7 @@ seq_open_channel:
         CP TEXT_END
         JR z,seq_chan_empty
         PUSH HL
-        CALL char_flag1
+        CALL char_flags
         JR z,seq_set_cursor
 
 seq_skip_attrs:
@@ -1563,23 +1579,15 @@ seq_skip_attrs:
         JR seq_chan_empty
 
 seq_skip_attrs_next:
-        CALL char_flag1
+        CALL char_flags
         JR nz,seq_skip_attrs
 
 seq_set_cursor:
         POP HL
         LD (STORE_CURSOR),HL
-        PUSH DE
-        CALL clear_chan_lock
-        POP DE
-        LD A,E
-        CP CHAN_DEMO
-        RET nz
-        LD (CHAN_LOCK),A
+        JR chan_lock_set
 
-seq_ret:
-        RET
-
+seq_ret:                        ; the emulator's seq gate watches cursor writes from seq_set_cursor to here
 seq_chan_empty:
         LD HL,(SEQ_PTR)
         LD A,(HL)
@@ -1603,6 +1611,31 @@ clear_chan_lock:
         LD (CHAN_LOCK),A
         RET
 
+; ---- chan_lock_set: the lock is on for the demo channel (E) and off for any other
+chan_lock_set:
+        LD A,E
+        CP CHAN_DEMO
+        JR z,chan_lock_store
+        XOR A
+
+chan_lock_store:
+        LD (CHAN_LOCK),A
+        RET
+
+; ---- chan_open: select channel E for editing: INS_PTR after its marker, the
+;      cursor on the marker, the lock as the channel wants it
+chan_open:
+        PUSH DE
+        CALL chan_select
+        POP DE
+        OR A
+        JP nz,pkt_process_end
+        LD (INS_PTR),HL
+        DEC HL
+        DEC HL
+        LD (STORE_CURSOR),HL
+        JR chan_lock_set
+
 ; ---- chan_select: Select channel E: find/create its slot in MSG_STORE, set INS_PTR/STORE_CURSOR
 chan_select:
         CP CHAN_DEMO
@@ -1625,19 +1658,19 @@ chan_marker_tens:
 chan_scan:
         ; P39: markers are stored in channel order, so a channel at or above the one at
         ; CHAN_HINT is scanned for from there. Two marker bytes in a row are always one marker.
-        LD IX,(CHAN_HINT)
+        LD BC,(CHAN_HINT)
         LD HL,(STORE_END)       ; a store that shrank leaves stale markers past its DA
-        PUSH IX
-        POP BC
         OR A
         SBC HL,BC
         JR c,chan_scan_full
-        LD A,(IX+0)
+        LD A,(BC)
         LD H,A
         SUB MARK_LO
         CP 10
         JR nc,chan_scan_full
-        LD A,(IX+1)
+        INC BC
+        LD A,(BC)
+        DEC BC
         LD L,A
         SUB MARK_LO
         CP 10
@@ -1648,35 +1681,40 @@ chan_scan:
         JR c,chan_scan_go
 
 chan_scan_full:
-        LD IX,MSG_STORE
+        LD BC,MSG_STORE
 
 chan_scan_go:
-        LD BC,(STORE_SIZE)
+        LD HL,(STORE_SIZE)      ; bytes left to look at
 
 chan_scan_loop:
-        LD A,(IX+0)
-        CP 0xda
+        LD A,(BC)
+        CP MARK_HI
         JR z,chan_error
-        LD H,A
-        LD L,(IX+1)
-        OR A
-        SBC HL,DE
-        JR z,chan_found
-        INC IX
+        CP D
+        JR nz,chan_scan_next
+        INC BC
+        LD A,(BC)
         DEC BC
-        LD A,C
-        OR B
+        CP E
+        JR z,chan_found
+
+chan_scan_next:
+        INC BC
+        DEC HL
+        LD A,H
+        OR L
         JR nz,chan_scan_loop
+
 chan_error:
         LD A,0xff
         RET
 
 chan_found:
-        LD (CHAN_HINT),IX
-        INC IX
-        INC IX
-        PUSH IX
-        POP HL
+        LD (CHAN_HINT),BC
+        INC BC
+        INC BC
+        LD H,B
+        LD L,C
 
 chan_ok:
         XOR A
@@ -1705,9 +1743,7 @@ repair_bound:
         CALL store_fix_bad_bytes
         CALL store_strip_ends
         LD HL,MSG_STORE
-        LD A,MARK_LO
-        LD D,MARK_LO
-        LD E,A
+        LD DE,MARK_LO*0x100+MARK_LO
         LD BC,(STORE_TEXT_LIMIT)
 
 repair_marker:
@@ -1736,9 +1772,7 @@ repair_fix_pair:
         INC HL
         INC HL
         LD A,(HL)
-        CP MARK_LO
-        JR c,repair_next
-        CP MARK_HI+1
+        CALL is_marker
         JR nc,repair_next
         LD (HL),' '
 
@@ -1747,19 +1781,15 @@ repair_next:
 
 repair_scan:
         LD A,(HL)
-        CP MARK_LO
-        JR c,repair_scan_next
-        CP MARK_HI+1
-        JR nc,repair_scan_next
-        JR repair_marker
+        CALL is_marker
+        JR c,repair_marker
 
 repair_scan_next:
         INC HL
         DEC BC
         LD A,C
         OR B
-        JR z,repair_append_rest
-        JR repair_scan
+        JR nz,repair_scan
 
 repair_append_rest:
         LD A,MARK_HI
@@ -1793,14 +1823,11 @@ repair_terminate:
 store_fix_bad_bytes:
         LD HL,MSG_STORE
         LD BC,(STORE_TMP)
-        LD D,0
 
 fixbad_loop:
-        LD E,(HL)
-        LD IX,CHAR_FLAGS
-        ADD IX,DE
-        BIT 0,(IX+0)
-        JR z,fixbad_next
+        LD A,(HL)
+        CALL char_flags
+        JR nc,fixbad_next
         LD (HL),'?'
 
 fixbad_next:
@@ -1837,9 +1864,7 @@ store_add_ends:
 
 addend_loop:
         LD A,(IX+0)
-        CP MARK_LO
-        JR c,addend_next
-        CP MARK_HI+1
+        CALL is_marker
         JR nc,addend_next
         LD (IX-1),TEXT_END
         INC IX
@@ -1878,43 +1903,20 @@ init_nmi_store:
         LD (NMI_PER_SEC),A
         JP clock_bank
 
-; ---- init_vars: Power-on RAM init: copies the blocks out of INIT_DATA,
-;      validates the configuration block (P35) and applies the defaults if not
+; ---- init_vars: power-on RAM init: BOOT_ZERO and the stream area cleared, the
+;      IMAGE copied from INIT_DATA, the random seed, then the configuration
+;      block validated (P35) and the defaults applied if it fails
 init_vars:
+        LD A,(NMI_COUNT)        ; the seed: RAM noise at power-up, the count after a reset
+        PUSH AF
         XOR A
-        LD (TINY_RENDER),A
-        LD (TINY_FRAME_READY),A
-        LD HL,MENU_ENTRY_BUF
-        LD B,5
+        LD HL,BOOT_ZERO
+        LD B,BOOT_ZERO_LEN
 
-init_clear_addrbuf:
+init_clear:
         LD (HL),A
         INC HL
-        DJNZ init_clear_addrbuf
-        LD (DRAW_NO_GAP),A
-        LD (DRAW_PREV),A
-        LD (EURO_STATE),A
-        LD (CLK_RENDER_STEP),A
-        LD (CLK_RENDERED),A
-        LD (FLASH_PENDING),A
-        LD (MAGIC_FONT_SET),A
-        LD (MAGIC_COLOR_SET),A
-        LD (RAINBOW_IDX),A
-        LD (REDRAW_MAGIC),A
-        LD (MAGIC_MSG_CHAN),A
-        LD (MAGIC_WORD_COUNT),A
-        LD (MAGIC_FLASH_WORD),A
-        LD (TEXT_DRAWN),A
-        LD (THIN_MODE),A
-        LD (KEY_ECHO_TX),A
-        LD (SPEED_PENDING),A
-        LD (FUNC_PENDING),A
-        LD (SCROLL_SPEED),A
-        LD (DISP_ACC),A
-        LD (TICK6_COUNT),A
-        LD (LIT_LIMIT),A        ; P35: full brightness until latch_row_dim arms it
-        LD (LIT_COUNT),A
-        LD (LATCH_PENDING),A
+        DJNZ init_clear
         LD HL,STREAM_AREA       ; P21: no reply in flight, no packet busy
         LD B,STREAM_AREA_SIZE
 
@@ -1922,19 +1924,17 @@ init_clear_stream:
         LD (HL),A
         INC HL
         DJNZ init_clear_stream
-        INC A
-        LD (DISP_COUNT),A       ; P26: first display tick on the next interrupt
-        LD A,0xff
-        LD (NEXT_CHAN),A
-        LD A,' '
-        LD (MAGIC_LAST_CHAR),A
-        LD A,(NMI_COUNT)
+        LD HL,INIT_DATA
+        LD DE,IMAGE
+        LD BC,IMAGE_LEN
+        LDIR
+        POP AF
         LD (RND_SEED),A
         AND 3
         ADD A,3
         LD (RND_VAL),A
         CALL cfg_valid          ; P35: the block's signature and sum say whether RAM survived
-        JR z,init_copy_tables
+        JR z,init_vars_done
         LD HL,CFG_DEFAULTS
         LD DE,CFG
         LD BC,CFG_LEN-1
@@ -1952,23 +1952,7 @@ init_clear_stream:
         ; every channel empty and runs the demo, as after a CLR ALL.
         CALL store_clear_all
 
-init_copy_tables:
-        LD HL,INIT_DATA+0x00
-        LD DE,FB_COLPTR
-        LD BC,5
-        LDIR
-        LD HL,INIT_DATA+0x05
-        LD DE,STAGE_PTR
-        LD BC,7
-        LDIR
-        LD HL,INIT_DATA+0x0c
-        LD DE,CLK_RUN
-        LD BC,67
-        LDIR
-        LD HL,INIT_DATA+0x4f
-        LD DE,SEQ_MENU_ACTIVE
-        LD BC,28
-        LDIR
+init_vars_done:
         IM 1
         LD HL,SEQ_LIST
         LD (SEQ_PTR),HL
@@ -2029,101 +2013,40 @@ CFG_DEFAULTS:
         db 1, 0                 ; beeper on, remote unlocked
         db 0, 0, 0              ; status reports off, clock source auto, reserved
 
-; ---- INIT_DATA: RAM images that init_vars LDIRs into place, one run per block
-;      of initialized variables. The dw entries naming a ROM label hold an
-;      address as DATA and must stay symbolic.
+; ---- INIT_DATA: the boot values of the IMAGE variables, in their RAM order
 INIT_DATA:
-; -- +00 -> FB_COLPTR, 5 bytes
         dw FRAMEBUF_ROW1       ; FB_COLPTR
         dw FRAMEBUF            ; FB_COL
-        db 0x00                ; BGRND_PENDING
-; -- +05 -> STAGE_PTR, 7 bytes
         dw TXBUF               ; STAGE_PTR
-        dw 0x0000              ; STAGE_OFFSET
-        db 0x00                ; ROW_PORT
-        dw 0x0000              ; BEEP_TICKS
-; -- +0c -> CLK_RUN, 67 bytes
-        db 0x01                ; CLK_RUN
-        db 0x00                ; GLYPH_WIDTH
-        dw 0x0000              ; GLYPH_PTR
-        dw 0x0000              ; MENU_MSG_PTR
-        db 0x0f                ; CUR_COLOR
-        db 0x00                ; SCROLLING
-        db 0x00                ; CUR_CHAR
-        db 0x00                ; TEST_MODE
         dw FRAMEBUF            ; FB_OUT_PTR
-        db 0x01                ; DISP_ON
-        db 0x05                ; CLK_RENDER_STEP
-        dw 0x0000              ; CLK_RENDER_PTR
-        db 0x00                ; MENU_ACTIVE
-        dw 0x0000              ; INS_PTR
-        db 0x00                ; MAGIC_MODE
-        db 0x00                ; WINDOW_COLOR
-        db 0x0f                ; COL_COUNT
-        db 0x00                ; FRAME_COUNT
-        db 0x00                ; FLASH_BIT
-        db 0x0a                ; LATCH_BIT7
-        db 0x00                ; COLOR_PENDING
-        db 0x00                ; GRAPH_PENDING
-        db 0x00                ; ROW_COLOR
-        db 0x0f                ; QUERIES_ENABLED
-        db 0x00                ; MENU_MSG_FLAG
-        db 0x00                ; EDIT_KEY
-        db 0x00                ; RX_BYTE
-        db 0x00                ; IR_KEY_CHAR
-        db 0x00                ; CTRL_LATCH_SHADOW
-        dw FRAME_COLS<<8       ; FB_OUT_LEN
-        dw 0x0000              ; FB_EXTRA_LEN
-        dw 0xff00              ; STORE_END
-        db 0x00                ; EFFECT_ID
-        dw 0x0000              ; EFFECT_VECTOR
-        dw 0x0000              ; CHAN_HINT
-        db 0x00                ; SHIFT_LABEL
-        db 0x01                ; FLUSH_PENDING
-        db 0x00                ; FRAME_DELAY
-        db 0x00                ; ROW_INDEX
-        db 0x00                ; RX_BITS
-        db 0x00                ; RX_SHIFT
-        db 0x00                ; RX_ACC
-        db 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00 ; RX_FIFO
-        db 0x00                ; RX_COUNT
-        db BAUD_T_DEFAULT      ; BAUD_T
-        db 0x00                ; RX_WIDTH
-        dw 0                   ; REDRAW_PTR (stock had junk here from a misaligned copy; set by editor_redraw)
-        db 0x00                ; RX_PHASE
-        db 0x00                ; TICK6_CAL
-; -- +4f -> SEQ_MENU_ACTIVE, 28 bytes
-        db 0x00                ; SEQ_MENU_ACTIVE
-        db 0x00                ; SHIFT_STATE
-        db 0x00                ; PREV_SPACE
-        db 0x00                ; FONT_MODE
-        db 0x00                ; TINY_MODE
-        db 0x00                ; FORCE_BOLD
-        dw 0x0400              ; NMI_COUNT (stock 04b0: its first second ran 140 cycles; P30 wants whole seconds from the start)
-        dw 0x0000              ; STORE_TMP
-        dw 0x0000              ; MOVE_DST
-        dw 0x0000              ; MOVE_SRC
-        dw 0x0000              ; REDRAW_FROM
         dw MSG_STORE           ; STORE_CURSOR
-        db 0x00                ; TX_BITIDX
-        db 0xff                ; RX_IDLE: the first frame sets the rate
-        db 0x00                ; TX_PENDING
-        db 0x00                ; TX_ACC
-        db 0x00                ; TX_SHIFT
-        db 0x00                ; TX_STATUS
+        db 0x01                ; CLK_RUN
+        db 0x0f                ; CUR_COLOR
+        db 0x01                ; DISP_ON
+        db 0x0f                ; COL_COUNT
+        db 0x0a                ; LATCH_BIT7
+        db 0x01                ; FLUSH_PENDING
+        db BAUD_T_DEFAULT      ; BAUD_T
         db BAUD_STEP_300       ; BAUD_STEP
-        db 0x7f                ; BAUD_CAL_LAST: nothing agrees with the first window
+        db 0x7f                ; BAUD_CAL_LAST
+        db 0xff                ; RX_IDLE
         db 0xff                ; CAPS_LOCK
         db 0xff                ; ROW_OUT_PENDING
+        db 0x01                ; DISP_COUNT
+        db 0xff                ; NEXT_CHAN
+        db ' '                 ; MAGIC_LAST_CHAR
 
 ; ---- init_render: Reset render state for the current message
 init_render:
         CALL clear_framebuf
         XOR A
-        LD (DRAW_NO_GAP),A
-        LD (DRAW_PREV),A
-        LD (TINY_RENDER),A
-        LD (TINY_FRAME_READY),A
+        LD HL,RENDER_ZERO
+        LD B,RENDER_ZERO_LEN
+
+init_render_zero:
+        LD (HL),A
+        INC HL
+        DJNZ init_render_zero
         LD A,0xff
         LD (DISP_ON),A
         LD HL,FRAMEBUF
@@ -2133,32 +2056,11 @@ init_render:
         LD (FB_EXTRA_LEN),HL
         LD HL,FRAME_COLS
         LD (FB_OUT_LEN),HL
-        XOR A
-        LD (MAGIC_MODE),A
-        LD (SCROLLING),A
-        LD (CLK_RENDER_STEP),A
-        LD (MAGIC_MODE),A
-        LD (FLASH_BIT),A
-        LD (MAGIC_COLOR_SET),A
-        LD (REDRAW_MAGIC),A
-        LD (MAGIC_FONT_SET),A
-        LD (RND_VAL),A
-        LD (EFFECT_ID),A
-        LD (FRAME_DELAY),A
-        LD (FLASH_PENDING),A
-        LD (TEXT_DRAWN),A
-        LD (RAINBOW_IDX),A
-        LD (SCROLL_SPEED),A
-        LD (FORCE_BOLD),A
-        LD (TINY_MODE),A
-        LD (FONT_MODE),A
-        LD (THIN_MODE),A
         LD A,COLOR_DEFAULT
         LD (WINDOW_COLOR),A
         LD (ROW_COLOR),A
         LD (CUR_COLOR),A
-        LD HL,fxv_none
-        LD (EFFECT_VECTOR),HL
+        CALL effect_none
         LD HL,FRAMEBUF_ROW1
         LD (FB_COLPTR),HL
         LD HL,TXBUF
@@ -2178,11 +2080,7 @@ track_flash_space:
         XOR A
         LD (PREV_SPACE),A
         LD A,(CUR_CHAR)
-        LD D,0
-        LD E,A
-        LD HL,CHAR_FLAGS
-        ADD HL,DE
-        BIT 1,(HL)
+        CALL char_flags
         RET nz
         LD A,0xff
         LD (TEXT_DRAWN),A
@@ -2266,16 +2164,19 @@ class_high:
         CP 0xd0
         JP nz,attr_color_speed
 
-; ---- glyph_lookup: HL = FONT + 8*glyph_index(CUR_CHAR); GLYPH_WIDTH = byte 7 of the glyph
+; ---- glyph_lookup: the glyph of CUR_CHAR, copied to GLYPH_BUF_ITALIC with zero
+;      columns after it (glyph_bold and glyph_big read one past the end, and a
+;      graphic is drawn at twice its width), then styled and placed
 glyph_lookup:
         CALL glyph_addr
-        LD (GLYPH_PTR),HL
-        LD (GLYPH_PTR_ORIG),HL
-        LD DE,7
-        ADD HL,DE
-        LD A,(HL)
-        LD (GLYPH_WIDTH),A
         CALL clear_glyph_tmp
+        LD A,(GLYPH_WIDTH)
+        LD C,A
+        LD B,0
+        LD DE,GLYPH_BUF_ITALIC
+        LDIR
+        LD HL,GLYPH_BUF_ITALIC
+        LD (GLYPH_PTR),HL
         LD A,(TINY_MODE)
         AND A
         JR nz,glyph_place
@@ -2294,21 +2195,6 @@ glyph_graphic_check:
         LD A,(CUR_CHAR)
         AND 0xf0
         JR nz,glyph_place
-        LD HL,(GLYPH_PTR)
-        LD DE,(GLYPH_PTR_ORIG)
-        OR A
-        SBC HL,DE
-        JR nz,glyph_double_width
-        LD HL,(GLYPH_PTR)
-        LD A,(GLYPH_WIDTH)
-        LD C,A
-        LD B,0
-        LD DE,GLYPH_BUF
-        LDIR
-        LD HL,GLYPH_BUF
-        LD (GLYPH_PTR),HL
-
-glyph_double_width:
         LD A,(GLYPH_WIDTH)
         SLA A
         CP 0x20
@@ -2409,7 +2295,8 @@ blit_set_scroll:
         LD (SCROLLING),A
         RET
 
-; ---- WIDE_SPACE_GLYPH: 9-column blank used for spaces in MAGIC mode
+; ---- WIDE_SPACE_GLYPH: 9-column blank for spaces in MAGIC mode; also the 5 and 6
+;      blank columns the TINY push-offs blit
 WIDE_SPACE_GLYPH:
         db 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
 
@@ -2450,22 +2337,22 @@ stage_centre:
         LD (STAGE_OFFSET),HL
         JP unfetch_char
 
-; ---- char_to_glyph: Map a character code to a font glyph index
-;      (CHARSET_LOWER..CHARSET_EURO select upper/lower/tiny fonts)
+; ---- char_to_glyph: A = character -> A = its glyph index: the code itself for
+;      00-7F, then C0-CF, E0-EF, 90-9F and D0-DF map to glyphs 128-190 (E lost)
 char_to_glyph:
         PUSH AF
         AND 0xf0
         CP 0xc0
-        LD DE,FONT+8*128
+        LD E,128
         JR z,glyph_base_sel
         CP 0xd0
-        LD DE,FONT+8*175
+        LD E,175
         JR z,glyph_base_sel
         CP 0xe0
-        LD DE,FONT+8*144
+        LD E,144
         JR z,glyph_base_sel
         CP 0x90
-        LD DE,FONT+8*160
+        LD E,160
         JR z,glyph_base_sel
         POP AF
         RET
@@ -2473,7 +2360,7 @@ char_to_glyph:
 glyph_base_sel:
         POP AF
         AND 15
-        EX DE,HL
+        ADD A,E
         RET
 
 ; ---- glyph_put_next: draw A, keeping BC, then HL+1
@@ -2487,27 +2374,82 @@ glyph_put_next:
         INC HL
         RET
 
-; ---- char_flag1: NZ if char A has CHAR_FLAGS bit 1 (BC, IX clobbered)
-char_flag1:
-        LD B,0
+; ---- char_flags: A = character -> Z if printable text, CY if an invalid byte;
+;      an attribute is NZ and NC. Only A and the flags change.
+char_flags:
+        PUSH BC
+        PUSH HL
         LD C,A
-        LD IX,CHAR_FLAGS
-        ADD IX,BC
-        BIT 1,(IX+0)
+        AND 3
+        INC A
+        LD B,A                  ; rotations: 1 for char 4n .. 4 for 4n+3
+        LD A,C
+        RRCA
+        RRCA
+        AND 0x3f
+        ADD A,CHAR_FLAGS & 0xff
+        LD L,A
+        ADC A,CHAR_FLAGS >> 8
+        SUB L
+        LD H,A
+        LD A,(HL)
+
+cf_rotate:
+        RLCA
+        RLCA
+        DJNZ cf_rotate
+        AND 3
+        RRCA                    ; bit 0 to CY; Z from the AND stands
+        POP HL
+        POP BC
         RET
 
-; ---- glyph_addr: HL = the glyph of CUR_CHAR
+; ---- glyph_addr: HL = the columns of CUR_CHAR's glyph, GLYPH_WIDTH = its width.
+;      The glyphs are packed at their widths: FONT_BLOCK gives every eighth
+;      glyph's address and the widths of the glyphs before it in its block are added.
 glyph_addr:
-        LD HL,FONT
         LD A,(CUR_CHAR)
         CALL char_to_glyph
-        EX DE,HL
-        LD L,A
-        LD H,0
-        ADD HL,HL
-        ADD HL,HL
-        ADD HL,HL
+        LD E,A
+        LD D,0
+        LD HL,FONT_WIDTH
+        ADD HL,DE               ; HL -> its width
+        LD A,E
+        AND 7
+        LD C,A                  ; glyphs before it in the block
+        LD B,0
+        SBC HL,BC               ; HL -> the block's first width (ADD left CY clear)
+        LD A,E
+        AND 0xf8
+        RRCA
+        RRCA                    ; twice the block number
+        LD E,A
+        PUSH HL
+        LD HL,FONT_BLOCK
         ADD HL,DE
+        LD E,(HL)
+        INC HL
+        LD D,(HL)               ; DE = the block's first column
+        POP HL
+        INC C
+        JR glyph_addr_test
+
+glyph_addr_skip:
+        LD A,(HL)
+        ADD A,E
+        LD E,A
+        JR nc,glyph_addr_next
+        INC D
+
+glyph_addr_next:
+        INC HL
+
+glyph_addr_test:
+        DEC C
+        JR nz,glyph_addr_skip
+        LD A,(HL)
+        LD (GLYPH_WIDTH),A
+        EX DE,HL
         RET
 
 ; ---- fetch_char: CUR_CHAR = next store byte (LEFT substituted after a clock)
@@ -2585,7 +2527,7 @@ rainbow_mod5:
         LD (RAINBOW_IDX),A
         LD (MAGIC_COLOR_SET),A ; any non-zero value means "set"
         POP HL
-        JP render_next_char
+        JR render_next_char_jr4
 
 rainbow_step:
         LD A,(RAINBOW_IDX)
@@ -2594,11 +2536,7 @@ rainbow_step:
         RET z
         CP 0x20
         RET z
-        LD D,0
-        LD E,A
-        LD IX,CHAR_FLAGS
-        ADD IX,DE
-        BIT 1,(IX+0)
+        CALL char_flags
         RET nz
         LD A,(RAINBOW_IDX)
         LD B,A
@@ -2660,6 +2598,8 @@ attr_remark:
 
 remark_end:
         POP HL
+
+render_next_char_jr4:
         JP render_next_char
 
 ; ---- attr_wait_check: BA WAIT: flush, then spin until SPACE or a packet
@@ -2690,7 +2630,7 @@ wait_poll:
         CP ' '
         JR nz,wait_check_pkt
         POP HL
-        JP render_next_char
+        JR render_next_char_jr4
 
 wait_check_pkt:
         CALL pkt_poll
@@ -2703,7 +2643,7 @@ attr_thin_check:
         RET nz
         LD (THIN_MODE),A
         POP HL
-        JP render_next_char
+        JR render_next_char_jr4
 
 ; ---- attr_draw_check: B8 DRAW: hex digit pairs -> DRAW_BUF columns, up to
 ;      16, ended by the first non-hex byte
@@ -2760,7 +2700,6 @@ draw_hex_loop:
 draw_finish:
         POP HL
         LD (GLYPH_PTR),HL
-        LD (GLYPH_PTR_ORIG),HL
         LD A,C
         AND A
         JR nz,draw_set_width
@@ -2775,11 +2714,13 @@ draw_set_width:
         POP HL
         LD A,(EFFECT_ID)
         AND A
-        JP z,glyph_place
+        JR z,glyph_place_jr6
         CALL glyph_bold
         LD A,(GLYPH_WIDTH)
         DEC A
         LD (GLYPH_WIDTH),A
+
+glyph_place_jr6:
         JP glyph_place
 
 draw_pop_odd:
@@ -2857,6 +2798,8 @@ magic_char:
         JP z,magic_reseed
         LD A,' '
         LD (MAGIC_LAST_CHAR),A
+
+magic_ret_jr7:
         JP magic_ret
 
 magic_attr:
@@ -2908,7 +2851,7 @@ magic_printable:
         JR z,magic_word_start
         LD A,(CUR_CHAR)
         LD (MAGIC_LAST_CHAR),A
-        JP magic_ret
+        JR magic_ret_jr7
 
 magic_word_start:
         LD A,(CUR_CHAR)
@@ -2946,7 +2889,7 @@ magic_short_word:
         JR nc,magic_font_normal
         LD A,(RND_SEED)
         ADD A,(HL)
-        LD HL,(NMI_COUNT)
+        LD HL,NMI_COUNT
         ADD A,(HL)
         LD (RND_SEED),A
         AND 3
@@ -3269,7 +3212,7 @@ fb_ptr_inc:
         PUSH AF
         PUSH DE
         PUSH HL
-        LD DE,FB_COLPTR
+        LD DE,FRAMEBUF_END
         XOR A
         SBC HL,DE
         JR c,fbinc_nowrap
@@ -3291,7 +3234,7 @@ fb_ptr_add:
         PUSH DE
         ADD HL,DE
         PUSH HL
-        LD DE,FB_COLPTR
+        LD DE,FRAMEBUF_END
         XOR A
         SBC HL,DE
         JR c,fbadd_nowrap
@@ -3308,12 +3251,32 @@ fbadd_ret:
         POP AF
         RET
 
-; ---- effect_step: Called from main loop: jump to EFFECT_VECTOR (current movement effect handler)
-effect_step:
+; ---- wait_frame_delay: spin, polling for packets, until FRAME_DELAY runs out
+wait_frame_delay:
         CALL pkt_poll
         LD A,(FRAME_DELAY)
         AND A
-        JR nz,effect_step
+        JR nz,wait_frame_delay
+        RET
+
+; ---- wait_row6: spin until the display is on row 6
+wait_row6:
+        LD A,(ROW_INDEX)
+        CP 6
+        JR nz,wait_row6
+        RET
+
+; ---- effect_none: no movement effect: EFFECT_ID = 0 (A = 0 on return), fxv_none
+effect_none:
+        XOR A
+        LD (EFFECT_ID),A
+        LD HL,fxv_none
+        LD (EFFECT_VECTOR),HL
+        RET
+
+; ---- effect_step: Called from main loop: jump to EFFECT_VECTOR (current movement effect handler)
+effect_step:
+        CALL wait_frame_delay
 
 fx_wait_scroll:
         CALL pkt_poll
@@ -3325,9 +3288,7 @@ fx_wait_scroll:
         RET z
 
 fx_wait_row6:
-        LD A,(ROW_INDEX)
-        CP 6
-        JR nz,fx_wait_row6
+        CALL wait_row6
         LD HL,(STAGE_OFFSET)
         LD A,L
         CP FRAME_COLS/2
@@ -3404,7 +3365,7 @@ attr_not_italic:
         JR nz,attr_not_flash
         LD A,COLOR_FLASH
         LD (FLASH_PENDING),A
-        JP render_next_char
+        JR render_next_char_jr2
 
 attr_not_flash:
         CP ATTR_BIG
@@ -3415,7 +3376,7 @@ attr_set_font:
         LD (FONT_MODE),A
         LD A,0xff
         LD (MAGIC_FONT_SET),A
-        JP render_next_char
+        JR render_next_char_jr2
 
 attr_not_big:
         CP ATTR_MAGIC
@@ -3441,30 +3402,25 @@ fx_flush_stage:
 
 fx_dispatch:
         LD A,(CUR_CHAR)
-        CP 6
-        JP z,fx_halt
-        CP 7
-        JR z,fx_beep
-        CP 3
-        JR z,fx_end_of_channel
-        CP ATTR_LEFT
-        JR z,fx_left
-        CP ATTR_PAUSE
-        JR z,fx_pause
-        CP ATTR_UP
-        JR z,fx_up
-        CP ATTR_DOWN
-        JR z,fx_down
-        CP 15
-        JR z,fx_right
-        CP ATTR_HOLD
-        JR z,fx_hold
+        CALL dispatch
+        DKEY 6, fx_halt
+        DKEY 7, fx_beep
+        DKEY 3, fx_end_of_channel
+        DKEY ATTR_LEFT, fx_left
+        DKEY ATTR_PAUSE, fx_pause
+        DKEY ATTR_UP, fx_up
+        DKEY ATTR_DOWN, fx_down
+        DKEY 15, fx_right
+        DKEY ATTR_HOLD, fx_hold
+        db 0xff
+
+render_next_char_jr2:
         JP render_next_char
 
 ; ---- fx_beep
 fx_beep:
         CALL beep_start
-        JP render_next_char
+        JR render_next_char_jr2
 
 ; ---- beep_start: BEEP_TICKS = BEEP_LEN (~115 ms); P35: nothing with the beeper off
 beep_start:
@@ -3479,74 +3435,55 @@ beep_start:
 
 ; ---- fx_end_of_channel
 fx_end_of_channel:
-        LD HL,fxv_none
-        LD (EFFECT_VECTOR),HL
-        XOR A
-        LD (EFFECT_ID),A
+        CALL effect_none
         CALL scroll_off_text
         LD SP,STACK_TOP
         JP main_loop
 
-; ---- fx_right: 0F: reveal the staged text left to right, a column per frame
+; ---- the movement attributes: 0F RIGHT (effect 4), 18 LEFT (plain crawl, no
+;      staging), BB HOLD (5), 19 PAUSE (1), 1A UP (2), 1B DOWN (3). The staged
+;      ones take the whole frame; all but HOLD stop the window first.
 fx_right:
-        XOR A
-        LD (SCROLLING),A
-        LD A,FRAME_COLS
-        LD (COL_COUNT),A
         LD A,4
         LD HL,fxv_right
-        JR set_effect_vector
+        JR fx_staged
 
-; ---- fx_left: 18: plain crawl, no staging
-fx_left:
-        XOR A
-        LD (COL_COUNT),A
-        LD HL,fxv_none
-        JR set_effect_vector
-
-; ---- fx_hold: BB: blank, then reveal the staged text right to left
-fx_hold:
-        XOR A
-        LD A,FRAME_COLS
-        LD (COL_COUNT),A
-        LD A,5
-        LD HL,fxv_hold
-        JR set_effect_vector
-
-; ---- fx_pause: 19: show the staged text at once and hold CFG_HOLD frames
 fx_pause:
-        XOR A
-        LD (SCROLLING),A
-        LD A,FRAME_COLS
-        LD (COL_COUNT),A
         LD A,1
         LD HL,fxv_pause
-        JR set_effect_vector
+        JR fx_staged
 
-; ---- fx_up: 1A: reveal the staged text row by row from the top
 fx_up:
-        XOR A
-        LD (SCROLLING),A
-        LD A,FRAME_COLS
-        LD (COL_COUNT),A
         LD A,2
         LD HL,fxv_wipe_updown
-        JR set_effect_vector
+        JR fx_staged
 
-; ---- fx_down: 1B: reveal the staged text row by row from the bottom
+fx_hold:
+        LD A,5
+        LD HL,fxv_hold
+        JR fx_set
+
 fx_down:
-        XOR A
-        LD (SCROLLING),A
-        LD A,FRAME_COLS
-        LD (COL_COUNT),A
         LD A,3
         LD HL,fxv_wipe_updown
 
-; ---- set_effect_vector: HL -> EFFECT_VECTOR, A -> effect id
-set_effect_vector:
+fx_staged:
+        LD C,A
+        XOR A
+        LD (SCROLLING),A
+        LD A,C
+
+fx_set:
         LD (EFFECT_ID),A
         LD (EFFECT_VECTOR),HL
-        JP render_next_char
+        LD A,FRAME_COLS
+        LD (COL_COUNT),A
+        JR render_next_char_jr2
+
+fx_left:
+        CALL effect_none
+        LD (COL_COUNT),A
+        JR render_next_char_jr2
 
 ; ---- fx_magic
 fx_magic:
@@ -3568,6 +3505,8 @@ fx_magic:
         ADD A,2
         LD (RND_VAL),A
         CALL magic_first_color
+
+render_next_char_jr5:
         JP render_next_char
 
 ; ---- magic_first_color: first color of the cycle when MAGIC starts
@@ -3600,7 +3539,7 @@ attr_magic_off:
         LD (FONT_MODE),A
         LD A,COLOR_DEFAULT
         LD (CUR_COLOR),A
-        JP render_next_char
+        JR render_next_char_jr5
 
 ; ---- fx_halt: 06: hold 0x50 frames (~1.3 s) with the colors reset
 fx_halt:
@@ -3610,11 +3549,7 @@ fx_halt:
         AND A
         JR nz,halt_hold
 
-halt_wait_frames:
-        CALL pkt_poll
-        LD A,(FRAME_DELAY)
-        AND A
-        JR nz,halt_wait_frames
+        CALL wait_frame_delay
 
 halt_hold:
         LD A,(CFG_HOLD)         ; P35
@@ -3629,7 +3564,7 @@ halt_hold:
         JP z,fx_left
         LD A,FRAME_COLS
         LD (COL_COUNT),A
-        JP render_next_char
+        JR render_next_char_jr3
 
 ; ---- fb_colors_default: every color byte in FRAMEBUF -> 8F, keeping flash
 fb_colors_default:
@@ -3676,6 +3611,8 @@ attr_color_speed:
         LD A,(CUR_CHAR)
         CP ATTR_MAGIC_OFF
         JP z,attr_magic_off
+
+render_next_char_jr3:
         JP render_next_char
 
 ; ---- attr_fore_color
@@ -3699,7 +3636,7 @@ fore_set:
         LD (CUR_COLOR),A
         LD A,0xff
         LD (MAGIC_COLOR_SET),A
-        JP render_next_char
+        JR render_next_char_jr3
 
 ; ---- attr_back_color
 attr_back_color:
@@ -3732,14 +3669,14 @@ back_apply:
         LD (CUR_COLOR),A
         LD A,0xff
         LD (MAGIC_COLOR_SET),A
-        JP render_next_char
+        JR render_next_char_jr3
 
 ; ---- attr_speed
 attr_speed:
         LD A,(CUR_CHAR)
         AND 7
         LD (SCROLL_SPEED),A
-        JP render_next_char
+        JR render_next_char_jr3
 
 ; ---- attr_tiny: 0xBE: switch to tiny (28-char) font mode and render
 attr_tiny:
@@ -3779,13 +3716,10 @@ tinyoff_loop:
         PUSH BC
         LD A,' '
         LD (CUR_CHAR),A
-        XOR A
-        LD (EFFECT_ID),A
-        LD HL,fxv_none
-        LD (EFFECT_VECTOR),HL
+        CALL effect_none
         LD A,6
         LD (GLYPH_WIDTH),A
-        LD HL,FONT+8*32
+        LD HL,WIDE_SPACE_GLYPH
         LD (GLYPH_PTR),HL
         CALL glyph_blit
         CALL effect_step
@@ -3827,12 +3761,6 @@ tinyg_check:
 
 tinyg_lookup:
         CALL glyph_addr
-        PUSH HL
-        LD DE,7
-        ADD HL,DE
-        LD A,(HL)
-        LD (GLYPH_WIDTH),A
-        POP HL
 
 ; ---- tiny_put_glyph: color byte + glyph into FRAMEBUF_TINY
 tiny_put_glyph:
@@ -3898,7 +3826,7 @@ tinyout_loop:
         LD (CUR_CHAR),A
         LD A,5
         LD (GLYPH_WIDTH),A
-        LD HL,FONT+8*32
+        LD HL,WIDE_SPACE_GLYPH
         CALL tiny_put_glyph
         CALL tiny_scroll_cols
         POP BC
@@ -3910,6 +3838,8 @@ tiny_refresh:
         AND A
         JR nz,tiny_row_out
         CALL latch_blank
+
+rx_consume_jr8:
         JP rx_consume
 
 tiny_row_out:
@@ -3962,16 +3892,21 @@ tiny_row_done:
 
 ; ---- disp_next_row: ROW_INDEX = (ROW_INDEX+1) mod 7
 disp_next_row:
+        CALL row_step
+        JP c,tick6_arm_row
+        LD (TINY_FRAME_READY),A
+        JR rx_consume_jr8
+
+; ---- row_step: ROW_INDEX + 1: CY while rows are left, else back to 0 with A = 0
+row_step:
         LD A,(ROW_INDEX)
-        LD C,A
         INC A
         LD (ROW_INDEX),A
         CP 7
-        JP c,tick6_arm_row
+        RET c
         XOR A
         LD (ROW_INDEX),A
-        LD (TINY_FRAME_READY),A
-        JP rx_consume
+        RET
 
 ; ---- fxv_prepare: clear FRAMEBUF and reset the output window; HL = TXBUF,
 ;      DE = FRAMEBUF + STAGE_OFFSET (the staged text is centered)
@@ -4004,9 +3939,7 @@ fxv_right:
         LD B,A
 
 right_wait_row:
-        LD A,(ROW_INDEX)
-        CP 6
-        JR nz,right_wait_row
+        CALL wait_row6
         LD A,(HL)
         LD (DE),A
         INC HL
@@ -4016,16 +3949,14 @@ right_wait_row:
         LD A,1
         LD (FRAME_DELAY),A
 
-right_wait_frame:
-        CALL pkt_poll
-        LD A,(FRAME_DELAY)
-        AND A
-        JR nz,right_wait_frame
+        CALL wait_frame_delay
         DJNZ right_wait_row
         JR fx_hold_done
 
 ; ---- fxv_none: effect handler: nothing (straight to render loop)
 fxv_none:
+
+fx_done_jr9:
         JP fx_done
 
 ; ---- fxv_hold: effect 5: fill with 0x8F (no columns lit), then copy one staged
@@ -4056,9 +3987,7 @@ hold_fill:
         INC B
 
 hold_wait_row:
-        LD A,(ROW_INDEX)
-        CP 6
-        JR nz,hold_wait_row
+        CALL wait_row6
         LD A,(HL)
         LD (DE),A
         DEC HL
@@ -4068,11 +3997,7 @@ hold_wait_row:
         LD A,1
         LD (FRAME_DELAY),A
 
-hold_wait_frame:
-        CALL pkt_poll
-        LD A,(FRAME_DELAY)
-        AND A
-        JR nz,hold_wait_frame
+        CALL wait_frame_delay
         DJNZ hold_wait_row
         JR fx_hold_done
 
@@ -4090,7 +4015,7 @@ fx_hold_done:
         LD (FRAME_DELAY),A
         XOR A
         LD (SCROLLING),A
-        JP fx_done
+        JR fx_done_jr9
 
 ; ---- fxv_wipe_updown: effects 2 (UP) and 3 (DOWN): eight passes copying the
 ;      stage through a row mask that grows one row per pass
@@ -4116,9 +4041,7 @@ wipev_pass:
         PUSH BC
 
 wipev_wait_row:
-        LD A,(ROW_INDEX)
-        CP 6
-        JR nz,wipev_wait_row
+        CALL wait_row6
 
 wipev_col:
         LD A,(HL)
@@ -4144,11 +4067,7 @@ wipev_store:
         LD A,3
         LD (FRAME_DELAY),A
 
-wipev_wait_frame:
-        CALL pkt_poll
-        LD A,(FRAME_DELAY)
-        AND A
-        JR nz,wipev_wait_frame
+        CALL wait_frame_delay
         POP BC
         POP DE
         POP HL
@@ -4196,15 +4115,8 @@ clr_chan_next:
         DJNZ clr_chan_loop
         LD A,MARK_HI
         LD (HL),A
-        LD HL,SEQ_LIST
-        LD (HL),MARK_HI
-        LD B,SEQ_LIST_LEN-1
-
-clr_seq_loop:
-        INC HL
-        LD (HL),0xff
-        DJNZ clr_seq_loop
-        RET
+        LD A,MARK_HI            ; not a channel: init_sequence loads the default
+        JP seq_list_one
 
 ; ---- store_init: message-store init. Sets the store
 ;      ceiling and its three derived constants, writes the 0xDA store
@@ -4385,7 +4297,7 @@ ir_st_start:
         JR nz,ir_start_count
         IN A,(PORT_IN)
         BIT IR_BIT,A
-        JP nz,ir_reset
+        JR nz,ir_reset_jr10
         PUSH HL
         LD HL,ir_st_bits
         LD (TICK_VECTOR),HL
@@ -4427,7 +4339,7 @@ ir_bit_verify:
         AND PORT_IR
         CP L
         POP HL
-        JP nz,ir_reset
+        JR nz,ir_reset_jr10
         LD A,(IR_BITCNT)
         DEC A
         LD (IR_BITCNT),A
@@ -4442,11 +4354,13 @@ ir_bit_count:
 ir_frame_done:
         LD A,(CFG_LOCK)         ; P35: a locked sign drops the key here, before
         AND A                   ; either consumer sees it
-        JP nz,ir_reset
+        JR nz,ir_reset_jr10
         LD A,(IR_SHIFT)
         RLCA                    ; P36: bits enter at IR_BIT, so the first lands in bit 7
         OR 0x80
         LD (IR_CODE),A
+
+ir_reset_jr10:
         JP ir_reset
 
 ; ---- tx_send_byte: Queue byte A for bit-banged transmission; blocks until the previous byte is out
@@ -5078,13 +4992,7 @@ pkt_discard_frame:
         RET
 
 ; ---- tx_send_frame: Send reply frame: B1, MY_ADDRESS, then (HL)=len, len bytes, 8-bit sum of the data bytes
-tx_send_frame:
-        PUSH AF
-        PUSH BC
-        PUSH DE
-        PUSH HL
-        PUSH IX
-        PUSH IY
+tx_send_frame:                  ; ota_reply, its one caller, keeps nothing
         LD A,0xb1
         CALL tx_send_byte
         LD A,(MY_ADDRESS)
@@ -5104,14 +5012,7 @@ txf_data_loop:
         INC HL
         DJNZ txf_data_loop
         LD A,E
-        CALL tx_send_byte
-        POP IY
-        POP IX
-        POP HL
-        POP DE
-        POP BC
-        POP AF
-        RET
+        JP tx_send_byte
 
 ; ---- bin_to_dec5: HL -> 5 ASCII digits at (IX) using table 10000,1000,100,10,1
 bin_to_dec5:
@@ -5356,16 +5257,12 @@ editor_init:
 editor_find_marker:
         LD HL,(STORE_CURSOR)
         LD A,(HL)
-        CP MARK_LO
-        JR c,editor_scan_back
-        CP MARK_HI+1
+        CALL is_marker
         JR nc,editor_scan_back
         DEC HL
         DEC HL
         LD A,(HL)
-        CP MARK_LO
-        JR c,editor_cursor_set
-        CP MARK_HI+1
+        CALL is_marker
         JR nc,editor_cursor_set
         DEC HL
         LD (STORE_CURSOR),HL
@@ -5386,11 +5283,8 @@ editor_scan_back:
 
 editor_scan_loop:
         LD A,(HL)
-        CP MARK_LO
-        JR c,editor_scan_next
-        CP MARK_HI+1
-        JR nc,editor_scan_next
-        JR editor_set_ins
+        CALL is_marker
+        JR c,editor_set_ins
 
 editor_scan_next:
         DEC HL
@@ -5445,56 +5339,33 @@ editor_dispatch:
         XOR A
         LD (EDITOR_FIRST_KEY),A
         LD A,(EDIT_KEY)
-        CP 1
-        JR z,editor_next_key
-        CP 3
-        JP z,menu_clear_all
-        CP 5
-        JP z,show_top_of_msg
-        CP KEY_DEL
-        JP z,editor_delete
-        CP KEY_SHIFT
-        JP z,editor_key_shift
-        CP 10
-        JP z,cursor_right
-        CP 12
-        JP z,cursor_right_8
-        CP 8
-        JP z,cursor_left
-        CP 11
-        JP z,cursor_left_8
-        CP 14
-        JP z,editor_clear_msg
-        CP KEY_EURO
-        JP z,editor_toggle_euro
-        CP 0x5e
-        JP z,menu_address
-        CP KEY_CASE
-        JP z,editor_toggle_caps
-        CP ATTR_GRAPH
-        JP z,editor_key_graph
-        CP ATTR_COLOR
-        JP z,editor_key_color
-        CP ATTR_BGRND
-        JP z,editor_key_bgrnd
-        CP 0x17
-        JP z,menu_time
-        CP 2
-        JP z,editor_key_speed
-        CP 0xb3
-        JP z,editor_goto_end
-        CP KEY_FUNC
-        JP z,editor_key_func
-        CP 9
-        JP z,menu_prog_msg
-        CP 4
-        JP z,menu_seq_msg
-        CP 13
-        JP z,editor_exit
-        CP 0x9f
-        JP z,editor_loop
-        CP 0xb1
-        JP z,editor_exit
+        CALL dispatch
+        DKEY 1, editor_next_key
+        DKEY 3, menu_clear_all
+        DKEY 5, show_top_of_msg
+        DKEY KEY_DEL, editor_delete
+        DKEY KEY_SHIFT, editor_key_shift
+        DKEY 10, cursor_right
+        DKEY 12, cursor_right_8
+        DKEY 8, cursor_left
+        DKEY 11, cursor_left_8
+        DKEY 14, editor_clear_msg
+        DKEY KEY_EURO, editor_toggle_euro
+        DKEY 0x5e, menu_address
+        DKEY KEY_CASE, editor_toggle_caps
+        DKEY ATTR_GRAPH, editor_key_graph
+        DKEY ATTR_COLOR, editor_key_color
+        DKEY ATTR_BGRND, editor_key_bgrnd
+        DKEY 0x17, menu_time
+        DKEY 2, editor_key_speed
+        DKEY 0xb3, editor_goto_end
+        DKEY KEY_FUNC, editor_key_func
+        DKEY 9, menu_prog_msg
+        DKEY 4, menu_seq_msg
+        DKEY 13, editor_exit
+        DKEY 0x9f, editor_loop
+        DKEY 0xb1, editor_exit
+        db 0xff
         JP editor_insert
 
 ; ---- magic_new_message: MAGIC as first key: take the first empty channel
@@ -5520,7 +5391,7 @@ newmsg_try_chan:
         LD A,(HL)
         CP TEXT_END
         JR z,newmsg_empty_found
-        CALL char_flag1
+        CALL char_flags
         JR z,newmsg_next_chan
 
 newmsg_skip_attrs:
@@ -5532,9 +5403,8 @@ newmsg_skip_attrs:
         JR newmsg_select
 
 newmsg_skip_next:
-        CALL char_flag1
-        JR z,newmsg_next_chan
-        JR newmsg_skip_attrs
+        CALL char_flags
+        JR nz,newmsg_skip_attrs
 
 newmsg_next_chan:
         LD A,E
@@ -5573,25 +5443,9 @@ newmsg_empty_found:
         LD (STORE_CURSOR),HL
 
 newmsg_set_seq:
-        PUSH DE
-        CALL clear_chan_lock
-        POP DE
+        CALL chan_lock_set
         LD A,E
-        CP CHAN_DEMO
-        JR nz,newmsg_seq_fill
-        LD (CHAN_LOCK),A
-
-newmsg_seq_fill:
-        LD HL,SEQ_LIST
-        LD (HL),E
-        INC HL
-        LD B,SEQ_LIST_LEN-1
-
-newmsg_seq_loop:
-        LD (HL),0xff
-        INC HL
-        DJNZ newmsg_seq_loop
-        LD A,E
+        CALL seq_list_one
         LD (MAGIC_MSG_CHAN),A
         RET
 
@@ -5607,6 +5461,48 @@ store_finalize:
         JP z,pkt_process_end
         DEC HL
         LD (STORE_END),HL
+        RET
+
+; ---- store_delete_text: remove the text from HL to its 03 by moving the tail of
+;      the store (the 03 up to its DA) down over it, then fix STORE_END. Z with
+;      nothing done if no 03 lies below STORE_LIMIT (a corrupt store)
+store_delete_text:
+        PUSH HL
+        EX DE,HL
+        LD HL,(STORE_LIMIT)
+        OR A
+        SBC HL,DE
+        LD B,H
+        LD C,L
+        INC BC
+        EX DE,HL
+        LD A,TEXT_END
+        CPIR
+        LD A,B
+        OR C
+        POP DE                  ; the destination
+        RET z
+        DEC HL                  ; HL = the 03
+        PUSH DE
+        EX DE,HL                ; DE = the 03
+        LD HL,(STORE_END)
+        INC HL
+        OR A
+        SBC HL,DE
+        LD B,H
+        LD C,L
+        INC BC                  ; the 03 .. the DA, and one more
+        EX DE,HL                ; HL = the 03
+        POP DE                  ; DE = the destination
+        LDIR
+        JR store_finalize       ; returns NZ
+
+; ---- is_marker: CY if A is a channel marker byte, D0-DA (A is lost)
+is_marker:
+        SUB MARK_LO
+        CCF
+        RET nc
+        CP MARK_HI-MARK_LO+1
         RET
 
 editor_show_invalid:
@@ -5758,11 +5654,7 @@ time_wait:
         LD A,(CFG_HOLD)         ; P35
         LD (FRAME_DELAY),A
 
-time_wait_loop:
-        CALL pkt_poll
-        LD A,(FRAME_DELAY)
-        AND A
-        JR nz,time_wait_loop
+        CALL wait_frame_delay
         LD HL,MENU_STR_AM_PM
         CALL menu_prompt
 
@@ -5869,34 +5761,24 @@ clock_digit:
 clock_emit:
         CALL unfetch_char
         LD A,(CUR_CHAR)
+
+glyph_lookup_jr15:
         JP glyph_lookup
 
 clock_emit_last:
         LD A,0xff
         LD (CLK_RENDER_STEP),A
         LD A,(CUR_CHAR)
-        JP glyph_lookup
+        JR glyph_lookup_jr15
 
 ; ---- menu_ask_chan_cur: ask for a channel number, prefilled from INS_PTR
 menu_ask_chan_cur:
-        PUSH AF
-        PUSH BC
-        PUSH DE
-        PUSH HL
-        PUSH IX
-        PUSH IY
         LD (ASK_CHAN_PROMPT),HL
         JR askchan_prefill
 
 ; ---- menu_ask_chan: ask for a channel number; returns 0-99, 64 demo,
 ;      97 SEQ key, 98 MAGIC key, 99 A(ll), 9A blank + enter
-menu_ask_chan:
-        PUSH AF
-        PUSH BC
-        PUSH DE
-        PUSH HL
-        PUSH IX
-        PUSH IY
+menu_ask_chan:                  ; the callers keep nothing in the registers
         LD (ASK_CHAN_PROMPT),HL
         JP askchan_clear
 
@@ -5943,30 +5825,20 @@ askchan_digits_loop:
 askchan_key:
         CALL menu_getchar
         LD (CUR_CHAR),A
-        CP 4
-        JP z,askchan_seq_key
-        CP 8
-        JR z,askchan_accept
-        CP 9
-        JR z,askchan_accept
-        CP 13
-        JR z,askchan_enter
-        CP 14
-        JR z,askchan_clear
-        CP ATTR_MAGIC
-        JP z,askchan_magic_key
-        CP KEY_DEL
-        JR z,askchan_backspace
-        CP 'A'
-        JR z,askchan_all
-        CP 'a'
-        JR z,askchan_all
-        CP 'D'
-        JR z,askchan_demo
-        CP 'd'
-        JR z,askchan_demo
-        LD A,(CUR_CHAR)
-        CALL is_digit
+        CALL dispatch
+        DKEY 4, askchan_seq_key
+        DKEY 8, askchan_accept
+        DKEY 9, askchan_accept
+        DKEY 13, askchan_enter
+        DKEY 14, askchan_clear
+        DKEY ATTR_MAGIC, askchan_magic_key
+        DKEY KEY_DEL, askchan_backspace
+        DKEY 'A', askchan_all
+        DKEY 'a', askchan_all
+        DKEY 'D', askchan_demo
+        DKEY 'd', askchan_demo
+        db 0xff
+        CALL is_digit           ; A is still the key
         JR nc,askchan_key
         LD IX,CHAN_D10
         LD A,(IX+1)
@@ -5996,14 +5868,6 @@ askchan_accept:
         CALL ascii_dec_to_bin
 
 askchan_return:
-        LD (ASK_CHAN_RESULT),A
-        POP IY
-        POP IX
-        POP HL
-        POP DE
-        POP BC
-        POP AF
-        LD A,(ASK_CHAN_RESULT)
         RET
 
 askchan_clear:
@@ -6017,23 +5881,23 @@ askchan_enter:
         CP 0x20
         JR nz,askchan_accept
         LD A,0x9a
-        JR askchan_return
+        RET
 
 askchan_all:
         LD A,0x99
-        JR askchan_return
+        RET
 
 askchan_demo:
         LD A,CHAN_DEMO
-        JR askchan_return
+        RET
 
 askchan_seq_key:
         LD A,0x97
-        JR askchan_return
+        RET
 
 askchan_magic_key:
         LD A,0x98
-        JR askchan_return
+        RET
 
 ; ---- menu_address: 5E (FUNC+MAGIC): ADDRESS? 1-255, never 0 or 2A
 menu_address:
@@ -6041,7 +5905,7 @@ menu_address:
         CALL menu_prompt
         LD H,0
         LD A,(MY_ADDRESS)
-        CP 0
+        OR A
         JR z,addr_default_1
         CP ADDR_BROADCAST
         JR nz,addr_to_ascii
@@ -6117,7 +5981,7 @@ addr_echo_digit:
 
 addr_enter:
         LD A,B
-        CP 0
+        OR A
         JR nz,addr_convert
         LD B,3
 
@@ -6127,7 +5991,7 @@ addr_convert:
         JR c,menu_addr_invalid
         CP ADDR_BROADCAST
         JR z,menu_addr_invalid
-        CP 0
+        OR A
         JR z,menu_addr_invalid
         LD (MY_ADDRESS),A
         CALL cfg_seal           ; P35
@@ -6150,7 +6014,7 @@ a2b_digit_loop:
         LD A,(HL)
         AND 15
         LD B,A
-        CP 0
+        OR A
         LD A,E
         JR z,a2b_next
 
@@ -6188,6 +6052,7 @@ not_digit:
         OR A
         RET
 
+
 ; ---- menu_addr_invalid
 menu_addr_invalid:
         LD A,0xff
@@ -6215,9 +6080,7 @@ gotoend_back:
 ; ---- editor_back_if_mark: HL = STORE_CURSOR; on a channel marker step back and show TOP
 editor_back_if_mark:
         LD A,(HL)
-        CP MARK_LO
-        JP c,editor_loop
-        CP MARK_HI+1
+        CALL is_marker
         JP nc,editor_loop
         DEC HL
         LD (STORE_CURSOR),HL
@@ -6226,9 +6089,7 @@ editor_back_if_mark:
 editor_reshow:
         LD HL,(STORE_CURSOR)
         LD A,(HL)
-        CP MARK_LO
-        JP c,editor_loop
-        CP MARK_HI+1
+        CALL is_marker
         JP nc,editor_loop
 
 ; ---- show_top_of_msg: 05 and after most edits: "TOP OF MSG nn"
@@ -6291,11 +6152,8 @@ delete_chan_text:
 
 deltext_find_marker:
         LD A,(HL)
-        CP MARK_LO
-        JR c,deltext_back
-        CP MARK_HI+1
-        JR nc,deltext_back
-        JR deltext_marker_end
+        CALL is_marker
+        JR c,deltext_marker_end
 
 deltext_back:
         DEC HL
@@ -6308,11 +6166,8 @@ deltext_back:
 deltext_marker_end:
         INC HL
         LD A,(HL)
-        CP MARK_LO
-        JR c,deltext_one_byte
-        CP MARK_HI+1
-        JR nc,deltext_one_byte
-        JR deltext_move
+        CALL is_marker
+        JR c,deltext_move
 
 deltext_one_byte:
         DEC HL
@@ -6320,33 +6175,8 @@ deltext_one_byte:
 deltext_move:
         LD (STORE_CURSOR),HL
         INC HL
-        LD (MOVE_DST),HL
-        EX DE,HL
-        LD HL,(STORE_LIMIT)
-        OR A
-        SBC HL,DE
-        PUSH HL
-        POP BC
-        INC BC
-        EX DE,HL
-        LD A,3
-        CPIR
-        LD A,B
-        OR C
+        CALL store_delete_text
         JP z,pkt_process_end
-        DEC HL
-        LD (MOVE_SRC),HL
-        LD DE,(STORE_LIMIT)
-        EX DE,HL
-        OR A
-        SBC HL,DE
-        LD B,H
-        LD C,L
-        INC BC
-        LD HL,(MOVE_SRC)
-        LD DE,(MOVE_DST)
-        LDIR
-        CALL store_finalize
         LD HL,(STORE_CURSOR)
         DEC HL
         LD (STORE_CURSOR),HL
@@ -6357,13 +6187,15 @@ editor_toggle_caps:
         CPL
         LD (CAPS_LOCK),A
 
+
+editor_reshow_jr14:
         JP editor_reshow
 
 editor_toggle_euro:
         LD A,(EURO_STATE)
         CPL
         LD (EURO_STATE),A
-        JP editor_reshow
+        JR editor_reshow_jr14
 
 editor_key_speed:
         LD DE,SPEED_PENDING
@@ -6380,6 +6212,8 @@ editor_key_color:
 editor_key_func:
         LD A,0xff
         LD (FUNC_PENDING),A
+
+editor_loop_jr12:
         JP editor_loop
 
 editor_key_bgrnd:
@@ -6390,13 +6224,13 @@ editor_set_pending:
         LD HL,(STORE_CURSOR)
         LD A,(HL)
         CP TEXT_END
-        JP z,editor_loop
+        JR z,editor_loop_jr12
         LD A,(CHAN_LOCK)
         OR A
         JP nz,editor_show_invalid
         LD A,0xff
         LD (DE),A
-        JP editor_loop
+        JR editor_loop_jr12
 
 ; ---- menu_prog_msg: 09: PROG MSG? channel
 menu_prog_msg:
@@ -6407,38 +6241,15 @@ menu_prog_msg:
         LD E,A
 
 editor_select_chan:
-        PUSH DE
-        CALL chan_select
-        POP DE
-        OR A
-        JP nz,pkt_process_end
-        LD (INS_PTR),HL
-        DEC HL
-        DEC HL
-        LD (STORE_CURSOR),HL
-        PUSH DE
-        CALL clear_chan_lock
-        POP DE
-        LD A,E
-        CP CHAN_DEMO
-        JR nz,editor_select_done
-        LD (CHAN_LOCK),A
-
-editor_select_done:
+        CALL chan_open
         JP show_top_of_msg
 
 ; ---- menu_seq_msg: 04: SEQ MSG? channels until blank+enter; A = all
 menu_seq_msg:
         LD A,0xff
         LD (SEQ_SET),A
-        LD HL,SEQ_LIST
-        LD B,SEQ_LIST_LEN
         LD A,0xff
-
-seqmenu_clear:
-        LD (HL),A
-        INC HL
-        DJNZ seqmenu_clear
+        CALL seq_list_one       ; empty: FF throughout
         LD (SEQ_MENU_ACTIVE),A
         LD HL,SEQ_LIST
         LD (SEQ_PTR),HL
@@ -6465,14 +6276,13 @@ seqmenu_result:
         CP 0x99
         JR z,seqmenu_all
         CP 0x9a
-        JP z,editor_exit
+        JR z,editor_exit_jr17
         LD HL,(SEQ_PTR)
         LD (HL),A
         INC HL
         LD (SEQ_PTR),HL
         DJNZ seqmenu_loop
         LD HL,MENU_STR_SEQ_FULL
-        INC HL
         CALL menu_show_text
         CALL fb_rewind_window
 
@@ -6482,22 +6292,9 @@ seqmenu_done:
         JP editor_reshow
 
 seqmenu_all:
-        LD HL,SEQ_LIST
-        XOR A
-        LD B,CHANNELS
+        CALL seq_list_default
 
-seqmenu_all_fill:
-        LD (HL),A
-        INC HL
-        INC A
-        DJNZ seqmenu_all_fill
-        LD (HL),0xff
-        INC HL
-        LD (HL),0xff
-        INC HL
-        LD (HL),0xff
-        INC HL
-        LD (HL),0xff
+editor_exit_jr17:
         JP editor_exit
 
 ; ---- menu_getchar
@@ -6603,8 +6400,7 @@ getkey_translate:
         LD D,0
         LD E,A
         ADD HL,DE
-        LD A,(HL)
-        LD (RX_BYTE),A
+        LD E,(HL)               ; the key's position in the layers
         LD A,(EURO_STATE)
         LD HL,CHARSET_EURO
         OR A
@@ -6612,26 +6408,25 @@ getkey_translate:
         LD A,(SHIFT_STATE)
         LD HL,CHARSET_LOWER
         AND A
-        JR z,getkey_caps
-        LD HL,CHARSET_UPPER2
-        LD A,(CAPS_LOCK)
-        AND A
         JR z,getkey_lookup
         LD HL,CHARSET_LOWER2
-        JR getkey_lookup
-
-getkey_caps:
-        LD A,(CAPS_LOCK)
-        AND A
-        JR z,getkey_lookup
-        LD HL,CHARSET_UPPER
 
 getkey_lookup:
-        LD A,(RX_BYTE)
-        LD E,A
-        LD D,0
         ADD HL,DE
         LD A,(HL)
+        LD C,A
+        LD HL,CAPS_LOCK         ; the layers hold lower case: upper when exactly
+        LD A,(SHIFT_STATE)      ; one of SHIFT and CAPS is on
+        XOR (HL)
+        LD A,C
+        JR z,getkey_store
+        CP 'a'
+        JR c,getkey_store
+        CP 'z'+1
+        JR nc,getkey_store
+        AND 0xdf
+
+getkey_store:
         LD (IR_KEY_CHAR),A
         XOR A
         LD (SHIFT_STATE),A
@@ -6661,7 +6456,7 @@ editor_key_shift:
         LD HL,(STORE_CURSOR)
         LD A,(HL)
         CP TEXT_END
-        JP z,editor_loop
+        JR z,editor_loop_jr11
         LD A,(SHIFT_STATE)
         OR A
         JR z,shift_done
@@ -6671,7 +6466,7 @@ editor_key_shift:
         LD (MENU_MSG_PTR),HL
 
 shift_done:
-        JP editor_loop
+        JR editor_loop_jr11
 
 ; ---- editor_delete: 7F: delete the byte under the cursor
 editor_delete:
@@ -6682,12 +6477,9 @@ editor_delete:
         LD HL,(STORE_CURSOR)
         LD A,(HL)
         CP TEXT_END
-        JP z,editor_loop
-        CP MARK_LO
-        JR c,delete_do
-        CP MARK_HI+1
-        JR nc,delete_do
-        JP show_top_of_msg
+        JR z,editor_loop_jr11
+        CALL is_marker
+        JR c,show_top_of_msg_jr24
 
 delete_do:
         XOR A
@@ -6696,19 +6488,17 @@ delete_do:
         DEC HL
         LD (STORE_END),HL
         CALL unfetch_char
-        LD HL,(STORE_CURSOR)
-        INC HL
-        LD (MOVE_DST),HL
-        INC HL
-        LD (MOVE_SRC),HL
-        LD DE,(STORE_LIMIT)
-        EX DE,HL
+        LD HL,(STORE_END)       ; already one less: END - cursor = cursor+2 .. the old DA
+        LD DE,(STORE_CURSOR)
         OR A
         SBC HL,DE
         LD B,H
         LD C,L
-        LD HL,(MOVE_SRC)
-        LD DE,(MOVE_DST)
+        LD HL,(STORE_CURSOR)
+        INC HL
+        LD D,H
+        LD E,L
+        INC HL
         LDIR
         LD A,0xff
         LD (DISP_ON),A
@@ -6723,9 +6513,7 @@ cursor_right:
         JR z,cursor_right_done
         INC HL
         LD A,(HL)
-        CP MARK_LO
-        JR c,cursor_right_set
-        CP MARK_HI+1
+        CALL is_marker
         JR nc,cursor_right_set
         INC HL
 
@@ -6733,6 +6521,8 @@ cursor_right_set:
         LD (STORE_CURSOR),HL
 
 cursor_right_done:
+
+editor_loop_jr11:
         JP editor_loop
 
 ; ---- cursor_right_8: 0C
@@ -6749,28 +6539,27 @@ right8_loop:
         DJNZ right8_loop
 
 right8_done:
-        JP editor_loop
+        JR editor_loop_jr11
 
 ; ---- cursor_left: 08
 cursor_left:
-        LD IX,(STORE_CURSOR)
-        LD A,(IX+0)
-        CP MARK_LO
-        JR c,cursor_left_do
-        CP MARK_HI+1
-        JR nc,cursor_left_do
-        JP show_top_of_msg
+        LD HL,(STORE_CURSOR)
+        LD A,(HL)
+        CALL is_marker
+        JR c,show_top_of_msg_jr16
 
 cursor_left_do:
-        DEC IX
-        LD (STORE_CURSOR),IX
-        LD A,(IX+0)
-        CP MARK_LO
-        JP c,editor_loop
-        CP MARK_HI+1
-        JP nc,editor_loop
-        DEC IX
-        LD (STORE_CURSOR),IX
+        DEC HL
+        LD (STORE_CURSOR),HL
+        LD A,(HL)
+        CALL is_marker
+        JR nc,editor_loop_jr11
+        DEC HL
+        LD (STORE_CURSOR),HL
+
+show_top_of_msg_jr16:
+
+show_top_of_msg_jr24:
         JP show_top_of_msg
 
 ; ---- cursor_left_8: 0B
@@ -6778,23 +6567,18 @@ cursor_left_8:
         LD B,8
         LD HL,(STORE_CURSOR)
         LD A,(HL)
-        CP MARK_LO
-        JR c,left8_step
-        CP MARK_HI+1
-        JR nc,left8_step
-        JP show_top_of_msg
+        CALL is_marker
+        JR c,show_top_of_msg_jr16
 
 left8_step:
         DEC HL
         LD (STORE_CURSOR),HL
         LD A,(HL)
-        CP MARK_LO
-        JR c,cursor_left_8
-        CP MARK_HI+1
+        CALL is_marker
         JR nc,cursor_left_8
         DEC HL
         LD (STORE_CURSOR),HL
-        JP show_top_of_msg
+        JR show_top_of_msg_jr16
 
 ; ---- editor_insert: insert EDIT_KEY at the cursor (MEMORY FULL / 100 KEYS LEFT)
 editor_insert:
@@ -6806,9 +6590,7 @@ editor_insert:
         LD A,(HL)
         CP TEXT_END
         JR z,insert_done
-        CP MARK_LO
-        JR c,insert_do
-        CP MARK_HI+1
+        CALL is_marker
         JR nc,insert_do
         INC HL
         LD (STORE_CURSOR),HL
@@ -6830,24 +6612,24 @@ insert_do:
         LD (MENU_MSG_FLAG),A
         LD HL,MENU_STR_MEM_FULL
         LD (MENU_MSG_PTR),HL
+
+editor_loop_jr13:
         JP editor_loop
 
 insert_shift:
         LD HL,(STORE_TMP)
-        LD (STORE_END),HL
+        LD (STORE_END),HL       ; the DA moves up one
         CALL store_make_room
-        LD HL,(STORE_LIMIT)
-        LD (MOVE_DST),HL
-        DEC HL
-        LD (MOVE_SRC),HL
+        LD HL,(STORE_TMP)
         LD DE,(STORE_CURSOR)
         OR A
         SBC HL,DE
         LD B,H
-        LD C,L
-        LD HL,(MOVE_SRC)
-        LD DE,(MOVE_DST)
-        INC BC
+        LD C,L                  ; the cursor .. the old DA
+        LD HL,(STORE_TMP)
+        LD D,H
+        LD E,L
+        DEC HL
         LDDR
         LD HL,(STORE_CURSOR)
         LD A,(CUR_CHAR)
@@ -6863,7 +6645,7 @@ insert_shift:
         LD (MENU_MSG_PTR),HL
 
 insert_done:
-        JP editor_loop
+        JR editor_loop_jr13
 
 ; ---- store_make_room
 store_make_room:
@@ -6926,50 +6708,45 @@ editor_key_to_attr:
         XOR A
         LD (FUNC_PENDING),A
         LD A,(EDIT_KEY)
-        LD C,ATTR_DRAW
-        CP ATTR_GRAPH
+        LD HL,FUNC_TABLE
+
+func_search:
+        LD C,(HL)
+        INC HL
+        INC C                   ; FF: not a second function
+        JR z,func_cancel
+        DEC C
+        CP C
         JR z,func_store
-        INC C
-        CP ATTR_NORM
-        JR z,func_store
-        INC C
-        CP ATTR_PAUSE
-        JR z,func_store
-        LD C,ATTR_REM
-        CP ATTR_FLASH
-        JR z,func_store
-        LD C,6
-        CP ATTR_BOLD
-        JR z,func_store
-        LD C,ATTR_RAINBOW
-        CP ATTR_COLOR
-        JR z,func_store
-        CP 0x8f
-        JR z,func_store
-        LD C,'?'
-        CP 0x51
-        JR z,func_store
-        CP 0x71
-        JR z,func_store
-        LD C,'!'
-        CP 0x58
-        JR z,func_store
-        CP 0x78
-        JR z,func_store
-        LD C,0x5e
-        CP ATTR_MAGIC
-        JR z,func_store
-        LD C,ATTR_TINY
-        CP ATTR_BIG
-        JR z,func_store
+        INC HL
+        JR func_search
+
+func_cancel:
         POP HL
         POP HL
         JP editor_reshow
 
 func_store:
-        LD A,C
+        LD A,(HL)
         LD (EDIT_KEY),A
         RET
+
+; ---- FUNC_TABLE: key, the attribute FUNC turns it into
+FUNC_TABLE:
+        db ATTR_GRAPH, ATTR_DRAW
+        db ATTR_NORM, ATTR_DRAW+1
+        db ATTR_PAUSE, ATTR_DRAW+1+1
+        db ATTR_FLASH, ATTR_REM
+        db ATTR_BOLD, 6
+        db ATTR_COLOR, ATTR_RAINBOW
+        db 0x8f, ATTR_RAINBOW
+        db 0x51, '?'
+        db 0x71, '?'
+        db 0x58, '!'
+        db 0x78, '!'
+        db ATTR_MAGIC, 0x5e
+        db ATTR_BIG, ATTR_TINY
+        db 0xff
 
 ; ---- apply_color_prefix: COLOR n -> FG_IDX_TABLE, BGRND n -> BG_IDX_TABLE
 apply_color_prefix:
@@ -7042,11 +6819,8 @@ editor_redraw:
         JP nz,redraw_status
         LD HL,(STORE_CURSOR)
         LD A,(HL)
-        CP MARK_LO
-        JR c,redraw_window
-        CP MARK_HI+1
-        JR nc,redraw_window
-        JP redraw_status
+        CALL is_marker
+        JP c,redraw_status
 
 redraw_window:
         LD DE,0x15
@@ -7075,10 +6849,12 @@ redraw_loop:
         JR nz,redraw_classify
         LD A,(REDRAW_MAGIC)
         AND A
-        JP z,redraw_char_check
+        JR z,redraw_char_check_jr18
         XOR A
         LD (FORCE_BOLD),A
         LD (FONT_MODE),A
+
+redraw_char_check_jr18:
         JP redraw_char_check
 
 redraw_classify:
@@ -7086,30 +6862,30 @@ redraw_classify:
         JR nz,redraw_high
         AND 0x60
         JR z,redraw_attr
-        JP redraw_char_check
+        JR redraw_char_check_jr18
 
 redraw_high:
         LD A,(CUR_CHAR)
         CP 0x94
         JR c,redraw_attr
         CP 0x9f
-        JP c,redraw_char_check
+        JR c,redraw_char_check_jr18
         AND 0xf0
         CP 0xc0
-        JP z,redraw_char_check
+        JR z,redraw_char_check_jr18
         CP 0xe0
-        JP z,redraw_char_check
+        JR z,redraw_char_check_jr18
         CP 0xd0
-        JP z,redraw_char_check
+        JR z,redraw_char_check_jr18
         CP GRAPH_BASE
-        JP z,redraw_char_check
+        JR z,redraw_char_check_jr18
 
 redraw_attr:
         LD A,(CUR_CHAR)
         CP ATTR_COLOR
-        JP z,redraw_char_check
+        JR z,redraw_char_check_jr18
         CP ATTR_BGRND
-        JP z,redraw_char_check
+        JR z,redraw_char_check_jr18
         CP ATTR_MAGIC_OFF
         JR nz,redraw_attr2
         XOR A
@@ -7151,17 +6927,14 @@ redraw_not_flash:
 redraw_not_italic:
         CP ATTR_BOLD
         JR nz,redraw_not_bold
-        XOR A
-        SET 1,A
+        LD A,2
         LD (FONT_MODE),A
         JR redraw_label_check
 
 redraw_not_bold:
         CP ATTR_BIG
         JR nz,redraw_not_big
-        XOR A
-        SET 1,A
-        SET 3,A
+        LD A,10
         LD (FONT_MODE),A
         JR redraw_label_check
 
@@ -7196,42 +6969,49 @@ redraw_left_attr:
         LD (FORCE_BOLD),A
 
 redraw_label_check:
-        LD HL,(REDRAW_PTR)
-        LD DE,(REDRAW_FROM)
-        OR A
-        EX DE,HL
-        SBC HL,DE
-        EX DE,HL
-        JR c,redraw_show_label
-        JR z,redraw_show_label
-        JR redraw_next
+        CALL redraw_in_window
+        JR c,redraw_next
 
 redraw_show_label:
-        LD HL,ATTR_LABEL_TABLE
         LD A,(CUR_CHAR)
-        LD E,A
-        LD D,0
-        SLA E
-        RL D
-        ADD HL,DE
-        LD E,(HL)
+        AND 0xf8
+        CP SPEED_BASE
+        JR z,redraw_speed_label
+        LD A,(CUR_CHAR)
+        LD D,A
+        LD HL,LABELS
+
+label_search:
+        LD A,(HL)
         INC HL
-        LD D,(HL)
-        EX DE,HL
-        CALL menu_show_text
+        INC A                   ; FF: the end, nothing to show
+        JR z,redraw_next
+        DEC A
+        CP D
+        JR z,label_found
+        XOR A
+        LD BC,0x10              ; skip the text and its NUL
+        CPIR
+        JR label_search
+
+label_found:
+        CALL show_label
+        JR redraw_next
+
+redraw_speed_label:
+        LD HL,STR_S
+        CALL show_label
         LD A,(CUR_CHAR)
+        AND 7
+        OR '0'
+        CALL glyph_put_next
+        LD HL,STR_CLOSE
+        CALL menu_show_text
         JR redraw_next
 
 redraw_char_check:
-        LD HL,(REDRAW_PTR)
-        LD DE,(REDRAW_FROM)
-        OR A
-        EX DE,HL
-        SBC HL,DE
-        EX DE,HL
-        JR c,redraw_char
-        JR z,redraw_char
-        JR redraw_next
+        CALL redraw_in_window
+        JR c,redraw_next
 
 redraw_char:
         XOR A
@@ -7325,21 +7105,20 @@ magicmsg_digits:
         JR status_shift_msg
 
 status_show:
-        CALL menu_show_text
+        CALL show_label
 
 status_shift_msg:
         LD A,(SHIFT_LABEL)
         AND A
         JR z,status_menu_msg
         LD HL,(MENU_MSG_PTR)
-        CALL menu_show_text
+        CALL show_label
 
 status_menu_msg:
         LD A,(MENU_MSG_FLAG)
         OR A
         JR z,redraw_finish
         LD HL,(MENU_MSG_PTR)
-        INC HL
         CALL menu_show_text
 
 redraw_finish:
@@ -7352,9 +7131,7 @@ redraw_finish:
         LD (MENU_MSG_FLAG),A
         LD HL,(STORE_CURSOR)
         LD A,(HL)
-        CP MARK_LO
-        JR c,redraw_again
-        CP MARK_HI+1
+        CALL is_marker
         JR nc,redraw_again
         POP HL
         JP show_top_of_msg
@@ -7365,6 +7142,14 @@ redraw_again:
 redraw_ret:
         LD A,0xff
         LD (DISP_ON),A
+        RET
+
+; ---- redraw_in_window: CY if the byte at REDRAW_PTR lies before REDRAW_FROM (not shown)
+redraw_in_window:
+        LD HL,(REDRAW_PTR)
+        LD DE,(REDRAW_FROM)
+        OR A
+        SBC HL,DE
         RET
 
 ; ---- redraw_hold: let one frame out, then hold 0x50 frames
@@ -7384,11 +7169,7 @@ hold_wait_row2:
         LD A,(CFG_HOLD)         ; P35
         LD (FRAME_DELAY),A
 
-hold_wait_frames:
-        CALL pkt_poll
-        LD A,(FRAME_DELAY)
-        AND A
-        JR nz,hold_wait_frames
+        CALL wait_frame_delay
         RET
 
 ; ---- menu_prompt: HL = string: start a fresh frame and show it
@@ -7426,6 +7207,14 @@ showtext_done:
         LD (TINY_MODE),A
         RET
 
+; ---- show_label: the bracket glyph 15, then the text at HL
+show_label:
+        PUSH HL
+        LD HL,STR_BRACKET
+        CALL menu_show_text
+        POP HL
+        JR menu_show_text
+
 ; ---- fb_rewind_window: FB_COL = FB_COLPTR - 86 (ring wrap)
 fb_rewind_window:
         LD HL,(FB_COLPTR)
@@ -7437,11 +7226,41 @@ fb_rewind_window:
         XOR A
         SBC HL,DE
         RET nc
-        LD DE,FB_COLPTR
+        LD DE,FRAMEBUF_END
         ADD HL,DE
         LD (FB_COL),HL
 
 rewind_ret:
+        RET
+
+; ---- dispatch: A against the table that follows the CALL (DISP key, target;
+;      FF ends it). A match jumps to its target with A kept and Z set; with no
+;      match the code after the table runs. B is lost.
+dispatch:
+        EX (SP),HL              ; HL = the table, the caller's HL under it
+        LD B,A
+
+dispatch_loop:
+        LD A,(HL)
+        INC HL
+        INC A                   ; FF: the end
+        JR z,dispatch_end
+        DEC A
+        CP B
+        JR z,dispatch_found
+        INC HL
+        INC HL
+        JR dispatch_loop
+
+dispatch_found:
+        LD A,(HL)
+        INC HL
+        LD H,(HL)
+        LD L,A
+
+dispatch_end:
+        LD A,B
+        EX (SP),HL              ; the caller's HL back; the destination on the stack
         RET
 
 ; ---- pkt_process_end
@@ -7497,9 +7316,7 @@ pkt_entry_nodone:
 pkt_cursor_in_store:
         LD HL,(STORE_CURSOR)
         LD A,(HL)
-        CP MARK_LO
-        JR c,pkt_find_marker
-        CP MARK_HI+1
+        CALL is_marker
         JR nc,pkt_find_marker
         DEC HL
         LD (STORE_CURSOR),HL
@@ -7516,11 +7333,8 @@ pkt_find_marker:
 
 pkt_marker_loop:
         LD A,(HL)
-        CP MARK_LO
-        JR c,pkt_marker_back
-        CP MARK_HI+1
-        JR nc,pkt_marker_back
-        JR pkt_set_ins
+        CALL is_marker
+        JR c,pkt_set_ins
 
 pkt_marker_back:
         DEC HL
@@ -7550,34 +7364,22 @@ pkt_byte_loop:
         CALL is_ignored_byte
         AND A
         JP z,pkt_next
-        CP CMD_SPEED
-        JP z,cmd_02_speed
-        CP CMD_CLEAR_ALL
-        JP z,cmd_03_clear_all
-        CP CMD_SEQUENCE
-        JP z,cmd_04_sequence
-        CP CMD_CHANNEL
-        JP z,cmd_09_channel
-        CP CMD_END
-        JP z,pkt_done_pop
-        CP CMD_DELETE_TEXT
-        JP z,cmd_0E_delete_text
-        CP CMD_FORE_IDX
-        JP z,cmd_15_fore_idx
-        CP CMD_BACK_IDX
-        JP z,cmd_16_back_idx
-        CP CMD_SET_TIME
-        JP z,cmd_17_set_time
-        CP CMD_COLOR_A0
-        JP z,cmd_1E_color_A0
-        CP CMD_APPEND
-        JP z,cmd_B3_append
-        CP CMD_QUERY
-        JP z,cmd_B4_query
-        CP CMD_OTA
-        JP z,cmd_B5_ota
-        CP CMD_CONFIG
-        JP z,cmd_B6_config
+        CALL dispatch
+        DKEY CMD_SPEED, cmd_02_speed
+        DKEY CMD_CLEAR_ALL, cmd_03_clear_all
+        DKEY CMD_SEQUENCE, cmd_04_sequence
+        DKEY CMD_CHANNEL, cmd_09_channel
+        DKEY CMD_END, pkt_done_pop
+        DKEY CMD_DELETE_TEXT, cmd_0E_delete_text
+        DKEY CMD_FORE_IDX, cmd_15_fore_idx
+        DKEY CMD_BACK_IDX, cmd_16_back_idx
+        DKEY CMD_SET_TIME, cmd_17_set_time
+        DKEY CMD_COLOR_A0, cmd_1E_color_A0
+        DKEY CMD_APPEND, cmd_B3_append
+        DKEY CMD_QUERY, cmd_B4_query
+        DKEY CMD_OTA, cmd_B5_ota
+        DKEY CMD_CONFIG, cmd_B6_config
+        db 0xff
 
 ; ---- pkt_insert_text: insert the plain text at the payload position into the
 ;      store after STORE_CURSOR. P21: the run of plain bytes that starts here
@@ -7819,40 +7621,15 @@ cmd_03_clear_all:
 cmd_0E_delete_text:
         LD A,(CHAN_LOCK)
         OR A
-        JP nz,pkt_next
+        JR nz,pkt_next_jr20
         LD HL,(INS_PTR)
         CALL pkt_note_edit
         DEC HL
         LD (STORE_CURSOR),HL
         INC HL
-        LD (MOVE_DST),HL
-        EX DE,HL
-        LD HL,(STORE_LIMIT)
-        OR A
-        SBC HL,DE
-        PUSH HL
-        POP BC
-        INC BC
-        EX DE,HL
-        LD A,3
-        CPIR
-        LD A,B
-        OR C
-        JP z,pkt_next
-        DEC HL
-        LD (MOVE_SRC),HL
-        EX DE,HL
-        LD HL,(STORE_END)       ; P21: move the store up to its DA, not the
-        INC HL                  ; whole RAM to STORE_LIMIT (15 K, 40 ms)
-        OR A
-        SBC HL,DE
-        LD B,H
-        LD C,L
-        INC BC
-        LD HL,(MOVE_SRC)
-        LD DE,(MOVE_DST)
-        LDIR
-        CALL store_finalize
+        CALL store_delete_text  ; a store without its 03 skips the command
+
+pkt_next_jr20:
         JP pkt_next
 
 ; ---- cmd_B4_query: B4 n: '0' rom id, '1' memory, '2' nop, '3' dump
@@ -8156,7 +7933,7 @@ ota_confirm:
         LD B,A
         CALL clock_bank         ; P31: the writer's NMI sync needs the source on
         CALL lib_page_writer
-        JP ota_status
+        JR ota_status_jr21
 
 ; ---- ota_begin: 'B' -> the idle bank's trailer page becomes FF, and the panel
 ;      shows UPDATING (held, not scrolled) through every restart until the
@@ -8179,6 +7956,8 @@ ota_write_trailer:
         LD B,A
         CALL clock_bank         ; P31
         CALL lib_page_writer
+
+ota_status_jr21:
         JP ota_status
 
 ; ---- ota_write: 'W' page crc data[64k] -> pages page..page+k-1 of the idle bank
@@ -8199,12 +7978,12 @@ ota_write:
         CP STUB_END/64
         LD B,A
         LD A,3
-        JP c,ota_status         ; the stub is never written over the air
+        JR c,ota_status_jr21         ; the stub is never written over the air
         LD A,C
         DEC A
         ADD A,B
         LD A,3
-        JP c,ota_status         ; past the end of the bank
+        JR c,ota_status_jr21         ; past the end of the bank
         LD A,C                  ; CRC of the data: 64 * C bytes
         RRCA
         RRCA
@@ -8217,7 +7996,7 @@ ota_write:
         OR A
         SBC HL,DE
         LD A,4
-        JP nz,ota_status
+        JR nz,ota_status_jr21
         LD A,(PKT_BUF+2)
         LD D,A                  ; DE = page * 64
         LD E,0
@@ -8241,7 +8020,7 @@ ota_write_loop:
         CALL lib_page_writer    ; HL, DE preserved
         POP BC
         OR A
-        JP nz,ota_status
+        JR nz,ota_status_jr21
         LD A,L
         ADD A,64
         LD L,A
@@ -8259,6 +8038,8 @@ ota_write_count:
         DEC C
         JR nz,ota_write_loop
         XOR A
+
+ota_status_jr22:
         JP ota_status
 
 ; ---- ota_finish: 'F' seq crc -> CRC the idle bank's app; on a match write its trailer
@@ -8298,7 +8079,7 @@ ota_finish_done:
         OR A
         SBC HL,DE
         LD A,4
-        JP nz,ota_status
+        JR nz,ota_status_jr22
         CALL ota_erase_buf
         LD (HL),'O'
         INC HL
@@ -8331,28 +8112,27 @@ cmd_1E_color_A0:
         AND 15
         OR GRAPH_BASE
         LD (CUR_CHAR),A
-        JP pkt_insert_one
+        JR pkt_insert_one_jr23
 
 ; ---- cmd_15_fore_idx: 15 n -> insert FG_IDX_TABLE[n]
 cmd_15_fore_idx:
         CALL pkt_next_byte
         LD HL,FG_IDX_TABLE
-        LD C,A
-        LD B,0
-        ADD HL,BC
-        LD A,(HL)
-        LD (CUR_CHAR),A
-        JP pkt_insert_one
+        JR idx_insert
 
 ; ---- cmd_16_back_idx: 16 n -> insert BG_IDX_TABLE[n]
 cmd_16_back_idx:
         CALL pkt_next_byte
         LD HL,BG_IDX_TABLE
+
+idx_insert:
         LD C,A
         LD B,0
         ADD HL,BC
         LD A,(HL)
         LD (CUR_CHAR),A
+
+pkt_insert_one_jr23:
         JP pkt_insert_one
 
 ; ---- cmd_17_set_time: 17 h h m m a: 4 ASCII digits -> CLK_H10..CLK_M1, a=Y/y -> AM else PM.
@@ -8393,7 +8173,7 @@ settime_store_pm:
         LD (NMI_COUNT),A
         LD A,0xff
         LD (CLK_RUN),A
-        JP pkt_next
+        JR pkt_next_jr19
 
 ; ---- pkt_next_byte: Fetch next payload byte (A); if none left, jump to pkt_process_done
 pkt_next_byte:
@@ -8415,7 +8195,7 @@ cmd_02_speed:
         AND 7
         OR SPEED_BASE
         LD (CUR_CHAR),A
-        JP pkt_insert_one
+        JR pkt_insert_one_jr23
 
 ; ---- cmd_B6_config (P35): B6 index value -> the configuration block. The
 ;      signature, the address and the sum are not writable; CFG_FLAGS keeps its
@@ -8452,7 +8232,7 @@ cfg_store:
         CALL cfg_seal
 
 cfg_cmd_done:
-        JP pkt_next
+        JR pkt_next_jr19
 
 ; ---- cmd_B3_append: B3: move STORE_CURSOR to end of current channel.
 ;      B11: stock stepped back a second time when the byte before the 03 was a
@@ -8470,6 +8250,8 @@ append_find_end:
 append_seat:
         DEC HL                  ; the byte before the 03: last text byte, or the
         LD (STORE_CURSOR),HL    ; marker's last byte when the channel is empty, as 0E seats it
+
+pkt_next_jr19:
         JP pkt_next
 
 ; ---- cmd_09_channel: 09 d d: select channel (2 ASCII digits, 0-99) ; channel 100 sets CHAN_LOCK
@@ -8486,44 +8268,14 @@ cmd_09_channel:
         LD E,A
 
 select_chan_common:
-        PUSH DE
-        CALL chan_select
-        POP DE
-        LD (INS_PTR),HL
-        DEC HL
-        DEC HL
-        LD (STORE_CURSOR),HL
-        PUSH DE
-        CALL clear_chan_lock
-        POP DE
-        LD A,E
-        CP CHAN_DEMO
-        JR nz,select_chan_done
-        LD (CHAN_LOCK),A
-
-select_chan_done:
-        JP pkt_next
+        CALL chan_open
+        JR pkt_next_jr19
 
 ; ---- cmd_04_sequence: 04 dd dd ... [D|d]: rebuild SEQ_LIST from 2-digit channel numbers
 cmd_04_sequence:
         LD A,0xff
         LD (PKT_SEQ_CHANGED),A  ; P27: pkt_done_continue recounts the empty channels
-        LD HL,SEQ_LIST
-        XOR A
-        LD B,CHANNELS
-
-seq_default_fill:
-        LD (HL),A
-        INC HL
-        INC A
-        DJNZ seq_default_fill
-        LD (HL),0xff
-        INC HL
-        LD (HL),0xff
-        INC HL
-        LD (HL),0xff
-        INC HL
-        LD (HL),0xff
+        CALL seq_list_default
         LD HL,SEQ_LIST
         LD (SEQ_PTR),HL
         LD B,SEQ_LIST_LEN-1
@@ -8536,9 +8288,9 @@ seq_pair_loop:
         JR z,seq_pair_demo
         LD (CUR_CHAR),A
         CP '9'+1
-        JP nc,pkt_next
+        JR nc,pkt_next_jr19
         CP '0'
-        JP c,pkt_next
+        JR c,pkt_next_jr19
         AND 15
         LD (CHAN_D10),A
         CALL pkt_next_byte
@@ -8548,9 +8300,9 @@ seq_pair_loop:
         JR z,seq_pair_demo
         LD (CUR_CHAR),A
         CP '9'+1
-        JP nc,pkt_next
+        JR nc,pkt_next_jr19
         CP '0'
-        JP c,pkt_next
+        JR c,pkt_next_jr19
         AND 15
         LD (CHAN_D1),A
         PUSH BC
@@ -8621,215 +8373,80 @@ plain_no:
         OR A
         RET
 
-; ---- data 2d61-2ff2: 16-bit pointers/data for big glyphs & graphics (0x2E00-0x2FF0)
 ; ============================================================================
-;  Editor label tables (2D61-2FF2). Previously disassembled as an unnamed
-;  "GLYPH_PTR_TABLE" of raw hex; it holds no glyph pointers. Each table maps
-;  a message byte to the text the on-sign editor shows for it, which is where
-;  the names below come from - they are the sign's own words, not guesses.
+;  Editor labels: the text the editor shows for an attribute byte, drawn by
+;  show_label between the bracket glyphs 15 and 16 (the four a digit follows,
+;  SPEED COLOR BGRND GRAPH, carry no 16). They are the sign's own words.
+;  LABELS is one list searched by redraw_show_label: a key byte, the text, a
+;  NUL; FF ends it. Speeds F0-F7 are drawn as S plus the digit. Stock indexed
+;  four pointer tables, 594 bytes with their strings, for the same text.
 ; ============================================================================
-        db 0x00
-
-; ---- ATTR_LABEL_TABLE: indexed by attribute byte 00-1F; 0000 = no label
-ATTR_LABEL_TABLE:
-        dw 0
-        dw STR_SPEED               ; 01  .SPEED
-        dw 0
-        dw STR_END                 ; 03  .END.
-        dw MENU_STR_SEQ_MSG        ; 04   SEQ MSG?
-        dw 0
-        dw STR_HALT                ; 06  .HALT.
-        dw STR_BEEP                ; 07  .BEEP.
-        dw 0
-        dw MENU_STR_PROG_MSG       ; 09   PROG MSG?
-        dw 0
-        dw 0
-        dw 0
-        dw 0
-        dw 0
-        dw STR_RIGHT               ; 0f  .RIGHT.
-        dw STR_BIG                 ; 10  .BIG.
-        dw STR_NORM                ; 11  .NORM.
-        dw STR_BOLD                ; 12  .BOLD.
-        dw STR_ITALIC              ; 13  .ITALIC.
-        dw STR_FLASH               ; 14  .FLASH.
-        dw STR_COLOR               ; 15  .COLOR
-        dw STR_BGRND               ; 16  .BGRND
-        dw 0
-        dw STR_LEFT                ; 18  .LEFT.
-        dw STR_PAUSE               ; 19  .PAUSE.
-        dw STR_UP                  ; 1a  .UP.
-        dw STR_DOWN                ; 1b  .DOWN.
-        dw 0
-        dw STR_SHIFT               ; 1d  .SHIFT.
-        dw STR_GRAPH               ; 1e  .GRAPH
-        dw STR_MAGIC               ; 1f  .MAGIC.
-
-; ---- The lookup is ATTR_LABEL_TABLE + 2*attr for attributes 00-1F and colors
-;      80-9F, so COLOR_NAME_TABLE must sit at +0100; the 20-7F slots in between
-;      are never indexed and hold label strings (P17: stock parked eleven dead
-;      "TOP OF MSG n" strings here). The ds enforces the offset.
-STR_BEEP:
-        db 0x15,"BEEP",0x16,0x00
-STR_RIGHT:
-        db 0x15,"RIGHT",0x16,0x00
-        db 0x00
-
-STR_COLOR:
-        db 0x15,"COLOR",0x00
-STR_BGRND:
-        db 0x15,"BGRND",0x00
-STR_NORM:
-        db 0x15,"NORM",0x16,0x00
-STR_BOLD:
-        db 0x15,"BOLD",0x16,0x00
-STR_DRAW:
-        db 0x15,"DRAW",0x16,0x00
-STR_THIN:
-        db 0x15,"THIN",0x16,0x00
-STR_WAIT:
-        db 0x15,"WAIT",0x16,0x00
-STR_FUNC:
-        db 0x15,"FUNC",0x00
-STR_EURO:
-        db 0x15,"EURO",0x00
-STR_REM:
-        db 0x15,"REM",0x16,0x00
-STR_BIG:
-        db 0x15,"BIG",0x16,0x00
-STR_SHIFT:
-        db 0x15,"SHIFT",0x16,0x00
-STR_RAINBOW:
-        db 0x15,"RAINBOW",0x16,0x00
-STR_MAGIC_OFF:
-        db 0x15,"MAGIC OFF",0x16,0x00
-STR_PAUSE:
-        db 0x15,"PAUSE",0x16,0x00
-STR_HOLD:
-        db 0x15,"HOLD",0x16,0x00
-STR_HALT:
-        db 0x15,"HALT",0x16,0x00
-STR_UP:
-        db 0x15,"UP",0x16,0x00
-STR_DOWN:
-        db 0x15,"DOWN",0x16,0x00
+LABELS:
+        db TEXT_END,"END"
+STR_CLOSE:
+        db 0x16,0x00            ; also the closing bracket of a speed label
+        db 0x06,"HALT",0x16,0x00
+        db 0x07,"BEEP",0x16,0x00
+        db 0x0f,"RIGHT",0x16,0x00
+        db ATTR_BIG,"BIG",0x16,0x00
+        db ATTR_NORM,"NORM",0x16,0x00
+        db ATTR_BOLD,"BOLD",0x16,0x00
+        db ATTR_ITALIC,"ITALIC",0x16,0x00
+        db ATTR_FLASH,"FLASH",0x16,0x00
+        db ATTR_LEFT,"LEFT",0x16,0x00
+        db ATTR_PAUSE,"PAUSE",0x16,0x00
+        db ATTR_UP,"UP",0x16,0x00
+        db ATTR_DOWN,"DOWN",0x16,0x00
+        db ATTR_MAGIC,"MAGIC",0x16,0x00
+        db COLOR_BASE+0,"BLACK",0x16,0x00
+        db COLOR_BASE+1,"D-GRE",0x16,0x00
+        db COLOR_BASE+2,"M-GRE",0x16,0x00
+        db COLOR_BASE+3,"GREEN",0x16,0x00
+        db COLOR_BASE+4,"D-RED",0x16,0x00
+        db COLOR_BASE+5,"D-YEL",0x16,0x00
+        db COLOR_BASE+6,"D-LIM",0x16,0x00
+        db COLOR_BASE+7,"LIME",0x16,0x00
+        db COLOR_BASE+8,"M-RED",0x16,0x00
+        db COLOR_BASE+9,"D-ORA",0x16,0x00
+        db COLOR_BASE+10,"M-YEL",0x16,0x00
+        db COLOR_BASE+11,"LEMON",0x16,0x00
+        db COLOR_BASE+12,"RED",0x16,0x00
+        db COLOR_BASE+13,"ORANGE",0x16,0x00
+        db COLOR_BASE+14,"GOLD",0x16,0x00
+        db COLOR_BASE+15,"YELLOW",0x16,0x00
+        db BGRND_BASE+0,"B-BLK",0x16,0x00
+        db BGRND_BASE+1,"B-RED",0x16,0x00
+        db BGRND_BASE+2,"B-GRE",0x16,0x00
+        db BGRND_BASE+3,"B-YEL",0x16,0x00
+        db ATTR_REM,"REM",0x16,0x00
+        db ATTR_DRAW,"DRAW",0x16,0x00
+        db ATTR_THIN,"THIN",0x16,0x00
+        db ATTR_WAIT,"WAIT",0x16,0x00
+        db ATTR_HOLD,"HOLD",0x16,0x00
+        db ATTR_RAINBOW,"RAINBOW",0x16,0x00
+        db ATTR_MAGIC_OFF,"MAGIC OFF",0x16,0x00
+        db ATTR_TINY,"TINY",0x16,0x00
+        db 0xff
+; ---- the status line's labels and the SHIFT indicator (through MENU_MSG_PTR)
+STR_S:
+        db "S",0x00
 STR_SPEED:
-        db 0x15,"SPEED ",0x00
+        db "SPEED ",0x00
 STR_GRAPH:
-        db 0x15,"GRAPH ",0x00
-STR_MAGIC:
-        db 0x15,"MAGIC",0x16,0x00
+        db "GRAPH ",0x00
+STR_COLOR:
+        db "COLOR",0x00
+STR_BGRND:
+        db "BGRND",0x00
+STR_FUNC:
+        db "FUNC",0x00
+STR_EURO:
+        db "EURO",0x00
+STR_SHIFT:
+        db "SHIFT",0x16,0x00
+STR_BRACKET:
+        db 0x15,0x00
 
-STR_C_BLACK:
-        db 0x15,"BLACK",0x16,0x00
-STR_SPEED_0:
-        db 0x15,"S0",0x16,0x00
-        ds ATTR_LABEL_TABLE+0x100-$,0
-
-; ---- COLOR_NAME_TABLE: indexed by color code 80-8F fg, 90-9F bg; 0000 = no label
-COLOR_NAME_TABLE:
-        dw STR_C_BLACK             ; 00  .BLACK.
-        dw STR_C_D_GRE             ; 01  .D-GRE.
-        dw STR_C_M_GRE             ; 02  .M-GRE.
-        dw STR_C_GREEN             ; 03  .GREEN.
-        dw STR_C_D_RED             ; 04  .D-RED.
-        dw STR_C_D_YEL             ; 05  .D-YEL.
-        dw STR_C_D_LIM             ; 06  .D-LIM.
-        dw STR_C_LIME              ; 07  .LIME.
-        dw STR_C_M_RED             ; 08  .M-RED.
-        dw STR_C_D_ORA             ; 09  .D-ORA.
-        dw STR_C_M_YEL             ; 0a  .M-YEL.
-        dw STR_C_LEMON             ; 0b  .LEMON.
-        dw STR_C_RED               ; 0c  .RED.
-        dw STR_C_ORANGE            ; 0d  .ORANGE.
-        dw STR_C_GOLD              ; 0e  .GOLD.
-        dw STR_C_YELLOW            ; 0f  .YELLOW.
-        dw STR_B_BLK               ; 10  .B-BLK.
-        dw STR_B_RED               ; 11  .B-RED.
-        dw STR_B_GRE               ; 12  .B-GRE.
-        dw STR_B_YEL               ; 13  .B-YEL.
-        dw STR_B_BLK               ; 14  .B-BLK.
-        dw STR_B_RED               ; 15  .B-RED.
-        dw STR_B_GRE               ; 16  .B-GRE.
-        dw STR_B_YEL               ; 17  .B-YEL.
-        dw STR_B_BLK               ; 18  .B-BLK.
-        dw STR_B_RED               ; 19  .B-RED.
-        dw STR_B_GRE               ; 1a  .B-GRE.
-        dw STR_B_YEL               ; 1b  .B-YEL.
-        dw STR_B_BLK               ; 1c  .B-BLK.
-        dw STR_B_RED               ; 1d  .B-RED.
-        dw STR_B_GRE               ; 1e  .B-GRE.
-        dw STR_B_YEL               ; 1f  .B-YEL.
-STR_B_BLK:
-        db 0x15,"B-BLK",0x16,0x00
-STR_B_RED:
-        db 0x15,"B-RED",0x16,0x00
-STR_B_YEL:
-        db 0x15,"B-YEL",0x16,0x00
-STR_B_GRE:
-        db 0x15,"B-GRE",0x16,0x00
-
-; ---- ATTR_LABEL_TABLE_B0: indexed by attribute byte B0-BF; 0000 = no label
-ATTR_LABEL_TABLE_B0:
-        dw STR_REM                 ; b0  .REM.
-        dw 0
-        dw 0
-        dw 0
-        dw 0
-        dw 0
-        dw 0
-        dw 0
-        dw STR_DRAW                ; b8  .DRAW.
-        dw STR_THIN                ; b9  .THIN.
-        dw STR_WAIT                ; ba  .WAIT.
-        dw STR_HOLD                ; bb  .HOLD.
-        dw STR_RAINBOW             ; bc  .RAINBOW.
-        dw STR_MAGIC_OFF           ; bd  .MAGIC OFF.
-        dw STR_TINY                ; be  .TINY.
-        dw 0
-STR_ITALIC:
-        db 0x15,"ITALIC",0x16,0x00
-STR_FLASH:
-        db 0x15,"FLASH",0x16,0x00
-STR_END:
-        db 0x15,"END",0x16,0x00
-        db 0x00
-STR_LEFT:
-        db 0x15,"LEFT",0x16,0x00
-        db 0x00
-
-
-; ---- ATTR_LABEL_TABLE_B0 + 2*(attr-B0): the D0-EF slots are never indexed (the
-;      editor's redraw treats D0/E0-class bytes as characters) and hold strings;
-;      SPEED_STR_TABLE (F0-F7) must sit at +0080.
-STR_C_D_GRE:
-        db 0x15,"D-GRE",0x16,0x00
-STR_C_M_GRE:
-        db 0x15,"M-GRE",0x16,0x00
-STR_C_GREEN:
-        db 0x15,"GREEN",0x16,0x00
-STR_C_D_RED:
-        db 0x15,"D-RED",0x16,0x00
-STR_C_D_YEL:
-        db 0x15,"D-YEL",0x16,0x00
-STR_C_D_LIM:
-        db 0x15,"D-LIM",0x16,0x00
-STR_C_LIME:
-        db 0x15,"LIME",0x16,0x00
-STR_C_M_RED:
-        db 0x15,"M-RED",0x16,0x00
-        ds ATTR_LABEL_TABLE_B0+0x80-$,0
-
-; ---- SPEED_STR_TABLE: indexed by speed 0-7 -> "S0".."S7"; 0000 = no label
-SPEED_STR_TABLE:
-        dw STR_SPEED_0                            ; 00  .S0.
-        dw STR_SPEED_1                            ; 01  .S1.
-        dw STR_SPEED_2                            ; 02  .S2.
-        dw STR_SPEED_3                            ; 03  .S3.
-        dw STR_SPEED_4                            ; 04  .S4.
-        dw STR_SPEED_5                            ; 05  .S5.
-        dw STR_SPEED_6                            ; 06  .S6.
-        dw STR_SPEED_7                            ; 07  .S7.
     IFDEF CC710
 ; Prompts plus their typed digits fit 59 columns; the right-aligned messages
 ; are padded to the window as on the CC784 (the factory CC710 wordings where it has them).
@@ -8850,13 +8467,13 @@ MENU_STR_PROG_MSG:
 MENU_STR_SEQ_MSG:
         db " SEQ? ",0x00
 MENU_STR_INVALID:
-        db 0x03,"  INVALID  ",0x00
+        db "  INVALID  ",0x00
 MENU_STR_MEM_FULL:
-        db 0x0a," MEM FULL ",0x00
+        db " MEM FULL ",0x00
 MENU_STR_100_KEYS:
-        db 0x05," 100 LEFT ",0x00
+        db " 100 LEFT ",0x00
 MENU_STR_SEQ_FULL:
-        db 0x03," SEQ FULL ",0x00
+        db " SEQ FULL ",0x00
 STR_MAGIC_MSG:                  ; the redraw adds the channel digits
         db "  MAGIC ",0x00
     ELSE
@@ -8877,263 +8494,263 @@ MENU_STR_PROG_MSG:
 MENU_STR_SEQ_MSG:
         db " SEQ MSG? ",0x00
 MENU_STR_INVALID:
-        db 0x03,"    INVALID    ",0x00
+        db "    INVALID    ",0x00
 MENU_STR_MEM_FULL:
-        db 0x0a," MEMORY FULL  ",0x00
+        db " MEMORY FULL  ",0x00
 MENU_STR_100_KEYS:
-        db 0x05," 100 KEYS LEFT ",0x00
+        db " 100 KEYS LEFT ",0x00
 MENU_STR_SEQ_FULL:
-        db 0x03," SEQUENCE FULL",0x00
+        db " SEQUENCE FULL",0x00
 STR_MAGIC_MSG:                  ; the redraw adds the channel digits
         db "    MAGIC MSG ",0x00
     ENDIF
-STR_C_D_ORA:
-        db 0x15,"D-ORA",0x16,0x00
-STR_C_M_YEL:
-        db 0x15,"M-YEL",0x16,0x00
-STR_C_LEMON:
-        db 0x15,"LEMON",0x16,0x00
-STR_C_RED:
-        db 0x15,"RED",0x16,0x00
-STR_C_ORANGE:
-        db 0x15,"ORANGE",0x16,0x00
-STR_C_GOLD:
-        db 0x15,"GOLD",0x16,0x00
-STR_C_YELLOW:
-        db 0x15,"YELLOW",0x16,0x00
-STR_SPEED_1:
-        db 0x15,"S1",0x16,0x00
-STR_SPEED_2:
-        db 0x15,"S2",0x16,0x00
-STR_SPEED_3:
-        db 0x15,"S3",0x16,0x00
-STR_SPEED_4:
-        db 0x15,"S4",0x16,0x00
-STR_SPEED_5:
-        db 0x15,"S5",0x16,0x00
-STR_SPEED_6:
-        db 0x15,"S6",0x16,0x00
-STR_SPEED_7:
-        db 0x15,"S7",0x16,0x00
-STR_TINY:
-        db 0x15,"TINY",0x16,0x00
 
-; ---- data 3135-382c: 8 bytes per glyph: 7 column bytes + width byte (see glyph_lookup)
+; ---- FONT: 191 glyphs of 1 to 7 columns, each stored at its width (glyph_addr
+;      finds one through FONT_BLOCK and FONT_WIDTH). Glyph i draws character i
+;      for 00-7F; 128-190 are the Euro layer's C0-CF, E0-EF, 90-9F and D0-DF.
+;      Stock kept 8 bytes a glyph, 7 columns and the width.
+FONT_BLOCK:                     ; the first column of glyphs 0, 8, 16 ...
+        dw FONT_G0,FONT_G8,FONT_G16,FONT_G24,FONT_G32,FONT_G40,FONT_G48,FONT_G56
+        dw FONT_G64,FONT_G72,FONT_G80,FONT_G88,FONT_G96,FONT_G104,FONT_G112,FONT_G120
+        dw FONT_G128,FONT_G136,FONT_G144,FONT_G152,FONT_G160,FONT_G168,FONT_G176,FONT_G184
+FONT_WIDTH:
+        db 7,7,7,6,7,5,5,7,6,7,7,7,5,7,7,7   ; glyphs 0-15
+        db 1,1,1,1,1,4,4,6,1,1,1,1,1,1,1,1   ; glyphs 16-31
+        db 5,4,3,5,5,7,6,1,3,3,5,5,3,4,4,7   ; glyphs 32-47
+        db 5,3,5,5,5,5,5,5,5,5,2,3,4,4,4,5   ; glyphs 48-63
+        db 5,5,5,5,5,5,5,5,5,3,5,5,5,5,5,5   ; glyphs 64-79
+        db 5,5,5,5,5,5,5,5,5,5,5,3,5,3,5,7   ; glyphs 80-95
+        db 6,5,5,5,5,5,4,5,5,1,5,4,1,5,5,5   ; glyphs 96-111
+        db 5,5,5,5,3,5,5,5,5,5,5,3,5,3,4,7   ; glyphs 112-127
+        db 5,5,5,5,5,5,5,5,5,5,7,7,5,5,5,5   ; glyphs 128-143
+        db 5,5,5,5,5,5,7,6,5,5,5,6,5,5,5,5   ; glyphs 144-159
+        db 5,5,5,5,5,5,5,5,5,5,5,5,5,5,2,1   ; glyphs 160-175
+        db 1,1,1,1,1,1,1,1,1,1,1,5,2,3,5   ; glyphs 176-190
 FONT:
-        db 0x1c,0x14,0x14,0x77,0x22,0x14,0x08,0x07           ; glyph   0 width 7
-        db 0x08,0x14,0x22,0x77,0x14,0x14,0x1c,0x07           ; glyph   1 width 7
-        db 0x30,0x70,0x38,0x34,0x3c,0x74,0x38,0x07           ; glyph   2 width 7
-        db 0x20,0x70,0x70,0x3f,0x02,0x04,0x00,0x06           ; glyph   3 width 6
-        db 0x08,0x1c,0x22,0x2a,0x22,0x1c,0x08,0x07           ; glyph   4 width 7
-        db 0x07,0x49,0x79,0x49,0x07,0x00,0x00,0x05           ; glyph   5 width 5
-        db 0x10,0x18,0x1c,0x18,0x10,0x00,0x00,0x05           ; glyph   6 width 5
-        db 0x08,0x1c,0x3e,0x7f,0x3e,0x1c,0x08,0x07           ; glyph   7 width 7
-        db 0x7f,0x7f,0x7f,0x7f,0x7f,0x00,0x00,0x06           ; glyph   8 width 6
-        db 0x1c,0x3e,0x7f,0x7f,0x3e,0x1c,0x00,0x07           ; glyph   9 width 7
-        db 0x04,0x7c,0x46,0x77,0x46,0x7c,0x04,0x07           ; glyph  10 width 7
-        db 0x10,0x30,0x54,0x56,0x5f,0x50,0x30,0x07           ; glyph  11 width 7
-        db 0x18,0x1e,0x7f,0x1e,0x18,0x00,0x00,0x05           ; glyph  12 width 5
-        db 0x2c,0x6e,0x6d,0x6f,0x6f,0x3e,0x1c,0x07           ; glyph  13 width 7
-        db 0x1c,0x22,0x41,0x4f,0x51,0x22,0x1c,0x07           ; glyph  14 width 7
-        db 0x20,0x3c,0x22,0x63,0x22,0x3c,0x20,0x07           ; glyph  15 width 7
-        db 0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01           ; glyph  16 width 1
-        db 0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01           ; glyph  17 width 1
-        db 0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01           ; glyph  18 width 1
-        db 0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01           ; glyph  19 width 1
-        db 0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01           ; glyph  20 width 1
-        db 0x00,0x00,0x08,0x1c,0x00,0x00,0x00,0x04           ; glyph  21 width 4
-        db 0x1c,0x08,0x00,0x00,0x00,0x00,0x00,0x04           ; glyph  22 width 4
-        db 0x7f,0x7f,0x7f,0x7f,0x7f,0x7f,0x00,0x06           ; glyph  23 width 6
-        db 0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01           ; glyph  24 width 1
-        db 0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01           ; glyph  25 width 1
-        db 0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01           ; glyph  26 width 1
-        db 0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01           ; glyph  27 width 1
-        db 0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01           ; glyph  28 width 1
-        db 0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01           ; glyph  29 width 1
-        db 0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01           ; glyph  30 width 1
-        db 0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01           ; glyph  31 width 1
-        db 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x05           ; glyph  32 width 5
-        db 0x5f,0x00,0x00,0x00,0x00,0x00,0x00,0x04           ; glyph  33 width 4
-        db 0x07,0x00,0x07,0x00,0x00,0x00,0x00,0x03           ; glyph  34 width 3
-        db 0x14,0x7f,0x14,0x7f,0x14,0x00,0x00,0x05           ; glyph  35 width 5
-        db 0x26,0x49,0x7f,0x49,0x32,0x00,0x00,0x05           ; glyph  36 width 5
-        db 0x42,0x25,0x12,0x08,0x24,0x52,0x21,0x07           ; glyph  37 width 7
-        db 0x36,0x49,0x49,0x56,0x20,0x50,0x00,0x06           ; glyph  38 width 6
-        db 0x07,0x00,0x00,0x00,0x00,0x00,0x00,0x01           ; glyph  39 width 1
-        db 0x1c,0x22,0x41,0x00,0x00,0x00,0x00,0x03           ; glyph  40 width 3
-        db 0x41,0x22,0x1c,0x00,0x00,0x00,0x00,0x03           ; glyph  41 width 3
-        db 0x2a,0x1c,0x7f,0x1c,0x2a,0x00,0x00,0x05           ; glyph  42 width 5
-        db 0x08,0x08,0x3e,0x08,0x08,0x00,0x00,0x05           ; glyph  43 width 5
-        db 0x40,0x30,0x30,0x00,0x00,0x00,0x00,0x03           ; glyph  44 width 3
-        db 0x08,0x08,0x08,0x08,0x00,0x00,0x00,0x04           ; glyph  45 width 4
-        db 0x60,0x60,0x00,0x00,0x00,0x00,0x00,0x04           ; glyph  46 width 4
-        db 0x40,0x20,0x10,0x08,0x04,0x02,0x01,0x07           ; glyph  47 width 7
-        db 0x3e,0x41,0x41,0x41,0x3e,0x00,0x00,0x05           ; glyph  48 width 5
-        db 0x41,0x7f,0x40,0x00,0x00,0x00,0x00,0x03           ; glyph  49 width 3
-        db 0x42,0x61,0x51,0x49,0x46,0x00,0x00,0x05           ; glyph  50 width 5
-        db 0x22,0x41,0x49,0x49,0x36,0x00,0x00,0x05           ; glyph  51 width 5
-        db 0x08,0x0c,0x0a,0x7f,0x08,0x00,0x00,0x05           ; glyph  52 width 5
-        db 0x2f,0x49,0x49,0x49,0x31,0x00,0x00,0x05           ; glyph  53 width 5
-        db 0x3c,0x4a,0x49,0x49,0x30,0x00,0x00,0x05           ; glyph  54 width 5
-        db 0x01,0x71,0x09,0x05,0x03,0x00,0x00,0x05           ; glyph  55 width 5
-        db 0x36,0x49,0x49,0x49,0x36,0x00,0x00,0x05           ; glyph  56 width 5
-        db 0x06,0x49,0x49,0x49,0x3e,0x00,0x00,0x05           ; glyph  57 width 5
-        db 0x6c,0x6c,0x00,0x00,0x00,0x00,0x00,0x02           ; glyph  58 width 2
-        db 0x40,0x6c,0x6c,0x00,0x00,0x00,0x00,0x03           ; glyph  59 width 3
-        db 0x08,0x14,0x22,0x41,0x00,0x00,0x00,0x04           ; glyph  60 width 4
-        db 0x14,0x14,0x14,0x14,0x00,0x00,0x00,0x04           ; glyph  61 width 4
-        db 0x41,0x22,0x14,0x08,0x00,0x00,0x00,0x04           ; glyph  62 width 4
-        db 0x02,0x01,0x51,0x09,0x06,0x00,0x00,0x05           ; glyph  63 width 5
-        db 0x3e,0x41,0x4f,0x49,0x2e,0x00,0x00,0x05           ; glyph  64 width 5
-        db 0x7e,0x09,0x09,0x09,0x7e,0x00,0x00,0x05           ; glyph  65 width 5
-        db 0x7f,0x49,0x49,0x49,0x36,0x00,0x00,0x05           ; glyph  66 width 5
-        db 0x3e,0x41,0x41,0x41,0x22,0x00,0x00,0x05           ; glyph  67 width 5
-        db 0x7f,0x41,0x41,0x41,0x3e,0x00,0x00,0x05           ; glyph  68 width 5
-        db 0x7f,0x49,0x49,0x49,0x41,0x00,0x00,0x05           ; glyph  69 width 5
-        db 0x7f,0x09,0x09,0x09,0x01,0x00,0x00,0x05           ; glyph  70 width 5
-        db 0x3e,0x41,0x41,0x51,0x32,0x00,0x00,0x05           ; glyph  71 width 5
-        db 0x7f,0x08,0x08,0x08,0x7f,0x00,0x00,0x05           ; glyph  72 width 5
-        db 0x41,0x7f,0x41,0x00,0x00,0x00,0x00,0x03           ; glyph  73 width 3
-        db 0x20,0x40,0x41,0x3f,0x01,0x00,0x00,0x05           ; glyph  74 width 5
-        db 0x7f,0x08,0x14,0x22,0x41,0x00,0x00,0x05           ; glyph  75 width 5
-        db 0x7f,0x40,0x40,0x40,0x40,0x00,0x00,0x05           ; glyph  76 width 5
-        db 0x7f,0x02,0x0c,0x02,0x7f,0x00,0x00,0x05           ; glyph  77 width 5
-        db 0x7f,0x02,0x04,0x08,0x7f,0x00,0x00,0x05           ; glyph  78 width 5
-        db 0x3e,0x41,0x41,0x41,0x3e,0x00,0x00,0x05           ; glyph  79 width 5
-        db 0x7f,0x09,0x09,0x09,0x06,0x00,0x00,0x05           ; glyph  80 width 5
-        db 0x3e,0x41,0x51,0x61,0x7e,0x00,0x00,0x05           ; glyph  81 width 5
-        db 0x7f,0x09,0x19,0x29,0x46,0x00,0x00,0x05           ; glyph  82 width 5
-        db 0x26,0x49,0x49,0x49,0x32,0x00,0x00,0x05           ; glyph  83 width 5
-        db 0x01,0x01,0x7f,0x01,0x01,0x00,0x00,0x05           ; glyph  84 width 5
-        db 0x3f,0x40,0x40,0x40,0x3f,0x00,0x00,0x05           ; glyph  85 width 5
-        db 0x1f,0x20,0x40,0x20,0x1f,0x00,0x00,0x05           ; glyph  86 width 5
-        db 0x3f,0x40,0x38,0x40,0x3f,0x00,0x00,0x05           ; glyph  87 width 5
-        db 0x63,0x14,0x08,0x14,0x63,0x00,0x00,0x05           ; glyph  88 width 5
-        db 0x07,0x08,0x70,0x08,0x07,0x00,0x00,0x05           ; glyph  89 width 5
-        db 0x61,0x51,0x49,0x45,0x43,0x00,0x00,0x05           ; glyph  90 width 5
-        db 0x7f,0x41,0x41,0x00,0x00,0x00,0x00,0x03           ; glyph  91 width 3
-        db 0x02,0x04,0x08,0x10,0x20,0x00,0x00,0x05           ; glyph  92 width 5
-        db 0x41,0x41,0x7f,0x00,0x00,0x00,0x00,0x03           ; glyph  93 width 3
-        db 0x04,0x02,0x7f,0x02,0x04,0x00,0x00,0x05           ; glyph  94 width 5
-        db 0x1c,0x22,0x41,0x4f,0x51,0x22,0x1c,0x07           ; glyph  95 width 7
-        db 0x60,0x5e,0x55,0x55,0x41,0x02,0x00,0x06           ; glyph  96 width 6
-        db 0x20,0x54,0x54,0x54,0x78,0x00,0x00,0x05           ; glyph  97 width 5
-        db 0x7f,0x44,0x44,0x44,0x38,0x00,0x00,0x05           ; glyph  98 width 5
-        db 0x38,0x44,0x44,0x44,0x44,0x00,0x00,0x05           ; glyph  99 width 5
-        db 0x38,0x44,0x44,0x44,0x7f,0x00,0x00,0x05           ; glyph 100 width 5
-        db 0x38,0x54,0x54,0x54,0x58,0x00,0x00,0x05           ; glyph 101 width 5
-        db 0x08,0x7e,0x09,0x02,0x00,0x00,0x00,0x04           ; glyph 102 width 4
-        db 0x38,0x44,0x44,0x54,0x74,0x00,0x00,0x05           ; glyph 103 width 5
-        db 0x7f,0x04,0x04,0x04,0x78,0x00,0x00,0x05           ; glyph 104 width 5
-        db 0x7a,0x00,0x00,0x00,0x00,0x00,0x00,0x01           ; glyph 105 width 1
-        db 0x20,0x40,0x44,0x3c,0x04,0x00,0x00,0x05           ; glyph 106 width 5
-        db 0x7f,0x10,0x28,0x44,0x00,0x00,0x00,0x04           ; glyph 107 width 4
-        db 0x7f,0x00,0x00,0x00,0x00,0x00,0x00,0x01           ; glyph 108 width 1
-        db 0x78,0x04,0x18,0x04,0x78,0x00,0x00,0x05           ; glyph 109 width 5
-        db 0x7c,0x08,0x04,0x04,0x78,0x00,0x00,0x05           ; glyph 110 width 5
-        db 0x38,0x44,0x44,0x44,0x38,0x00,0x00,0x05           ; glyph 111 width 5
-        db 0x7c,0x14,0x14,0x14,0x08,0x00,0x00,0x05           ; glyph 112 width 5
-        db 0x38,0x44,0x54,0x64,0x78,0x00,0x00,0x05           ; glyph 113 width 5
-        db 0x7c,0x08,0x04,0x04,0x08,0x00,0x00,0x05           ; glyph 114 width 5
-        db 0x48,0x54,0x54,0x54,0x24,0x00,0x00,0x05           ; glyph 115 width 5
-        db 0x04,0x3f,0x44,0x00,0x00,0x00,0x00,0x03           ; glyph 116 width 3
-        db 0x3c,0x40,0x40,0x40,0x3c,0x00,0x00,0x05           ; glyph 117 width 5
-        db 0x0c,0x30,0x40,0x30,0x0c,0x00,0x00,0x05           ; glyph 118 width 5
-        db 0x3c,0x40,0x30,0x40,0x3c,0x00,0x00,0x05           ; glyph 119 width 5
-        db 0x44,0x28,0x10,0x28,0x44,0x00,0x00,0x05           ; glyph 120 width 5
-        db 0x04,0x08,0x70,0x08,0x04,0x00,0x00,0x05           ; glyph 121 width 5
-        db 0x44,0x64,0x54,0x4c,0x44,0x00,0x00,0x05           ; glyph 122 width 5
-        db 0x08,0x36,0x41,0x00,0x00,0x00,0x00,0x03           ; glyph 123 width 3
-        db 0x40,0x40,0x40,0x40,0x40,0x00,0x00,0x05           ; glyph 124 width 5
-        db 0x41,0x36,0x08,0x00,0x00,0x00,0x00,0x03           ; glyph 125 width 3
-        db 0x08,0x04,0x08,0x04,0x00,0x00,0x00,0x04           ; glyph 126 width 4
-        db 0x08,0x08,0x08,0x08,0x2a,0x1c,0x08,0x07           ; glyph 127 width 7
-        db 0x78,0x15,0x16,0x14,0x78,0x00,0x00,0x05           ; glyph 128 width 5
-        db 0x20,0x55,0x56,0x54,0x78,0x00,0x00,0x05           ; glyph 129 width 5
-        db 0x1e,0x21,0x61,0x21,0x21,0x00,0x00,0x05           ; glyph 130 width 5
-        db 0x18,0x24,0x64,0x24,0x24,0x00,0x00,0x05           ; glyph 131 width 5
-        db 0x7c,0x56,0x55,0x56,0x44,0x00,0x00,0x05           ; glyph 132 width 5
-        db 0x7c,0x54,0x56,0x55,0x44,0x00,0x00,0x05           ; glyph 133 width 5
-        db 0x38,0x54,0x56,0x55,0x58,0x00,0x00,0x05           ; glyph 134 width 5
-        db 0x7c,0x55,0x56,0x54,0x44,0x00,0x00,0x05           ; glyph 135 width 5
-        db 0x38,0x55,0x56,0x54,0x58,0x00,0x00,0x05           ; glyph 136 width 5
-        db 0x38,0x56,0x55,0x56,0x58,0x00,0x00,0x05           ; glyph 137 width 5
-        db 0x78,0x0c,0x0a,0x7f,0x49,0x49,0x41,0x07           ; glyph 138 width 7
-        db 0x20,0x54,0x54,0x78,0x54,0x54,0x08,0x07           ; glyph 139 width 7
-        db 0x7c,0x09,0x11,0x21,0x7c,0x00,0x00,0x05           ; glyph 140 width 5
-        db 0x7c,0x09,0x05,0x05,0x78,0x00,0x00,0x05           ; glyph 141 width 5
-        db 0x3c,0x41,0x42,0x40,0x3c,0x00,0x00,0x05           ; glyph 142 width 5
-        db 0x78,0x15,0x14,0x15,0x78,0x00,0x00,0x05           ; glyph 143 width 5
-        db 0x20,0x55,0x54,0x55,0x78,0x00,0x00,0x05           ; glyph 144 width 5
-        db 0x38,0x45,0x44,0x45,0x38,0x00,0x00,0x05           ; glyph 145 width 5
-        db 0x30,0x4a,0x48,0x4a,0x30,0x00,0x00,0x05           ; glyph 146 width 5
-        db 0x3c,0x41,0x40,0x41,0x3c,0x00,0x00,0x05           ; glyph 147 width 5
-        db 0x78,0x14,0x15,0x14,0x78,0x00,0x00,0x05           ; glyph 148 width 5
-        db 0x20,0x54,0x55,0x54,0x78,0x00,0x00,0x05           ; glyph 149 width 5
-        db 0x40,0x3e,0x51,0x49,0x45,0x3e,0x01,0x07           ; glyph 150 width 7
-        db 0x40,0x3c,0x52,0x4a,0x3c,0x02,0x00,0x06           ; glyph 151 width 6
-        db 0x38,0x42,0x40,0x42,0x38,0x00,0x00,0x05           ; glyph 152 width 5
-        db 0x1c,0x22,0x7f,0x22,0x1c,0x00,0x00,0x05           ; glyph 153 width 5
-        db 0x07,0x08,0x7f,0x08,0x07,0x00,0x00,0x05           ; glyph 154 width 5
-        db 0x5c,0x62,0x01,0x01,0x62,0x5c,0x00,0x06           ; glyph 155 width 6
-        db 0x78,0x14,0x16,0x15,0x78,0x00,0x00,0x05           ; glyph 156 width 5
-        db 0x7f,0x25,0x25,0x25,0x1a,0x00,0x00,0x05           ; glyph 157 width 5
-        db 0x41,0x49,0x49,0x49,0x41,0x00,0x00,0x05           ; glyph 158 width 5
-        db 0x01,0x7f,0x01,0x7f,0x01,0x00,0x00,0x05           ; glyph 159 width 5
-        db 0x02,0x01,0x51,0x09,0x06,0x00,0x00,0x05           ; glyph 160 width 5
-        db 0x02,0x01,0x51,0x09,0x06,0x00,0x00,0x05           ; glyph 161 width 5
-        db 0x02,0x01,0x51,0x09,0x06,0x00,0x00,0x05           ; glyph 162 width 5
-        db 0x02,0x01,0x51,0x09,0x06,0x00,0x00,0x05           ; glyph 163 width 5
-        db 0x63,0x55,0x49,0x41,0x41,0x00,0x00,0x05           ; glyph 164 width 5
-        db 0x20,0x54,0x56,0x55,0x78,0x00,0x00,0x05           ; glyph 165 width 5
-        db 0x30,0x48,0x45,0x40,0x20,0x00,0x00,0x05           ; glyph 166 width 5
-        db 0x70,0x4c,0x43,0x4c,0x70,0x00,0x00,0x05           ; glyph 167 width 5
-        db 0x3e,0x49,0x49,0x49,0x3e,0x00,0x00,0x05           ; glyph 168 width 5
-        db 0x70,0x0c,0x03,0x0c,0x70,0x00,0x00,0x05           ; glyph 169 width 5
-        db 0x3e,0x40,0x42,0x41,0x3e,0x00,0x00,0x05           ; glyph 170 width 5
-        db 0x7f,0x01,0x01,0x01,0x01,0x00,0x00,0x05           ; glyph 171 width 5
-        db 0x3c,0x40,0x42,0x41,0x3c,0x00,0x00,0x05           ; glyph 172 width 5
-        db 0x3e,0x41,0x42,0x40,0x3e,0x00,0x00,0x05           ; glyph 173 width 5
-        db 0x00,0x7d,0x00,0x00,0x00,0x00,0x00,0x02           ; glyph 174 width 2
-        db 0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01           ; glyph 175 width 1
-        db 0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01           ; glyph 176 width 1
-        db 0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01           ; glyph 177 width 1
-        db 0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01           ; glyph 178 width 1
-        db 0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01           ; glyph 179 width 1
-        db 0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01           ; glyph 180 width 1
-        db 0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01           ; glyph 181 width 1
-        db 0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01           ; glyph 182 width 1
-        db 0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01           ; glyph 183 width 1
-        db 0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01           ; glyph 184 width 1
-        db 0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01           ; glyph 185 width 1
-        db 0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01           ; glyph 186 width 1
-        db 0x38,0x44,0x46,0x45,0x38,0x00,0x00,0x05           ; glyph 187 width 5
-        db 0x76,0x01,0x00,0x00,0x00,0x00,0x00,0x02           ; glyph 188 width 2
-        db 0x44,0x7e,0x45,0x00,0x00,0x00,0x00,0x03           ; glyph 189 width 3
-        db 0x30,0x48,0x4c,0x4a,0x30,0x00,0x00,0x05           ; glyph 190 width 5
+FONT_G0:
+        db 0x1c,0x14,0x14,0x77,0x22,0x14,0x08     ; glyph   0
+        db 0x08,0x14,0x22,0x77,0x14,0x14,0x1c     ; glyph   1
+        db 0x30,0x70,0x38,0x34,0x3c,0x74,0x38     ; glyph   2
+        db 0x20,0x70,0x70,0x3f,0x02,0x04          ; glyph   3
+        db 0x08,0x1c,0x22,0x2a,0x22,0x1c,0x08     ; glyph   4
+        db 0x07,0x49,0x79,0x49,0x07               ; glyph   5
+        db 0x10,0x18,0x1c,0x18,0x10               ; glyph   6
+        db 0x08,0x1c,0x3e,0x7f,0x3e,0x1c,0x08     ; glyph   7
+FONT_G8:
+        db 0x7f,0x7f,0x7f,0x7f,0x7f,0x00          ; glyph   8
+        db 0x1c,0x3e,0x7f,0x7f,0x3e,0x1c,0x00     ; glyph   9
+        db 0x04,0x7c,0x46,0x77,0x46,0x7c,0x04     ; glyph  10
+        db 0x10,0x30,0x54,0x56,0x5f,0x50,0x30     ; glyph  11
+        db 0x18,0x1e,0x7f,0x1e,0x18               ; glyph  12
+        db 0x2c,0x6e,0x6d,0x6f,0x6f,0x3e,0x1c     ; glyph  13
+        db 0x1c,0x22,0x41,0x4f,0x51,0x22,0x1c     ; glyph  14
+        db 0x20,0x3c,0x22,0x63,0x22,0x3c,0x20     ; glyph  15
+FONT_G16:
+        db 0x01                                   ; glyph  16
+        db 0x01                                   ; glyph  17
+        db 0x01                                   ; glyph  18
+        db 0x01                                   ; glyph  19
+        db 0x01                                   ; glyph  20
+        db 0x00,0x00,0x08,0x1c                    ; glyph  21
+        db 0x1c,0x08,0x00,0x00                    ; glyph  22
+        db 0x7f,0x7f,0x7f,0x7f,0x7f,0x7f          ; glyph  23
+FONT_G24:
+        db 0x01                                   ; glyph  24
+        db 0x01                                   ; glyph  25
+        db 0x01                                   ; glyph  26
+        db 0x01                                   ; glyph  27
+        db 0x01                                   ; glyph  28
+        db 0x01                                   ; glyph  29
+        db 0x01                                   ; glyph  30
+        db 0x01                                   ; glyph  31
+FONT_G32:
+        db 0x00,0x00,0x00,0x00,0x00               ; glyph  32
+        db 0x5f,0x00,0x00,0x00                    ; glyph  33
+        db 0x07,0x00,0x07                         ; glyph  34
+        db 0x14,0x7f,0x14,0x7f,0x14               ; glyph  35
+        db 0x26,0x49,0x7f,0x49,0x32               ; glyph  36
+        db 0x42,0x25,0x12,0x08,0x24,0x52,0x21     ; glyph  37
+        db 0x36,0x49,0x49,0x56,0x20,0x50          ; glyph  38
+        db 0x07                                   ; glyph  39
+FONT_G40:
+        db 0x1c,0x22,0x41                         ; glyph  40
+        db 0x41,0x22,0x1c                         ; glyph  41
+        db 0x2a,0x1c,0x7f,0x1c,0x2a               ; glyph  42
+        db 0x08,0x08,0x3e,0x08,0x08               ; glyph  43
+        db 0x40,0x30,0x30                         ; glyph  44
+        db 0x08,0x08,0x08,0x08                    ; glyph  45
+        db 0x60,0x60,0x00,0x00                    ; glyph  46
+        db 0x40,0x20,0x10,0x08,0x04,0x02,0x01     ; glyph  47
+FONT_G48:
+        db 0x3e,0x41,0x41,0x41,0x3e               ; glyph  48
+        db 0x41,0x7f,0x40                         ; glyph  49
+        db 0x42,0x61,0x51,0x49,0x46               ; glyph  50
+        db 0x22,0x41,0x49,0x49,0x36               ; glyph  51
+        db 0x08,0x0c,0x0a,0x7f,0x08               ; glyph  52
+        db 0x2f,0x49,0x49,0x49,0x31               ; glyph  53
+        db 0x3c,0x4a,0x49,0x49,0x30               ; glyph  54
+        db 0x01,0x71,0x09,0x05,0x03               ; glyph  55
+FONT_G56:
+        db 0x36,0x49,0x49,0x49,0x36               ; glyph  56
+        db 0x06,0x49,0x49,0x49,0x3e               ; glyph  57
+        db 0x6c,0x6c                              ; glyph  58
+        db 0x40,0x6c,0x6c                         ; glyph  59
+        db 0x08,0x14,0x22,0x41                    ; glyph  60
+        db 0x14,0x14,0x14,0x14                    ; glyph  61
+        db 0x41,0x22,0x14,0x08                    ; glyph  62
+        db 0x02,0x01,0x51,0x09,0x06               ; glyph  63
+FONT_G64:
+        db 0x3e,0x41,0x4f,0x49,0x2e               ; glyph  64
+        db 0x7e,0x09,0x09,0x09,0x7e               ; glyph  65
+        db 0x7f,0x49,0x49,0x49,0x36               ; glyph  66
+        db 0x3e,0x41,0x41,0x41,0x22               ; glyph  67
+        db 0x7f,0x41,0x41,0x41,0x3e               ; glyph  68
+        db 0x7f,0x49,0x49,0x49,0x41               ; glyph  69
+        db 0x7f,0x09,0x09,0x09,0x01               ; glyph  70
+        db 0x3e,0x41,0x41,0x51,0x32               ; glyph  71
+FONT_G72:
+        db 0x7f,0x08,0x08,0x08,0x7f               ; glyph  72
+        db 0x41,0x7f,0x41                         ; glyph  73
+        db 0x20,0x40,0x41,0x3f,0x01               ; glyph  74
+        db 0x7f,0x08,0x14,0x22,0x41               ; glyph  75
+        db 0x7f,0x40,0x40,0x40,0x40               ; glyph  76
+        db 0x7f,0x02,0x0c,0x02,0x7f               ; glyph  77
+        db 0x7f,0x02,0x04,0x08,0x7f               ; glyph  78
+        db 0x3e,0x41,0x41,0x41,0x3e               ; glyph  79
+FONT_G80:
+        db 0x7f,0x09,0x09,0x09,0x06               ; glyph  80
+        db 0x3e,0x41,0x51,0x61,0x7e               ; glyph  81
+        db 0x7f,0x09,0x19,0x29,0x46               ; glyph  82
+        db 0x26,0x49,0x49,0x49,0x32               ; glyph  83
+        db 0x01,0x01,0x7f,0x01,0x01               ; glyph  84
+        db 0x3f,0x40,0x40,0x40,0x3f               ; glyph  85
+        db 0x1f,0x20,0x40,0x20,0x1f               ; glyph  86
+        db 0x3f,0x40,0x38,0x40,0x3f               ; glyph  87
+FONT_G88:
+        db 0x63,0x14,0x08,0x14,0x63               ; glyph  88
+        db 0x07,0x08,0x70,0x08,0x07               ; glyph  89
+        db 0x61,0x51,0x49,0x45,0x43               ; glyph  90
+        db 0x7f,0x41,0x41                         ; glyph  91
+        db 0x02,0x04,0x08,0x10,0x20               ; glyph  92
+        db 0x41,0x41,0x7f                         ; glyph  93
+        db 0x04,0x02,0x7f,0x02,0x04               ; glyph  94
+        db 0x1c,0x22,0x41,0x4f,0x51,0x22,0x1c     ; glyph  95
+FONT_G96:
+        db 0x60,0x5e,0x55,0x55,0x41,0x02          ; glyph  96
+        db 0x20,0x54,0x54,0x54,0x78               ; glyph  97
+        db 0x7f,0x44,0x44,0x44,0x38               ; glyph  98
+        db 0x38,0x44,0x44,0x44,0x44               ; glyph  99
+        db 0x38,0x44,0x44,0x44,0x7f               ; glyph 100
+        db 0x38,0x54,0x54,0x54,0x58               ; glyph 101
+        db 0x08,0x7e,0x09,0x02                    ; glyph 102
+        db 0x38,0x44,0x44,0x54,0x74               ; glyph 103
+FONT_G104:
+        db 0x7f,0x04,0x04,0x04,0x78               ; glyph 104
+        db 0x7a                                   ; glyph 105
+        db 0x20,0x40,0x44,0x3c,0x04               ; glyph 106
+        db 0x7f,0x10,0x28,0x44                    ; glyph 107
+        db 0x7f                                   ; glyph 108
+        db 0x78,0x04,0x18,0x04,0x78               ; glyph 109
+        db 0x7c,0x08,0x04,0x04,0x78               ; glyph 110
+        db 0x38,0x44,0x44,0x44,0x38               ; glyph 111
+FONT_G112:
+        db 0x7c,0x14,0x14,0x14,0x08               ; glyph 112
+        db 0x38,0x44,0x54,0x64,0x78               ; glyph 113
+        db 0x7c,0x08,0x04,0x04,0x08               ; glyph 114
+        db 0x48,0x54,0x54,0x54,0x24               ; glyph 115
+        db 0x04,0x3f,0x44                         ; glyph 116
+        db 0x3c,0x40,0x40,0x40,0x3c               ; glyph 117
+        db 0x0c,0x30,0x40,0x30,0x0c               ; glyph 118
+        db 0x3c,0x40,0x30,0x40,0x3c               ; glyph 119
+FONT_G120:
+        db 0x44,0x28,0x10,0x28,0x44               ; glyph 120
+        db 0x04,0x08,0x70,0x08,0x04               ; glyph 121
+        db 0x44,0x64,0x54,0x4c,0x44               ; glyph 122
+        db 0x08,0x36,0x41                         ; glyph 123
+        db 0x40,0x40,0x40,0x40,0x40               ; glyph 124
+        db 0x41,0x36,0x08                         ; glyph 125
+        db 0x08,0x04,0x08,0x04                    ; glyph 126
+        db 0x08,0x08,0x08,0x08,0x2a,0x1c,0x08     ; glyph 127
+FONT_G128:
+        db 0x78,0x15,0x16,0x14,0x78               ; glyph 128
+        db 0x20,0x55,0x56,0x54,0x78               ; glyph 129
+        db 0x1e,0x21,0x61,0x21,0x21               ; glyph 130
+        db 0x18,0x24,0x64,0x24,0x24               ; glyph 131
+        db 0x7c,0x56,0x55,0x56,0x44               ; glyph 132
+        db 0x7c,0x54,0x56,0x55,0x44               ; glyph 133
+        db 0x38,0x54,0x56,0x55,0x58               ; glyph 134
+        db 0x7c,0x55,0x56,0x54,0x44               ; glyph 135
+FONT_G136:
+        db 0x38,0x55,0x56,0x54,0x58               ; glyph 136
+        db 0x38,0x56,0x55,0x56,0x58               ; glyph 137
+        db 0x78,0x0c,0x0a,0x7f,0x49,0x49,0x41     ; glyph 138
+        db 0x20,0x54,0x54,0x78,0x54,0x54,0x08     ; glyph 139
+        db 0x7c,0x09,0x11,0x21,0x7c               ; glyph 140
+        db 0x7c,0x09,0x05,0x05,0x78               ; glyph 141
+        db 0x3c,0x41,0x42,0x40,0x3c               ; glyph 142
+        db 0x78,0x15,0x14,0x15,0x78               ; glyph 143
+FONT_G144:
+        db 0x20,0x55,0x54,0x55,0x78               ; glyph 144
+        db 0x38,0x45,0x44,0x45,0x38               ; glyph 145
+        db 0x30,0x4a,0x48,0x4a,0x30               ; glyph 146
+        db 0x3c,0x41,0x40,0x41,0x3c               ; glyph 147
+        db 0x78,0x14,0x15,0x14,0x78               ; glyph 148
+        db 0x20,0x54,0x55,0x54,0x78               ; glyph 149
+        db 0x40,0x3e,0x51,0x49,0x45,0x3e,0x01     ; glyph 150
+        db 0x40,0x3c,0x52,0x4a,0x3c,0x02          ; glyph 151
+FONT_G152:
+        db 0x38,0x42,0x40,0x42,0x38               ; glyph 152
+        db 0x1c,0x22,0x7f,0x22,0x1c               ; glyph 153
+        db 0x07,0x08,0x7f,0x08,0x07               ; glyph 154
+        db 0x5c,0x62,0x01,0x01,0x62,0x5c          ; glyph 155
+        db 0x78,0x14,0x16,0x15,0x78               ; glyph 156
+        db 0x7f,0x25,0x25,0x25,0x1a               ; glyph 157
+        db 0x41,0x49,0x49,0x49,0x41               ; glyph 158
+        db 0x01,0x7f,0x01,0x7f,0x01               ; glyph 159
+FONT_G160:
+        db 0x02,0x01,0x51,0x09,0x06               ; glyph 160
+        db 0x02,0x01,0x51,0x09,0x06               ; glyph 161
+        db 0x02,0x01,0x51,0x09,0x06               ; glyph 162
+        db 0x02,0x01,0x51,0x09,0x06               ; glyph 163
+        db 0x63,0x55,0x49,0x41,0x41               ; glyph 164
+        db 0x20,0x54,0x56,0x55,0x78               ; glyph 165
+        db 0x30,0x48,0x45,0x40,0x20               ; glyph 166
+        db 0x70,0x4c,0x43,0x4c,0x70               ; glyph 167
+FONT_G168:
+        db 0x3e,0x49,0x49,0x49,0x3e               ; glyph 168
+        db 0x70,0x0c,0x03,0x0c,0x70               ; glyph 169
+        db 0x3e,0x40,0x42,0x41,0x3e               ; glyph 170
+        db 0x7f,0x01,0x01,0x01,0x01               ; glyph 171
+        db 0x3c,0x40,0x42,0x41,0x3c               ; glyph 172
+        db 0x3e,0x41,0x42,0x40,0x3e               ; glyph 173
+        db 0x00,0x7d                              ; glyph 174
+        db 0x01                                   ; glyph 175
+FONT_G176:
+        db 0x01                                   ; glyph 176
+        db 0x01                                   ; glyph 177
+        db 0x01                                   ; glyph 178
+        db 0x01                                   ; glyph 179
+        db 0x01                                   ; glyph 180
+        db 0x01                                   ; glyph 181
+        db 0x01                                   ; glyph 182
+        db 0x01                                   ; glyph 183
+FONT_G184:
+        db 0x01                                   ; glyph 184
+        db 0x01                                   ; glyph 185
+        db 0x01                                   ; glyph 186
+        db 0x38,0x44,0x46,0x45,0x38               ; glyph 187
+        db 0x76,0x01                              ; glyph 188
+        db 0x44,0x7e,0x45                         ; glyph 189
+        db 0x30,0x48,0x4c,0x4a,0x30               ; glyph 190
 
-; ---- CHAR_FLAGS: 256 bytes, indexed by character code. Bit 0 is tested by
-;      store_fix_bad_bytes (substitutes 0x3F for the character), bit 1 by the message
-;      scanners to decide whether a byte is printable text. Rendered as part
-;      of FONT by the original disassembly, but it is not glyph data - FONT
-;      holds glyphs 0..190 and this table begins immediately after.
+; ---- CHAR_FLAGS: four characters a byte, two bits each, the lowest character
+;      in the top bits: 0 printable text, 2 attribute, 3 invalid (store_repair
+;      turns it into '?'). Read through char_flags only.
 CHAR_FLAGS:
-        db 0x07,0x07,0x07,0x02,0x07,0x07,0x02,0x02,0x07,0x07,0x07,0x07,0x07,0x07,0x07,0x02   ; char 00-0f
-        db 0x02,0x02,0x02,0x02,0x02,0x00,0x00,0x00,0x02,0x02,0x02,0x02,0x07,0x07,0x07,0x02   ; char 10-1f
-        db 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00   ; char 20-2f
-        db 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00   ; char 30-3f
-        db 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00   ; char 40-4f
-        db 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00   ; char 50-5f
-        db 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00   ; char 60-6f
-        db 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00   ; char 70-7f
-        db 0x02,0x02,0x02,0x02,0x02,0x02,0x02,0x02,0x02,0x02,0x02,0x02,0x02,0x02,0x02,0x02   ; char 80-8f
-        db 0x02,0x02,0x02,0x02,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x07   ; char 90-9f
-        db 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00   ; char a0-af
-        db 0x02,0x07,0x07,0x07,0x07,0x07,0x07,0x07,0x00,0x02,0x02,0x02,0x02,0x02,0x02,0x07   ; char b0-bf
-        db 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00   ; char c0-cf
-        db 0x02,0x02,0x02,0x02,0x02,0x02,0x02,0x02,0x02,0x02,0x02,0x07,0x00,0x00,0x00,0x00   ; char d0-df
-        db 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00   ; char e0-ef
-        db 0x02,0x02,0x02,0x02,0x02,0x02,0x02,0x02,0x07,0x07,0x07,0x07,0x07,0x07,0x07,0x07   ; char f0-ff
+        db 0xfe,0xfa,0xff,0xfe,0xaa,0x80,0xaa,0xfe,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00   ; char 00-3f
+        db 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00   ; char 40-7f
+        db 0xaa,0xaa,0xaa,0xaa,0xaa,0x00,0x00,0x03,0x00,0x00,0x00,0x00,0xbf,0xff,0x2a,0xab   ; char 80-bf
+        db 0x00,0x00,0x00,0x00,0xaa,0xaa,0xab,0x00,0x00,0x00,0x00,0x00,0xaa,0xaa,0xff,0xff   ; char c0-ff
 
 ; ============================================================================
 ;  Key-position -> character/attribute tables, one per input layer. Indexed by
@@ -9141,8 +8758,11 @@ CHAR_FLAGS:
 ;  keypad_scan walks. Layer chosen at 0x23C1:
 ;
 ;      EURO_STATE  set      -> CHARSET_EURO
-;      SHIFT_STATE clear    -> CHARSET_LOWER  / CHARSET_UPPER   (by CAPS_LOCK)
-;      SHIFT_STATE set      -> CHARSET_UPPER2 / CHARSET_LOWER2  (by CAPS_LOCK)
+;      SHIFT_STATE clear    -> CHARSET_LOWER
+;      SHIFT_STATE set      -> CHARSET_LOWER2
+;
+;  Both layers are stored in lower case; getkey_lookup folds a-z to upper case
+;  when exactly one of SHIFT_STATE and CAPS_LOCK is on (stock kept four tables).
 ;
 ;  On the remote these are one key labeled UPPER/LOWER, whose shifted
 ;  function is EUROPE: unshifted it toggles CAPS_LOCK (0x216C), shifted it
@@ -9154,7 +8774,7 @@ CHAR_FLAGS:
 ;  glosses are the editor's own names, from ATTR_LABEL_TABLE.
 ; ============================================================================
 
-; ---- CHARSET_LOWER: unshifted, caps off
+; ---- CHARSET_LOWER: unshifted (upper case when CAPS_LOCK is on)
 CHARSET_LOWER:
         db "kf",0x12,"pa",0x0e,0x11,0x1e              ; 00-07  k f BOLD p a 0E NORM GRAPH
         db " ",0x7f,")%zwyt"                          ; 08-0f  SP 7F ) % z w y t
@@ -9165,29 +8785,7 @@ CHARSET_LOWER:
         db "ojbce",0x0d,0x07,0x15                     ; 30-37  o j b c e 0D BEEP COLOR
         db 0x08,0x0a,"1473ur"                         ; 38-3f  08 0A 1 4 7 3 u r
 
-; ---- CHARSET_UPPER: unshifted, caps on
-CHARSET_UPPER:
-        db "KF",0x12,"PA",0x0e,0x11,0x1e              ; 00-07  K F BOLD P A 0E NORM GRAPH
-        db " ",0x7f,")%ZWYT"                          ; 08-0f  SP 7F ) % Z W Y T
-        db "NI",0x1f,"HD",0x09,0x1a,0x19              ; 10-17  N I MAGIC H D PROG MSG? UP PAUSE
-        db "0",0x1d,"2586K",0x00                      ; 18-1f  0 SHIFT 2 5 8 6 K 00
-        db "LGVMQ",0x04,0x10,0x14                     ; 20-27  L G V M Q SEQ MSG? BIG FLASH
-        db ".",0x1c,"(*+9XS"                          ; 28-2f  . 1C ( * + 9 X S
-        db "OJBCE",0x0d,0x07,0x15                     ; 30-37  O J B C E 0D BEEP COLOR
-        db 0x08,0x0a,"1473UR"                         ; 38-3f  08 0A 1 4 7 3 U R
-
-; ---- CHARSET_UPPER2: SHIFT held, caps off
-CHARSET_UPPER2:
-        db "KF",0x18,"PA",0x03,0x17,"_"               ; 00-07  K F LEFT P A END 17 _
-        db " ",0x7f,"&'ZWYT"                          ; 08-0f  SP 7F & ' Z W Y T
-        db "NI",0xbd,"HD",0x02,0x1b,0x19              ; 10-17  N I MAGIC OFF H D 02 DOWN PAUSE
-        db "0",0x1d,"2586K",0x00                      ; 18-1f  0 SHIFT 2 5 8 6 K 00
-        db "LGVMQ",0xbb,0x13,0x14                     ; 20-27  L G V M Q HOLD ITALIC FLASH
-        db ":",0xb6,"$#-9XS"                          ; 28-2f  : B6 $ # - 9 X S
-        db "OJBCE",0xb7,0x0f,0x16                     ; 30-37  O J B C E B7 RIGHT BGRND
-        db 0x0b,0x0c,"1473UR"                         ; 38-3f  0B 0C 1 4 7 3 U R
-
-; ---- CHARSET_LOWER2: SHIFT held, caps on
+; ---- CHARSET_LOWER2: SHIFT held (upper case when CAPS_LOCK is off)
 CHARSET_LOWER2:
         db "kf",0x18,"pa",0x03,0x17,"_"               ; 00-07  k f LEFT p a END 17 _
         db " ",0x7f,"&'zwyt"                          ; 08-0f  SP 7F & ' z w y t
