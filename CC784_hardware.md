@@ -151,7 +151,7 @@ From the photos and the KiCad capture in [hardware/CC784-3A/](hardware/CC784-3A/
 | Host connector | SK1, 2×5 header carrying the seven DB9 signals (below) | DB9 |
 | Glue | 74LS164 at U19, plain 74145 at U6, 74HC132 at U13 | 74HC164, 74LS145, 74HC132 |
 | Power fail | watches the **unregulated** rail: R25 1 k and zener D1 from the rail, R10 4.7 k to ground, zener D2 as a clamp, C20, straight into an HC132 Schmitt input that gates the RAM's `/CS`; no Q9/R33 | Q9 watches the regulated 5 V and drives CS2 as well as gating `/CE` ([§7](#7-power--battery)) |
-| RAM socket pin 21 | Z80 `/WR` (the 6116's `/WE`) | A11 (a 6264's pin 23); `/WE` reaches pin 27 by a factory wire ([§8](#8-factory-bodge-wires-h--from-the-schematic)) |
+| RAM pad 21 | Z80 `/WR` (the 6116's `/WE`) | A11 (a 6264's pin 23); `/WE` reaches pin 27 by a factory wire ([§8](#8-factory-bodge-wires-h--from-the-schematic)) |
 | Pull-ups R6–R9 | 3.9 k | 3.3 k |
 | IR | none, no header | NIR only |
 
@@ -197,22 +197,22 @@ What it takes for a `CC784-3A` board to run the CC784 firmware (stock NET, stock
 
 ### 1. RAM
 
-The footprint is for a 24-pin 6116, at positions 3–26 of a 28-pin chip; pins 1, 2, 27 and 28 overhang, as on the `CC784-4` ([§8](#8-factory-bodge-wires-h--from-the-schematic)). Two positions carry different signals on this board, so cut their tracks at the socket first:
+The footprint is for a 24-pin 6116, at positions 3–26 of a 28-pin chip; pins 1, 2, 27 and 28 overhang, as on the `CC784-4` ([§8](#8-factory-bodge-wires-h--from-the-schematic)). Two pads carry different signals on this board, so cut their tracks before fitting the new socket. Pad numbers below are the 24-pin footprint's; RAM pin numbers are the 28-pin chip's:
 
-- [ ] Cut the track at socket pin 21: `/WR` from Z80 pin 22, the only other part on that net. A 6264's pin 23 (A11) lands here.
-- [ ] Cut the track at socket pin 24: `+5VP`. A 6264's pin 26 (CS2) lands here; on a 62256 it is A13.
+- [ ] Cut the track at pad 21: `/WR` from Z80 pin 22, the only other part on that net. RAM pin 23 (A11) lands here.
+- [ ] Cut the track at pad 24: `+5VP`. RAM pin 26 lands here: CS2 on a 6264, A13 on a 62256.
 - [ ] Fit a 28-pin socket in place of the 24-pin one, as in [CC784_upgrades.md §3](CC784_upgrades.md#3-ram), and wire:
 
 | RAM pin | 6264 | 62256 | Wire to |
 |---|---|---|---|
 | 1 | NC | A14 | nothing (6264); **Z80 pin 4** (62256) |
 | 2 | A12 | A12 | **Z80 pin 2** |
-| 23 (socket 21) | A11 | A11 | **Z80 pin 1** |
-| 26 (socket 24) | CS2 | A13 | **U13 pin 8** (6264, step 2); **Z80 pin 3** (62256) |
+| 23 (pad 21) | A11 | A11 | **Z80 pin 1** |
+| 26 (pad 24) | CS2 | A13 | **U13 pin 8** (6264, step 2); **Z80 pin 3** (62256) |
 | 27 | `/WE` | `/WE` | **Z80 pin 22** |
 | 28 | VCC | VCC | **`+5VP`**: U13 pin 14 |
 
-- [ ] Check: each wire beeps to its end; socket pin 21 ↔ Z80 pin 22 and socket pin 24 ↔ U13 pin 14 must **not** beep.
+- [ ] Check: each wire beeps to its end; pad 21 ↔ Z80 pin 22 and pad 24 ↔ U13 pin 14 must **not** beep.
 
 `/OE` stays on the '139 output as it is; the `CC784-4` also gates it with the power-fail signal, which changes nothing while `/CE` is gated.
 
@@ -227,8 +227,9 @@ The essential part is the `CC784-4`'s lockout, watching the regulated 5 V instea
 - [ ] R10: replace 4.7 k with **1 k**. It sets the current Q9 needs before it turns on (about 0.65 mA), and with it the trip point.
 - [ ] R25: replace 1 k with **220 Ω**, as on the `CC784-4`. At 0.65 mA a 1 k drops another 0.65 V, which puts the trip point above 5 V: Q9 would never turn on and the RAM would stay locked out.
 - [ ] Remove C20 and D2, as on the `CC784-4`.
-- [ ] Cut the track at U13 pin 5, and the track to U13 pins 9 and 10 (`+5VP`).
-- [ ] Q9 (BC548, or a 2N3904, whose pinout is reversed: E-B-C instead of C-B-E), dead-bugged: base to the detect node (D1's anode, the R10 end); emitter to GND; collector to `+5VP` through 100 k, and to U13 pins 9 and 10.
+- [ ] Cut the track at U13 pin 5 (top side; it emerges from under the IC between pins 6 and 7), and the track to U13 pins 9 and 10 (`+5VP`, bottom side; between a leg of C5 and pin 9).
+- [ ] 100 k (the `CC784-4`'s R33) across that second cut, from the `+5VP` track to U13 pins 9 and 10, on the bottom side where the two sit side by side. It pulls Q9's collector high when Q9 turns off on power fail; without it the gate input floats and the lockout is unreliable.
+- [ ] Q9 (BC548, or a 2N3904, whose pinout is reversed: E-B-C instead of C-B-E): mount emitter lead into GND via by U17 pin 7; base to the detect node (D1's anode, the R10 end, whose track runs between U17 pins 5 and 6, next to the GND via); use Kynar wire to tie collector to U13 pins 9 and 10 (which will see `+5VP` through 100 k).
 - [ ] U13 pin 8 to U13 pin 5, and to RAM pin 26 if a 6264 is fitted (step 1).
 - [ ] The trip point: at this sub-milliamp current the zener conducts a few hundred millivolts below its rating, so Q9 releases somewhere around 4.6–4.8 V on the 5 V rail [M]: the RAM is locked out as soon as the supply sags. Check afterwards that the 5 V rail sits above that with the sign warm, or the store will refuse writes.
 - [ ] Check before inserting chips: with power on, U13 pin 8 reads about 5 V; with the mains off and the 5 V rail below the trip point, it falls to 0 V while `+5VP` stays up.

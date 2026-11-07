@@ -35,6 +35,10 @@ cc784_sim.py - run the CC784NIR ROM under emulation (kosarev's z80 core) with a 
     uv run tools/cc784_sim.py keypad
         The wired keypad (patch 36): mode switching, editing against the remote.
 
+    uv run tools/cc784_sim.py seq
+        The sequence over empty channels (patch 39): a short burst after one message,
+        and the right channels in order after edits move the store.
+
     uv run tools/cc784_sim.py fuzz [RUNS]
         Cut the power at a random instant of an update, RUNS times (default 100);
         every reboot must land in a bank whose trailer and image CRC check out.
@@ -1092,6 +1096,76 @@ def cmd_quiet():
     return all(checks)
 
 
+def cmd_seq():
+    """P39: with the default sequence 0-99, stepping over the empty channels takes
+    no rescan of the store, and every channel with text opens at its own marker,
+    also after an edit moves the markers behind it."""
+    rom, syms = assemble(HERE.parent / 'src' / 'patched')
+    checks = []
+    def check(name, cond):
+        checks.append(bool(cond)); print('  %s %s' % ('ok  ' if cond else 'FAIL', name))
+    def send(s, payload):
+        s.send_frame(payload, addr=1, flag=0x81); s.rx_wait(); s.run_ms(3000)
+    def watch(s, addr, n, ms):
+        s.watch = set(range(addr, addr + n)); s.watch_log.clear()
+        s.m.mark_addrs(addr, n, s.m.WRITE_MARK)
+        s.run_ms(ms)
+        return list(s.watch_log)
+    def chan_at(off):
+        mem = s.m.memory
+        for i in range(off - 2, syms['MSG_STORE'] - 1, -1):     # two marker bytes in a row are one marker
+            if 0xD0 <= mem[i] <= 0xD9 and 0xD0 <= mem[i + 1] <= 0xD9:
+                return (mem[i] - 0xD0) * 10 + mem[i + 1] - 0xD0
+    def played(ms):
+        lo, a, b = syms['STORE_CURSOR'], syms['seq_set_cursor'], syms['seq_ret']
+        out, low = [], None
+        for t, pc, addr, v in watch(s, lo, 2, ms):
+            if not a <= pc <= b: continue
+            if addr == lo: low = v
+            elif low is not None:
+                ch = chan_at((v << 8) | low); low = None
+                if not out or out[-1] != ch: out.append(ch)
+        return out
+    def in_order(seq, want):
+        if 0 not in seq: return False
+        seq = seq[seq.index(0):]
+        return len(seq) >= 2 * len(want) and all(c == want[i % len(want)] for i, c in enumerate(seq))
+
+    s = Sign(rom, syms, fresh_ram=True)
+    s.run_ms(2500)
+    send(s, b'\x09\x30\x30\x0e' + b'HI')
+    first = (syms['SEQ_LIST'] + 1) & 0xff              # SEQ_PTR's low byte once entry 0 is taken
+    log = [(t, v) for t, _, addr, v in watch(s, syms['SEQ_PTR'], 1, 8000)]
+    starts = [i for i, (t, v) in enumerate(log) if v == first]
+    bursts = [(log[j][0] - log[i + 1][0]) / CPU_HZ * 1000 for i, j in zip(starts, starts[1:])]
+    check('one message in channel 0: the 99 empty channels take %s ms per loop (under 100)'
+          % [round(x) for x in bursts], len(bursts) >= 2 and max(bursts) < 100)
+    for ch, text in ((b'07', b'SEVEN'), (b'50', b'FIFTY'), (b'99', b'NINETY NINE')):
+        send(s, b'\x09' + ch + b'\x0e' + text)
+    seq = played(30000)
+    check('channels 0, 7, 50 and 99 play in order: %s' % seq, in_order(seq, [0, 7, 50, 99]))
+    send(s, b'\x09\x30\x37\x0e' + b'S' * 41)           # an odd growth moves 50 and 99
+    seq = played(30000)
+    check('after channel 7 grows by 36 bytes: %s' % seq, in_order(seq, [0, 7, 50, 99]))
+    send(s, b'\x09\x35\x30\x0e')                        # channel 50 emptied
+    seq = played(30000)
+    check('after channel 50 is emptied: %s' % seq, in_order(seq, [0, 7, 99]))
+    # a hint left past the store's DA on a stale copy of a marker must not be used
+    end = int.from_bytes(s.ram('STORE_END', 2), 'little')
+    stale = end + 40
+    s.m.memory[stale:stale + 3] = b'\xd9\xd9\x03'
+    s.m.memory[syms['CHAN_HINT']:syms['CHAN_HINT'] + 2] = stale.to_bytes(2, 'little')
+    send(s, b'\x09\x39\x39\x0e' + b'NEW')
+    end = int.from_bytes(s.ram('STORE_END', 2), 'little')
+    store = bytes(s.m.memory[syms['MSG_STORE']:end + 1])
+    check('a stale hint past the DA is ignored: channel 99 reads %s, the stale copy %s'
+          % (store[store.find(b'\xd9\xd9'):][:6].hex(), s.m.memory[stale:stale + 3].hex()),
+          store.endswith(b'\xd9\xd9NEW\x03\xda') and s.m.memory[stale:stale + 3] == b'\xd9\xd9\x03')
+    check('no faults, stack high-water %d' % s.depth(), not s.faults and s.depth() < 100)
+    print('sequence: %d/%d checks pass' % (sum(checks), len(checks)))
+    return all(checks)
+
+
 def cmd_speed():
     """P26: every scroll speed steps one column per frame at stock's rate,
     62 * 21 / (21 + n) per second, with the rows lit for the whole frame and
@@ -1664,7 +1738,7 @@ def cmd_compare(dir_a, dir_b):
 
 if __name__ == '__main__':
     args = sys.argv[1:]
-    if not args or args[0] not in ('stack', 'compare', 'eeprom', 'ota', 'update', 'push', 'fuzz', 'ram', 'quiet', 'speed', 'baud', 'clock', 'config', 'keypad'):
+    if not args or args[0] not in ('stack', 'compare', 'eeprom', 'ota', 'update', 'push', 'fuzz', 'ram', 'quiet', 'speed', 'baud', 'clock', 'config', 'keypad', 'seq'):
         sys.exit(__doc__)
     if args[0] == 'ram':
         sys.exit(0 if cmd_ram() else 1)
@@ -1676,6 +1750,8 @@ if __name__ == '__main__':
         sys.exit(0 if cmd_clock() else 1)
     if args[0] == 'keypad':
         sys.exit(0 if cmd_keypad() else 1)
+    if args[0] == 'seq':
+        sys.exit(0 if cmd_seq() else 1)
     if args[0] == 'config':
         sys.exit(0 if cmd_config() else 1)
     if args[0] == 'quiet':

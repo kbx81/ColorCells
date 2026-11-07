@@ -85,13 +85,12 @@ Dim or blank the display between two times of day, set like the clock over seria
 
 | Item | Bytes | Note |
 |---|---|---|
-| Duplicate-code factoring | ~100 | 43 groups of repeated sequences found by a scan of the listing; each becomes a CALL |
 | The `B4 '4'` timing query | 60 | only useful while a clock source is being calibrated |
 | Faster boot CRC | dropped | only ~20 % faster and needs a chip burn; not worth it |
 
 ## 7. Skip empty channels in the sequence
 
-With the default sequence of channels 0 to 99 and one message loaded, every loop of the message ends with `seq_next_channel` opening the 99 empty channels in turn, and each open is a `chan_select` scan of the store: about 2.4 s of CPU per loop with nothing on the panel, and no packet polling inside it, so a frame that lands in that burst waits up to 2.4 s for its processing and its DONE. The sequence recount already runs at every edit; pruning the empty channels there, or remembering the last non-empty entry, removes the burst. About 30 bytes. The emulator's loop-period measurement in the patch 35 work (2.4 to 2.7 s per loop of a four-letter message) is the before number.
+Done as patch 39 ([patched notes](CC784_patched.md#2-patches)): the 99 empty channels after one loaded message take about 60 ms per loop instead of 1.05 s.
 
 ## 8. Faster CPU: analyzed and shelved
 
@@ -110,10 +109,13 @@ A Z84C0020 is a drop-in at 8 MHz. Faster clocks were worked through and set asid
 
 ## 10. Other models
 
-The CC710 runs the NET's code base on the `CC784-3A` board ([firmware notes §15](CC784_firmware.md#15-the-cc710-firmware-h--from-a-rom-dump-id-710), [hardware notes §11](CC784_hardware.md#11-the-cc784-3a-board-cc710-h)). As shipped it cannot run the patched firmware: 2 KB of RAM in a 24-pin socket against the 16 KB the patched build uses. [Hardware notes §12](CC784_hardware.md#12-converting-a-cc784-3a-board-to-a-cc784-4) turns the board into a `CC784-4` (RAM, the later power-fail detect, a DB9 cable), after which the patched firmware's CC710 build runs on it ([CC784_patched.md](CC784_patched.md#2-patches), patch 37). On its stock firmware, two things it could still get:
+The CC710 runs a descendant of the original CC784's code base, with the packet protocol added, on the `CC784-3A` board ([firmware notes §15](CC784_firmware.md#15-the-cc710-firmware-h--from-a-rom-dump-id-710), [hardware notes §11](CC784_hardware.md#11-the-cc784-3a-board-cc710-h)). As shipped it cannot run the patched firmware: 2 KB of RAM in a 24-pin socket against the 16 KB the patched build uses. [Hardware notes §12](CC784_hardware.md#12-converting-a-cc784-3a-board-to-a-cc784-4) turns the board into a `CC784-4` (RAM, the later power-fail detect, a DB9 cable), after which the patched firmware's CC710 build runs on it ([CC784_patched.md](CC784_patched.md#2-patches), patch 37). On its stock firmware, two things it could still get:
 
 - **A dongle on its header.** Packet mode needs the boot probe answered (SK1 pins 5, 4, 9) and the CTS/ready lines honoured (SK1 pins 8 and 7 high for TX; pin 4 is the sign's ready). An ESP on the header could do all of that in software, and the CC710 answers queries `0`–`3` once in packet mode. For bench tests there is a way in without an adapter: hold `1`, `7` or `U` on the keypad at power-up (address `*`).
 - **Small patches of its own** (16 KB ROM, 3.9 KB free): the address-inversion bug in the probe's keep path, and the `17` AM/PM handling, if the sign is ever used with a host.
+
+The original CC784 is on the same board ([firmware notes §16](CC784_firmware.md#16-the-original-cc784-firmware-h--from-a-rom-dump-id-9g), [hardware notes §13](CC784_hardware.md#13-the-original-cc784s-board-h)) and converts the same way, with its `/M1` bodge moved first ([hardware notes §12](CC784_hardware.md#12-converting-a-cc784-3a-board-to-a-cc784-4), step 5). Its stock firmware has no packet protocol, so a host can only type into it as keys. Its panel matches the NET's and NIR's, so once converted it runs the standard patched build [H].
+
 ## 11. A configuration store
 
 The block itself exists since patch 35 ([patched notes](CC784_patched.md#2-patches)): sixteen battery-backed bytes with a signature and a sum, written with `B6 index value`, read with `B4 '5'`, carrying brightness, mute, the spare-line roles, the alert channel, hold time, flash rate, beeper and remote lock. Settings it reserves bytes for but does not act on yet:

@@ -76,7 +76,7 @@ FB_EXTRA_LEN         equ RAM_VARS+0x08c   ; bytes to send from FRAMEBUF after th
 STORE_END            equ RAM_VARS+0x08e
 EFFECT_ID            equ RAM_VARS+0x090   ; 0 LEFT, 1 PAUSE, 2 UP, 3 DOWN, 4 RIGHT, 5 HOLD
 EFFECT_VECTOR        equ RAM_VARS+0x091
-MENU_TEXT_PTR        equ RAM_VARS+0x093   ; unused: menu_show_text takes HL
+CHAN_HINT            equ RAM_VARS+0x093   ; P39: the marker chan_select found last (was MENU_TEXT_PTR)
 SHIFT_LABEL          equ RAM_VARS+0x095   ; FF = redraw shows the SHIFT indicator
 FLUSH_PENDING        equ RAM_VARS+0x096   ; FF = staged text must be shown before the next effect runs
 FRAME_DELAY          equ RAM_VARS+0x097   ; frames to hold before the next column step (1, 3 or 0x50)
@@ -1020,9 +1020,9 @@ row_output:
         LD A,(CFG_FLAGS)        ; P35: muted or brightness 0: the row stays dark
         AND 7
         CP 4
-        JP nc,row_phase_step
+        JR nc,row_phase_step
         AND A
-        JP z,row_phase_step
+        JR z,row_phase_step
         LD HL,(FB_OUT_PTR)
         LD A,(FB_OUT_LEN)
         LD B,A
@@ -1584,7 +1584,7 @@ seq_chan_empty:
         LD HL,(SEQ_PTR)
         LD A,(HL)
         CP 0xff
-        JP nz,seq_pick
+        JR nz,seq_pick
         DEC HL
         LD DE,SEQ_LIST
         OR A
@@ -1595,8 +1595,7 @@ seq_chan_empty:
 
 seq_test_message:
         LD HL,TEST_MSG_BUF
-        LD (STORE_CURSOR),HL
-        JP clear_chan_lock
+        LD (STORE_CURSOR),HL    ; falls into clear_chan_lock
 
 ; ---- clear_chan_lock
 clear_chan_lock:
@@ -1612,26 +1611,46 @@ chan_select:
         JR chan_ok
 
 chan_marker:
-        LD DE,MARK_LO*256+MARK_LO
-        AND A
-        JR z,chan_scan
-        LD B,A
-        LD A,MARK_HI
+        CP CHANNELS             ; P39: D = tens, E = units by dividing, not counting up
+        JR nc,chan_error
+        LD D,MARK_LO-1
 
-chan_marker_inc:
-        INC E
-        CP E
-        JR nz,chan_marker_next
-        LD E,MARK_LO
+chan_marker_tens:
         INC D
-        CP D
-        JR z,chan_error
-
-chan_marker_next:
-        DJNZ chan_marker_inc
+        SUB 10
+        JR nc,chan_marker_tens
+        ADD A,MARK_LO+10
+        LD E,A
 
 chan_scan:
+        ; P39: markers are stored in channel order, so a channel at or above the one at
+        ; CHAN_HINT is scanned for from there. Two marker bytes in a row are always one marker.
+        LD IX,(CHAN_HINT)
+        LD HL,(STORE_END)       ; a store that shrank leaves stale markers past its DA
+        PUSH IX
+        POP BC
+        OR A
+        SBC HL,BC
+        JR c,chan_scan_full
+        LD A,(IX+0)
+        LD H,A
+        SUB MARK_LO
+        CP 10
+        JR nc,chan_scan_full
+        LD A,(IX+1)
+        LD L,A
+        SUB MARK_LO
+        CP 10
+        JR nc,chan_scan_full
+        OR A
+        SBC HL,DE
+        JR z,chan_scan_go
+        JR c,chan_scan_go
+
+chan_scan_full:
         LD IX,MSG_STORE
+
+chan_scan_go:
         LD BC,(STORE_SIZE)
 
 chan_scan_loop:
@@ -1653,6 +1672,7 @@ chan_error:
         RET
 
 chan_found:
+        LD (CHAN_HINT),IX
         INC IX
         INC IX
         PUSH IX
@@ -2057,7 +2077,7 @@ INIT_DATA:
         dw 0xff00              ; STORE_END
         db 0x00                ; EFFECT_ID
         dw 0x0000              ; EFFECT_VECTOR
-        dw 0x0000              ; MENU_TEXT_PTR
+        dw 0x0000              ; CHAN_HINT
         db 0x00                ; SHIFT_LABEL
         db 0x01                ; FLUSH_PENDING
         db 0x00                ; FRAME_DELAY
@@ -4905,7 +4925,7 @@ latch_dim:
         LD A,(CFG_FLAGS)
         AND 3
         CP 3
-        JP z,latch_row          ; full: LIT_LIMIT is 0 (cmd_B6_config clears it)
+        JR z,latch_row          ; full: LIT_LIMIT is 0 (cmd_B6_config clears it)
         BIT 3,B
         JR z,lit_set
         LD B,A
@@ -5960,7 +5980,7 @@ askchan_backspace:
         LD A,(IX+0)
         LD (IX+1),A
         LD (IX+0),0x30
-        JP askchan_show
+        JR askchan_show
 
 askchan_accept:
         LD A,(CHAN_D10)
@@ -6073,7 +6093,7 @@ addr_key:
         JR z,addr_enter
         LD A,B
         CP 3
-        JP z,menu_addr_invalid
+        JR z,menu_addr_invalid
         INC B
         LD A,(CUR_CHAR)
         CALL is_digit
@@ -6868,7 +6888,7 @@ editor_translate_key:
         CALL apply_graph_prefix
         CALL apply_color_prefix
         CALL apply_speed_prefix
-        JP editor_key_to_attr
+        JR editor_key_to_attr
 
 ; ---- apply_graph_prefix: GRAPH n -> A0|n
 apply_graph_prefix:
@@ -7848,13 +7868,13 @@ cmd_B4_query:
         CP QUERY_MEMORY
         JR z,pq_memory
         CP QUERY_DUMP
-        JP z,pq_dump
+        JR z,pq_dump
         CP QUERY_TIMING
         JR z,pq_timing
         CP QUERY_CONFIG
-        JP z,pq_config
+        JR z,pq_config
         CP QUERY_SEQ
-        JP z,pq_seq
+        JR z,pq_seq
         JP pkt_done_pop
 
 pq_romid:

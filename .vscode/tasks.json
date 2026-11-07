@@ -216,7 +216,7 @@
       "label": "OTA: emulator regression",
       "detail": "EEPROM model self-test, boot stub scenarios, a full B5 update, the host tool's push, all against the emulated sign. fuzz [RUNS] is separate (slow).",
       "type": "shell",
-      "command": "uv run tools/cc784_sim.py eeprom && uv run tools/cc784_sim.py ota && uv run tools/cc784_sim.py update && uv run tools/cc784_sim.py push && uv run tools/cc784_sim.py ram && uv run tools/cc784_sim.py quiet && uv run tools/cc784_sim.py speed && uv run tools/cc784_sim.py baud && uv run tools/cc784_sim.py clock && uv run tools/cc784_sim.py config && uv run tools/cc784_sim.py keypad",
+      "command": "uv run tools/cc784_sim.py eeprom && uv run tools/cc784_sim.py ota && uv run tools/cc784_sim.py update && uv run tools/cc784_sim.py push && uv run tools/cc784_sim.py ram && uv run tools/cc784_sim.py quiet && uv run tools/cc784_sim.py speed && uv run tools/cc784_sim.py baud && uv run tools/cc784_sim.py clock && uv run tools/cc784_sim.py config && uv run tools/cc784_sim.py keypad && uv run tools/cc784_sim.py seq",
       "options": {
         "cwd": "${workspaceFolder}"
       },
