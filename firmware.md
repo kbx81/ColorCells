@@ -41,7 +41,7 @@ The four ROMs are one code base, revised in one sequence. The letter after the `
 
 **Each step:**
 
-1. **Original CC784 → CC710:** the packet parser, queries `0`–`3` and the boot probe that picks keypad, terminal or packet (the original reads one pin, `PORT_IN` bit 0); a 59-column panel on 74HC595s in place of 84 columns. Same board, RAM and channel count ([hardware notes §11](hardware.md#11-the-cc784-3a-board-cc710-h), [§13](hardware.md#13-the-original-cc784s-board-h)).
+1. **Original CC784 → CC710:** the packet parser, queries `0`–`3` and the boot probe that picks keypad, terminal or packet (the original reads one pin, `PORT_IN` bit 0); a 59-column panel in place of 84 (both on 74HC595s). Same board, RAM and channel count ([hardware notes §11](hardware.md#11-the-cc784-3a-board-h), [§13](hardware.md#13-the-original-cc784s-board-h)).
 2. **CC710 → CC784NET:** the `CC784-4` board, with 8 KB RAM, a DB9 in place of the 10-pin header, the power-fail lockout on the regulated 5 V and the delayed `/M1` in copper; 100 channels with two-byte markers; the boot test cut to keypad or packet.
 3. **CC784NET → CC784NIR:** the 8 MHz crystal and the `/INT` bodge for the IR decoder's 7812.5 Hz tick, the receiver board and the remote; a new demo.
 
@@ -416,7 +416,7 @@ The annotated source is [src/stock/cc784net.asm](src/stock/cc784net.asm) (`mode_
 
 ## 15. The CC710 firmware [H — from a ROM dump, ID `710`]
 
-The original CC784's code base ([§16](#16-the-original-cc784-firmware-h--from-a-rom-dump-id-9g)) with the packet protocol added, the step before the NET's ([§1](#1-lineage-of-the-stock-firmware-m--from-the-four-roms-their-labels-and-the-boards)), for the ten-channel sign on the `CC784-3A` board ([hardware notes §11](hardware.md#11-the-cc784-3a-board-cc710-h)): 16 KB with code to `307A`, 4 MHz, the 1302 Hz ISR doing everything per interrupt, keypad input through the 10-pin header. Source: [src/stock/cc710.asm](src/stock/cc710.asm); 2959 of 5419 instructions are the NIR's, and the NIR names apply.
+The original CC784's code base ([§16](#16-the-original-cc784-firmware-h--from-a-rom-dump-id-9g)) with the packet protocol added, the step before the NET's ([§1](#1-lineage-of-the-stock-firmware-m--from-the-four-roms-their-labels-and-the-boards)), for the ten-channel sign on the `CC784-3A` board ([hardware notes §11](hardware.md#11-the-cc784-3a-board-h)): 16 KB with code to `307A`, 4 MHz, the 1302 Hz ISR doing everything per interrupt, keypad input through the 10-pin header. Source: [src/stock/cc710.asm](src/stock/cc710.asm); 2959 of 5419 instructions are the NIR's, and the NIR names apply.
 
 | | CC710 | CC784 (NET/NIR) |
 |---|---|---|
@@ -432,7 +432,7 @@ The original CC784's code base ([§16](#16-the-original-cc784-firmware-h--from-a
 
 **Boot clear** (`boot_clear_check`) [H, verified on a CC100]: keypad mode only, `PORT_IN` bit 1 low at power-up calls `store_clear_all`. `mode_test` leaves keypad row 3 selected and only column bit 1 is read, so holding any row-3 key in column 0, 1, 4 or 5 while powering on wipes the store: `0`, SHIFT, `8` or `6`. By the same reasoning, a row-7 key in an even column (`08`, `1`, `7`, `U`) held at power-up reads `E` = `55` and puts the sign into packet mode, with address `*` (`D` reads `D5`) [H: `1`, `7` and `U` verified on a CC100]. That is a way into packet mode without an adapter. Holding a row-1 key in an even column as well (SPACE, `)`, `Z` or `Y`) makes the pre-clock sample low, so the `55` probe reads `55/55` and the `AA` probe `2A`: the keep path. After a `1` boot (stored pair `2A`/`D5`) the next `Z` + `1` boot gives address `D5`, the one after `*`, and so on [H: `Z` + `1`, ACK and NAK at `D5`, then `*` on the following boot].
 
-**Store corruption** on mains power cycles, in any mode, is not a firmware bug: and the emulated firmware leaves an intact store unchanged boot after boot ([hardware notes §11](hardware.md#11-the-cc784-3a-board-cc710-h)).
+**Store corruption** on mains power cycles, in any mode, is not a firmware bug: and the emulated firmware leaves an intact store unchanged boot after boot ([hardware notes §11](hardware.md#11-the-cc784-3a-board-h)).
 
 **Serial handshake** [H], absent from the NIR: `tx_bit_engine` starts a byte only while `PORT_IN` bits 1 and 2 (SK1 pins 8 and 7) are both high; `rx_bit_engine` drives `CTRL_LATCH` bit 5 (SK1 pin 4) high as "ready", drops it while `RX_FIFO` holds 8 bytes, and samples only while bit 1 is high. Same 300-baud bit timing.
 
