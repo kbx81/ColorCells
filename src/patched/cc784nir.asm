@@ -3382,7 +3382,7 @@ effect_none:
 ; ---- crawl_step (P42): effect_step for the render loop. The plain crawl draws the
 ;      next character once CRAWL_LEAD columns or fewer are left to scroll in, so a
 ;      packet processed meanwhile does not stop the scroll. Anything but a plain
-;      character next (attributes, the clock, the end) waits for the full catch-up.
+;      character next, after any colors, waits for the full catch-up.
 crawl_step:
         CALL wait_frame_delay
 
@@ -3396,6 +3396,14 @@ crawl_wait:
         OR (HL)
         JR nz,crawl_wait
         LD HL,(STORE_CURSOR)
+        DEC HL
+
+crawl_peek:                     ; colors (80-93) go into the next glyph's column in the
+        INC HL                  ; same render step: judge the byte after them
+        LD A,(HL)
+        AND 0xe0
+        CP COLOR_BASE
+        JR z,crawl_peek
         LD A,(HL)
         CP ATTR_TIME
         JR z,crawl_wait
