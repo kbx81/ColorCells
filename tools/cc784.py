@@ -402,7 +402,8 @@ def run(link, a, ap):
                 sys.exit("  no config block in the reply (patched firmware 35+ only)")
             print("  " + config_text(blk))
             if seq:
-                chans = [str(x) for x in seq if x != 0xFF]
+                seq = seq[:seq.index(0xFF)] if 0xFF in seq else seq   # the firmware stops at the first FF
+                chans = [str(x) for x in seq]
                 print("  sequence: %s" % (' '.join(chans) if chans else '(empty)'))
         elif args[0] == 'set' and len(args) == 3:
             name, value = args[1], args[2]

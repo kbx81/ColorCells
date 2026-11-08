@@ -13,7 +13,7 @@ RAM, with the chip-size detection of patch 13:
 | Range | Use |
 |---|---|
 | `4000–40BF` | `FRAMEBUF` — 192-byte column ring (stock: 344 from `4040`); also where the OTA RAM library runs |
-| `40C0–42D2` | pointers, `TXBUF`, variables — stock order, 72 dead bytes removed; the configuration block at `42C2–42D1` (patch 35) |
+| `40C0–42D2` | `TXBUF`; `IMAGE`, the variables with a non-zero boot value (one `LDIR` from `INIT_DATA`); `BOOT_ZERO`, cleared at every boot; scratch buffers; then what survives a reset: `SEQ_LIST`, the clock, the store limits and the configuration block at `42C2–42D1` (patch 35) |
 | `42D3–7E2A` | `MSG_STORE`, **15192 bytes** with a 62256; `42D3–5E2A`, **7000**, with the stock 6264 |
 | `7E2B–7E4F` | reply stream and packet state (patch 21), display divider and service marks (patch 26), the IR gate's sample and state (patch 35), the keypad's mode and state (patch 36) |
 | `7E50–7EEF` | **stack**, 160 bytes (`STACK_SIZE`); `5E50` on the 6264, which mirrors `6000–7FFF` onto `4000–5FFF` |
@@ -29,7 +29,7 @@ ROM, per 16 K bank ([CC784_ota.md §2](CC784_ota.md#2-rom-layout-each-bank)):
 | `0000–023F` | boot stub: reset, `0038`, `0066`, bank choice, trial marking, the RAM library. Programmer only |
 | `0240–0248` | jump table: `JP app_start`, `JP int_timer`, `JP nmi_entry` |
 | `0249–0258` | `ROM_ID` (stock `0048`) |
-| `0259–3FBF` | application, then the free space (338 bytes; 394 in the CC710 build) |
+| `0259–3FBF` | application, then the free space (2195 bytes; 2251 in the CC710 build) |
 | `3FC0–3FFF` | trailer page: magic, sequence number, state, CRCs |
 
 ## 2. Patches
@@ -149,3 +149,17 @@ uv run tools/cc784_ota.py pack src/patched/cc784nir_patched.bin \
 Or the `Build patched ROM` and `Pack OTA image` tasks. The CC710 build is `sjasmplus -DCC710 cc784nir.asm` (`cc710_patched.bin`, packed to `cc710_bank.bin` and `cc710_chip.bin`), or the tasks of the same names with `(CC710)` appended. The raw build has empty trailers and must not be burned: `cc784nir_chip.bin` is what the T48 burns (task `AT28C256-15PU -- program`) and `cc784nir_bank.bin` what `cc784_ota.py push` sends.
 
 Before any push, run the emulator regression set in [CC784_ota.md §6](CC784_ota.md#6-testing), plus `fuzz` for changes to the stub or the page writer. The emulator itself is described in [CC784_firmware.md §12](CC784_firmware.md#12-rebuilding).
+
+## 6. Size refactor after `patched-v39`
+
+The source was restructured for size with behavior kept: 1857 bytes freed in both builds (free space 338 → 2195 on the CC784, 394 → 2251 on the CC710). What a reader of the source needs to know:
+
+- **Font:** glyphs are stored at their own widths. `FONT_WIDTH` holds each glyph's width and `FONT_BLOCK` the address of every eighth glyph; `glyph_addr` adds up to seven widths and sets `GLYPH_WIDTH`. `glyph_lookup` always copies the glyph into a buffer before styling, since bold and BIG read one column past the end.
+- **Character classes:** `CHAR_FLAGS` is two bits per character (64 bytes) behind `char_flags`, which returns Z for printable text and CY for an invalid byte.
+- **Keys and labels:** the two upper-case charset tables are gone; `getkey_lookup` folds a–z up when exactly one of SHIFT and CAPS is on. The editor's labels are one keyed list, `LABELS`, searched by `redraw_show_label`.
+- **Dispatch:** `CALL dispatch` followed by a table of `DKEY key, target` entries replaces the CP/JP ladders in the editor, the packet loop, the effects and the channel prompt. sjasmplus substitutes macro parameter names inside identifiers, hence the parameter names `zk`/`zt`.
+- **RAM:** see the map in §1. A variable that must survive a reset sits outside `BOOT_ZERO`. Moving one of those (`SEQ_LIST`, the clock, the store limits, the configuration block) means the first boot after an OTA update reads it from its old address: the boot checks put defaults back where they can, otherwise the value is lost.
+- **Short jumps:** beyond patch 33, far jumps reach their targets through an existing unconditional `JP` to the same target within range, labelled `<target>_jrN`.
+- **Rejected:** a single-entry IR decoder (63 bytes smaller) took about 235 cycles per interrupt against about 90, so the next interrupt nested inside it and keys were lost. Per-interrupt handlers stay short.
+
+Verification for changes of this kind: the full emulator set ([CC784_ota.md §6](CC784_ota.md#6-testing)); `compare` is only meaningful in its boot and `B4` phases, because the effects, editor and MAGIC phases diverge between any two builds of different speed. For the editor, compare the steady panel frame after each remote key between the two builds instead.
