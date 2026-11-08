@@ -43,6 +43,10 @@ cc784_sim.py - run the CC784NIR ROM under emulation (kosarev's z80 core) with a 
         The health counters in the B4 '4' reply (patch 40): clock source, boot count
         across a reset, uptime, stack headroom, frame and remote counters.
 
+    uv run tools/cc784_sim.py status
+        Status reports (patch 41): off by default, one per channel start when on,
+        FF when the editor opens, and the host tool working with reports flowing.
+
     uv run tools/cc784_sim.py fuzz [RUNS]
         Cut the power at a random instant of an update, RUNS times (default 100);
         every reboot must land in a bank whose trailer and image CRC check out.
@@ -841,7 +845,11 @@ class SimLink:
             self.s.run_ms(20)
 
     def reset_input(self):
-        self.s.tx_edges.clear()
+        edges = self.s.tx_edges
+        if edges and self.s.t - edges[-1][0] < 11 * self.s.bit_t:
+            self.delivered = len(self._available())   # a byte on the wire: clearing would cut it
+            return
+        edges.clear()
         self.delivered = 0
 
     def close(self):
@@ -949,7 +957,7 @@ def cmd_ram():
             if s.tx_bytes().endswith(b'\x04'): break
         s.tx_edges.clear(); s.run_ms(200)
 
-    for ram8k, want_total in ((True, 6987), (False, 15179)):     # P21 took 32 bytes for the reply stream, P35 17 for the configuration block and the brightness clock, 64 more of stack and 2 for the IR gate, P36 3 for the keypad, P40 13 for the stats
+    for ram8k, want_total in ((True, 6981), (False, 15173)):     # P21 took 32 bytes for the reply stream, P35 17 for the configuration block and the brightness clock, 64 more of stack and 2 for the IR gate, P36 3 for the keypad, P40 13 for the stats, P41 6 for the status report
         name = '8 K' if ram8k else '16 K'
         s = Sign(rom, syms, fresh_ram=True, ram8k=ram8k)
         s.run_ms(2500)
@@ -1040,7 +1048,7 @@ def cmd_quiet():
           % (tx.hex(), s.ram('PKT_RESTART')[0], s.wdog_clears, before, after),
           tx == b'\x06\x04' and s.ram('PKT_RESTART')[0] == 0 and s.wdog_clears == 0 and after != before)
     tx = send(s, b'\xb4\x31')
-    check("B4 '1' mid-scroll: reply %s, no restart" % tx[4:14], tx[:4] == b'\x06\xb1\x01\x0a' and tx[4:9] == b'15179' and s.ram('PKT_RESTART')[0] == 0)
+    check("B4 '1' mid-scroll: reply %s, no restart" % tx[4:14], tx[:4] == b'\x06\xb1\x01\x0a' and tx[4:9] == b'15173' and s.ram('PKT_RESTART')[0] == 0)
     tx = send(s, b'\x17' + b'1045' + b'P', wait_ms=300)
     check('set time mid-scroll: clock %s, seconds %d and ticks %d zeroed (P23), no restart, no watchdog clear'
           % (s.ram('CLK_H10', 4).hex(), s.ram('CLK_SEC')[0], s.ram('NMI_COUNT')[0]),
@@ -1221,7 +1229,7 @@ def cmd_baud():
         s = Sign(rom, syms, fresh_ram=True, baud=baud); s.run_ms(2500)
         tx = send(s, b'\xb4\x31', wait_ms=int(16 * 10000 / baud) + 500)
         rate = s.ram('BAUD_STEP')[0]
-        check('%4d baud from cold: query reply %s, BAUD_STEP %d, BAUD_T %d' % (baud, tx[:9], rate, s.ram('BAUD_T')[0]), tx[:4] == b'\x06\xb1\x01\x0a' and tx[4:9] == b'15179' and rate == baud // 60)
+        check('%4d baud from cold: query reply %s, BAUD_STEP %d, BAUD_T %d' % (baud, tx[:9], rate, s.ram('BAUD_T')[0]), tx[:4] == b'\x06\xb1\x01\x0a' and tx[4:9] == b'15173' and rate == baud // 60)
         tx = send(s, b'\x09\x30\x31\x0e' + text, wait_ms=500)
         d = bytes(s.m.memory[syms['MSG_STORE']:int.from_bytes(s.ram('STORE_END', 2), 'little')])
         check('%4d baud: 220-byte load intact, ACK+DONE %s' % (baud, tx.hex()), text in d and tx == b'\x06\x04')
@@ -1367,6 +1375,57 @@ def cmd_stats():
     check('DC + board: 64 a second (%s), uptime %s' % (d and d['nmi'], d and d['up']), d is not None and d['nmi'] == 64 and abs(d['up'] - d['t']) <= 1.5)
     check('no faults', not (s.faults or s2.faults or s3.faults))
     print('stats: %d/%d checks pass' % (sum(checks), len(checks)))
+    return all(checks)
+
+
+def cmd_status():
+    """P41: status reports: none while off; with them on, one per channel start naming
+    the channel (the wrap flagged), FF when the editor opens; the host tool's queries
+    and loads still work with reports flowing, the filter collecting them"""
+    import cc784
+    rom, syms = assemble(HERE.parent / 'src' / 'patched')
+    checks = []
+    def check(name, cond):
+        checks.append(bool(cond)); print('  %s %s' % ('ok  ' if cond else 'FAIL', name))
+    def reports(tx):
+        out, i = [], 0
+        while i + 7 <= len(tx):
+            f = tx[i:i + 7]
+            if f[0] == 0xB1 and f[2] == 3 and f[3] == ord('S') and sum(f[3:6]) & 0xFF == f[6]:
+                out.append((f[4], f[5])); i += 7
+            else:
+                i += 1
+        return out
+    s = Sign(rom, syms, fresh_ram=True, baud=1200); s.run_ms(2500)
+    s.send_frame(b'\x09\x30\x30\x0eONE\x09\x30\x31\x0eTWO\x04', addr=1); s.rx_wait(); s.run_ms(1000)
+    s.tx_edges.clear(); s.run_ms(8000)
+    check('off by default: nothing sent in 8 s (%s)' % s.tx_bytes().hex(), s.tx_bytes() == b'')
+    s.send_frame(bytes([0xB6, 12, 1]), addr=1); s.rx_wait(); s.run_ms(500)
+    s.tx_edges.clear(); s.run_ms(12000)
+    r = reports(s.tx_bytes())
+    chans = [c for c, f in r]
+    check('on: reports %s' % ['%d/%02x' % x for x in r], len(r) >= 4 and set(chans) == {0, 1}
+          and all(a != b for a, b in zip(chans, chans[1:])))
+    check('the wrap is flagged on channel 0 only', all((f & 0x40) == (0x40 if c == 0 else 0) for c, f in r))
+    check('nothing else on the line', len(s.tx_bytes()) == 7 * len(r))
+    link = SimLink(s)
+    sign = cc784.Sign(link, 1, baud=1200)
+    sign.post_ack = 0.2; sign.done = True; sign.quiet = True
+    replies = [sign.query('4') for _ in range(8)]
+    bad = [r.hex() for r in replies if len(cc784.reply_data(r)) != 18]
+    ok = sign.send_frame(b'\x09\x30\x32\x0e' + b'THREE ' * 30)
+    check('with reports flowing: 8 stats replies (bad: %s), a 180-byte load ACKed (%s), %d reports filtered'
+          % (bad, ok, len(sign.link.reports)), not bad and ok and sign.link.reports)
+    s.tx_edges.clear()
+    s.ir_key('STOP', stretch_us=100); s.ir_wait(); s.run_ms(800)
+    r = reports(s.tx_bytes())
+    check('the editor opens: report FF (%s)' % r, r[:1] and r[0][0] == 0xFF)
+    s.ir_key('STOP', stretch_us=100); s.ir_wait(); s.run_ms(3000)
+    s.send_frame(bytes([0xB6, 12, 0]), addr=1); s.rx_wait(); s.run_ms(500)
+    s.tx_edges.clear(); s.run_ms(8000)
+    check('off again: nothing sent (%s)' % s.tx_bytes().hex(), s.tx_bytes() == b'')
+    check('no faults', not s.faults)
+    print('status: %d/%d checks pass' % (sum(checks), len(checks)))
     return all(checks)
 
 
@@ -1787,7 +1846,7 @@ def cmd_compare(dir_a, dir_b):
 
 if __name__ == '__main__':
     args = sys.argv[1:]
-    if not args or args[0] not in ('stack', 'compare', 'eeprom', 'ota', 'update', 'push', 'fuzz', 'ram', 'quiet', 'speed', 'baud', 'clock', 'config', 'keypad', 'seq', 'stats'):
+    if not args or args[0] not in ('stack', 'compare', 'eeprom', 'ota', 'update', 'push', 'fuzz', 'ram', 'quiet', 'speed', 'baud', 'clock', 'config', 'keypad', 'seq', 'stats', 'status'):
         sys.exit(__doc__)
     if args[0] == 'ram':
         sys.exit(0 if cmd_ram() else 1)
@@ -1805,6 +1864,8 @@ if __name__ == '__main__':
         sys.exit(0 if cmd_config() else 1)
     if args[0] == 'stats':
         sys.exit(0 if cmd_stats() else 1)
+    if args[0] == 'status':
+        sys.exit(0 if cmd_status() else 1)
     if args[0] == 'quiet':
         sys.exit(0 if cmd_quiet() else 1)
     if args[0] == 'push':

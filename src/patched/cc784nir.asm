@@ -206,7 +206,7 @@ CFG_HOLD             equ CFG+8            ; frames a PAUSE, HOLD, wipe or clock 
 CFG_FLASH            equ CFG+9            ; frames per half period of the FLASH blink
 CFG_BEEP             equ CFG+10           ; 0: the beeper stays silent
 CFG_LOCK             equ CFG+11           ; non-zero: remote keys are ignored
-CFG_STATUS           equ CFG+12           ; reserved: status reports
+CFG_STATUS           equ CFG+12           ; P41: non-zero: a status report at each channel start and editor entry
 CFG_CLKSRC           equ CFG+13           ; reserved: clock source override
 CFG_SUM              equ CFG+15           ; 8-bit sum of the 15 bytes before it
 CFG_LEN              equ 16
@@ -339,7 +339,7 @@ STREAM_AREA          equ STACK_TOP-STACK_SIZE-STREAM_AREA_SIZE
 TX_SEG0              equ STREAM_AREA+0     ; segment being sent: ptr, count, flags (bit 0 = append the sum)
 TX_SEG1              equ STREAM_AREA+5     ; next segment, same layout
 TX_SUM               equ STREAM_AREA+10    ; running 8-bit sum of TX_SEG0's bytes
-TX_DONE_PENDING      equ STREAM_AREA+11    ; FF = send DONE_BYTE once the segments are out
+TX_DONE_PENDING      equ STREAM_AREA+11    ; a byte to send once the segments are out: DONE_BYTE, or a deferred ACK/NAK (P41); 0 = none
 TX_ACTIVE            equ STREAM_AREA+12    ; FF = pkt_process_done handed its reply to the engine
 PKT_BUSY             equ STREAM_AREA+13    ; FF from pkt_process entry until the reply and DONE are sent
 PKT_RESTART          equ STREAM_AREA+14    ; FF = restart the display when the packet is done
@@ -373,7 +373,8 @@ STAT_IR_OK           equ STREAM_AREA+47    ; remote frames decoded
 STAT_IR_BAD          equ STREAM_AREA+48    ; remote frames dropped after the leader
 STATS_LEN            equ 11
 POLL_AGE             equ STREAM_AREA+49    ; frames since pkt_poll last ran
-STREAM_AREA_SIZE     equ 50
+STATUS_BUF           equ STREAM_AREA+50    ; P41: the status report being sent, B1 addr 03 'S' channel flags
+STREAM_AREA_SIZE     equ 56
 STORE_TOP            equ STREAM_AREA-1    ; with a 32 K chip (16 K usable)
 STORE_TOP_8K         equ STORE_TOP-0x2000         ; with the stock 8 K chip
 ; store_init derives the warning level, the text allowance (301 = framing) and
@@ -1631,6 +1632,7 @@ seq_skip_attrs_next:
 seq_set_cursor:
         POP HL
         LD (STORE_CURSOR),HL
+        CALL status_send        ; P41: E = the channel starting
         JR chan_lock_set
 
 seq_ret:                        ; the emulator's seq gate watches cursor writes from seq_set_cursor to here
@@ -1682,6 +1684,46 @@ chan_open:
         DEC HL
         LD (STORE_CURSOR),HL
         JR chan_lock_set
+
+; ---- status_send (P41): with reports on and the line quiet, hand the transmitter
+;      B1 addr 03 'S' E flags sum. Dropped while a reply streams or a frame is arriving.
+status_send:
+        LD A,(CFG_STATUS)
+        AND A
+        RET z
+        LD A,(TX_ACTIVE)
+        LD HL,RX_PHASE
+        OR (HL)
+        LD HL,PKT_STATE
+        OR (HL)
+        RET nz
+        LD HL,STATUS_BUF
+        LD (TX_SEG0),HL
+        LD (HL),FRAME_START
+        INC HL
+        LD A,(MY_ADDRESS)
+        LD (HL),A
+        INC HL
+        LD (HL),3
+        INC HL
+        LD (TX_SEG1),HL
+        LD (HL),'S'
+        INC HL
+        LD (HL),E
+        INC HL
+        LD A,(CFG_FLAGS)
+        LD (HL),A
+        LD HL,3
+        LD (TX_SEG0+2),HL
+        LD (TX_SEG1+2),HL
+        LD A,1
+        LD (TX_SEG1+4),A
+        XOR A
+        LD (TX_SEG0+4),A
+        LD (TX_SUM),A
+        DEC A
+        LD (TX_ACTIVE),A
+        RET
 
 ; ---- chan_select: Select channel E: find/create its slot in MSG_STORE, set INS_PTR/STORE_CURSOR
 chan_select:
@@ -4593,7 +4635,6 @@ tx_stream_done:
         OR A
         JR z,tx_stream_idle
         LD (HL),0
-        LD A,DONE_BYTE
         JR tx_stream_queue
 
 tx_stream_idle:
@@ -5033,6 +5074,15 @@ pkt_st_cksum:
         LD A,REPLY_NAK
 
 pkt_send_reply:
+        LD D,A                  ; P41: a status report streaming: the ACK follows it
+        LD A,(TX_ACTIVE)
+        OR A
+        LD A,D
+        JR z,pkt_send_now
+        LD (TX_DONE_PENDING),A
+        JR pkt_check_ok
+
+pkt_send_now:
         CALL tx_send_byte
 
 pkt_check_ok:
@@ -5310,6 +5360,8 @@ editor_start:
         LD A,0xff
         LD (MENU_ACTIVE),A
         EI
+        LD E,A                  ; P41: FF = playback stopped
+        CALL status_send
         CALL init_render
         LD A,(IR_CODE)
         CP IR_CODE_STOP
@@ -7368,7 +7420,9 @@ pkt_process:
         ; the store, so the edits below need no DI. Its pointers are saved and
         ; put back (shifted if a lower channel changed size) unless the text
         ; under it changed, which restarts the display as before.
-        XOR A
+        LD A,(TX_ACTIVE)        ; P41: a status report still streaming: let it finish
+        OR A
+        JR nz,pkt_process
         LD (PKT_READY),A
         LD (PKT_RESTART),A
         LD (PKT_DONE_WANT),A
@@ -7622,6 +7676,7 @@ pkt_process_done:
         LD A,0xff
         LD (CLK_RUN),A
         LD A,(PKT_DONE_WANT)
+        AND DONE_BYTE
         LD (TX_DONE_PENDING),A
 
 pkt_done_handoff:

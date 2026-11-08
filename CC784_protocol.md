@@ -314,6 +314,8 @@ The sign's side of this protocol is read from the firmware itself, and lives in 
 | The fixed 300 baud, the bit-banged receiver and transmitter | [firmware notes §4](CC784_firmware.md#4-serial-link-h) |
 | The patched firmware's 300 to 1200 baud, set by the first frame after a second of silence | [CC784_patched.md](CC784_patched.md#2-patches), patch 30 |
 | The patched firmware's configuration block: `B6 index value` writes a byte, `B4 '5'` reads the block, `B4 '6'` the sequence list; `cc784.py config` | [CC784_patched.md](CC784_patched.md#2-patches), patch 35 |
+| The patched firmware's health counters in the `B4 '4'` reply; `cc784.py stats` | [CC784_patched.md](CC784_patched.md#2-patches), patch 40 |
+| The patched firmware's unsolicited status reports, `B1 addr 03 'S' channel flags sum`; `cc784.py watch` | [CC784_patched.md](CC784_patched.md#2-patches), patch 41 |
 | The frame parser state by state, ACK, NAK and the silent discard of other addresses | [firmware notes §5](CC784_firmware.md#5-packet-parser-pkt_st_-16ef178c-h) |
 | The complete command list, including the ones NETCC never sends, and the exact reply and dump frame formats | [firmware notes §6](CC784_firmware.md#6-packet-processing-and-command-set-pkt_process-2a68-h) |
 | Every attribute byte with the sign's own name for it, the color codes, the graphics and the European characters | [firmware notes §8](CC784_firmware.md#8-rendering-h) |

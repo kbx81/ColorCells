@@ -10,6 +10,8 @@ Examples
     cc784.py --unsafe mem               # memory figures (B4 '1')
     cc784.py --unsafe dump              # dump the message store (B4 '3')
     cc784.py --unsafe stats             # patched firmware: serial timing, clock source, uptime, health counters (B4 '4')
+    cc784.py config set status on       # patched firmware: a status report at each channel start
+    cc784.py watch [SECONDS]            # print the status reports as they arrive
     cc784.py msg 0 "HELLO WORLD"        # load channel 0 and display it
     cc784.py msg 1 "@B BOLD @F FLASH @R RED"  # single-letter escapes, see ESC
     cc784.py msg 2 "@{lime}LIME @{d-red}DIM RED @{bg yellow}@{black}ON YELLOW"
@@ -145,9 +147,58 @@ class SerialLink:
     def close(self):
         self.ser.close()
 
+class ReportFilter:
+    """patch 41: takes status reports (B1 addr 03 'S' channel flags sum) out of the
+    byte stream, so readers only see ACKs and replies; reports collect in .reports"""
+    def __init__(self, link):
+        self.link, self.buf, self.out, self.reports = link, bytearray(), bytearray(), []
+
+    def write(self, data):
+        self.link.write(data)
+
+    def close(self):
+        self.link.close()
+
+    def reset_input(self):
+        # a report may be half-received: sift what is here and keep its head
+        self.buf += self.link.read(4096, 0.02)
+        self._sift(False)
+        self.link.reset_input(); self.out.clear()
+
+    def _sift(self, final):
+        b = self.buf
+        while b:
+            head = (START, None, 3, ord('S'))
+            if any(i < len(b) and k is not None and b[i] != k for i, k in enumerate(head)):
+                self.out.append(b.pop(0)); continue
+            if len(b) < 7:                  # could still be a report: wait for the rest
+                if final:
+                    self.out += b; b.clear()
+                return
+            if sum(b[3:6]) & 0xFF == b[6]:
+                self.reports.append((time.time(), b[1], b[4], b[5])); del b[:7]
+            else:
+                self.out.append(b.pop(0))
+
+    def read(self, n, timeout):
+        end = time.time() + timeout
+        while len(self.out) < n and time.time() < end:
+            self.buf += self.link.read(max(1, n - len(self.out)), min(0.2, max(0.0, end - time.time())))
+            self._sift(False)
+        if len(self.out) < n:
+            self._sift(True)
+        r = bytes(self.out[:n]); del self.out[:n]
+        return r
+
+def report_text(t, addr, chan, flags):
+    what = 'stopped (editor)' if chan == 0xFF else 'demo' if chan == 100 else 'channel %d' % chan
+    f = [('off', 'low', 'medium', 'full')[flags & 3]]
+    f += [n for bit, n in ((0x04, 'muted'), (0x08, 'mute pending'), (0x40, 'wrapped')) if flags & bit]
+    return '%s  addr %d  %s  (%s)' % (time.strftime('%H:%M:%S', time.localtime(t)), addr, what, ', '.join(f))
+
 class Sign:
     def __init__(self, link, addr, gap=0.0, timeout=3.0, verbose=False, baud=300):
-        self.link = link
+        self.link = ReportFilter(link)
         self.addr, self.gap, self.timeout, self.verbose = addr, gap, timeout, verbose
         self.baud = baud             # for the wire-time arithmetic; the link itself runs at this rate
         self.post_ack = 1.0          # pause after each frame: the sign is deaf while it processes
@@ -290,7 +341,7 @@ CONFIG_FIELDS = {
     'flash':      (9, lambda v: int(v, 0)),                 # frames per half period
     'beeper':     (10, _onoff),
     'lock':       (11, _onoff),                             # remote keys ignored
-    'status':     (12, _onoff),                             # reserved
+    'status':     (12, _onoff),                             # patch 41: status reports
     'clocksource': (13, _choice('auto', 'mains', 'crystal')),
 }
 
@@ -391,6 +442,17 @@ def run(link, a, ap):
             while True:
                 b = link.read(64, 0.5)
                 if b: print(hexs(b), " ", printable(b))
+        except KeyboardInterrupt: pass
+
+    elif c == 'watch':
+        # patch 41: print status reports as they arrive (config set status on); optional seconds
+        end = time.time() + float(args[0]) if args else None
+        print("watching for status reports; ctrl-C to stop")
+        try:
+            while end is None or time.time() < end:
+                s.link.read(64, 0.5)
+                for r in s.link.reports: print("  " + report_text(*r))
+                s.link.reports.clear()
         except KeyboardInterrupt: pass
 
     elif c in ('id', 'mem', 'dump', 'stats', 'timing'):
