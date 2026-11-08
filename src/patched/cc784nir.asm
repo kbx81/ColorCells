@@ -12,7 +12,7 @@
         DEVICE NONE
 
 ; Patched build: the stock reconstruction (../stock/cc784nir.asm) plus the
-; patches in CC784_patched.md. Up to the tag patched-v39 the rest was kept
+; patches in patched.md. Up to the tag patched-v39 the rest was kept
 ; identical to stock; after it the code is restructured freely and the git
 ; history is the changelog. Addresses differ from stock throughout.
 
@@ -228,7 +228,7 @@ PKT_ADDR             equ RAM_TOP-0x09
 PKT_PTR              equ RAM_TOP-0x08
 PKT_REMAIN           equ RAM_TOP-0x06
 CTRL_LATCH           equ 0x8000
-; ---- OTA (CC784_ota.md): the boot stub's RAM, above the packet parser state,
+; ---- OTA (ota.md): the boot stub's RAM, above the packet parser state,
 ;      and the added '273 bank register. store_init leaves these bytes alone.
 NMI_SEEN             equ RAM_TOP-0x10 ; FF once a mains NMI has fired since reset: the page writer syncs to the NMI only then (7FF0, between PKT_BUF and the parser state)
 NMI_VEC              equ RAM_TOP-4   ; NMI_VECTOR jumps here once NMI_MAGIC holds 0xA5
@@ -270,7 +270,7 @@ CHANNELS             equ 100         ; message channels 0-99
 CHAN_DEMO            equ 100         ; the pseudo-channel that plays DEMO_MESSAGE
 SEQ_LIST_LEN         equ 104         ; SEQ_LIST: up to 100 entries plus FF terminators
 
-; ---- Message attribute bytes (the sign's own names, CC784_firmware.md §8) --------
+; ---- Message attribute bytes (the sign's own names, firmware.md §8) --------
 ATTR_BIG             equ 0x10
 ATTR_NORM            equ 0x11
 ATTR_BOLD            equ 0x12
@@ -304,7 +304,7 @@ BAUD_STEP_600        equ 10
 BAUD_STEP_1200       equ 20
 BAUD_CAL_LIMIT       equ 60          ; |s| beyond this (4.7 %) is a partial second or a stall: ignored
 ; P31: the NMI is the mains zero-cross on AC, or the add-in board's HC4060 Q9
-; when BANK_REG bit 7 selects it through the board's '151 (CC784_hardware.md)
+; when BANK_REG bit 7 selects it through the board's '151 (hardware.md)
 NMI_PER_SEC_MAINS    equ 60
 NMI_PER_SEC_XTAL     equ 64
 BANK_CLOCK_XTAL      equ 0x80        ; BANK_REG bit 7, its top bit; bits 0-2 are kept for a larger EEPROM's A14-A16
@@ -381,7 +381,7 @@ STORE_TOP_8K         equ STORE_TOP-0x2000         ; with the stock 8 K chip
 ; store_init derives the warning level, the text allowance (301 = framing) and
 ; the B4 '1' size from whichever ceiling the RAM test picks.
 
-; ---- Wire protocol bytes (CC784_protocol.md) ---------------------------------
+; ---- Wire protocol bytes (protocol.md) ---------------------------------
 FRAME_START          equ 0xb1
 ADDR_BROADCAST       equ 0x2a        ; '*': processed, never answered
 REPLY_ACK            equ 0x06
@@ -409,7 +409,7 @@ CMD_OTA              equ 0xb5        ; B5 c ... (patch 11)
 CMD_CONFIG           equ 0xb6        ; B6 index value (patch 35)
 DONE_BYTE            equ 0x04        ; sent after processing when the frame's flag was 81 (patch 16)
 
-; ---- Boot stub and OTA (CC784_ota.md) ------------------------------------------
+; ---- Boot stub and OTA (ota.md) ------------------------------------------
 STUB_END             equ 0x0240      ; the stub owns 0000-023F; the app starts at the jump table here
 APP_START            equ STUB_END
 APP_INT              equ STUB_END+3
@@ -438,7 +438,7 @@ OTA_FEATURES         equ 0x05           ; 'I' reply byte 21: bit 0 = DONE handsh
         org 0x0000
 
 ; ============================================================================
-;  BOOT STUB 0000-00FF (CC784_ota.md §4). Byte-identical in both banks and
+;  BOOT STUB 0000-00FF (ota.md §4). Byte-identical in both banks and
 ;  written by the T48 only: the OTA handler refuses its pages. It may reference
 ;  nothing in the app except the fixed jump table below, so that app changes
 ;  never change its bytes.
@@ -7951,7 +7951,7 @@ pq_canary_end:
         LD BC,7+STATS_LEN
         JP pq_reply
 
-; ---- cmd_B5_ota: OTA commands (CC784_ota.md §6). B5 must be the first payload
+; ---- cmd_B5_ota: OTA commands (ota.md §6). B5 must be the first payload
 ;      byte and the frame ends with the command. Runs under pkt_process's DI;
 ;      interrupts come back only for the reply. Replies are tx_send_frame
 ;      frames: one status byte (0 ok, 1 verify failed, 2 chip timeout, 3 page
@@ -9048,7 +9048,7 @@ DEMO_MESSAGE:
 ota_updating_msg:
         db 0x19,0xb9,">FW ^<",0xba,0x03     ; ^ is the up-arrow glyph; fits 59 columns
 
-; ---- trailer page 3FC0-3FFF (CC784_ota.md §3): magic, sequence number, state
+; ---- trailer page 3FC0-3FFF (ota.md §3): magic, sequence number, state
 ;      and image CRC, filled in by tools/cc784_ota.py pack. Erased in the build.
         ds 0x3fc0-$,0xff
 TRAILER:

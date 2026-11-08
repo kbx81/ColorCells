@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-cc784_ota.py - build and deliver OTA firmware images for the CC784 (CC784_ota.md).
+cc784_ota.py - build and deliver OTA firmware images for the CC784 (ota.md).
 
     cc784_ota.py pack BUILD.bin [-s SEQ] [-o BANK.bin] [--t48 CHIP.bin]
         Fill in the trailer page of one 16 K bank image (sequence number, state

@@ -58,7 +58,7 @@ on the patched build), a keypad's column code on bits 0-2 and GS on bit 3,
 CTRL_LATCH bit 4 = serial TX (1 = space). The stack watch counts only writes at
 SP, so store shuffles next to the stack do not register.
 
-The ROM is an AT28C256 with the OTA bodges (CC784_ota.md §2): /WE on Z80 /WR,
+The ROM is an AT28C256 with the OTA bodges (ota.md §2): /WE on Z80 /WR,
 /OE on /RD, A14..A16 from BANK_REG, a '273 written at C000 and zero at reset.
 Page writes, the 150 us byte-load timer, the 10 ms write cycle (every ROM read
 returns the status byte; an instruction fetch then is a fault) and software

@@ -13,7 +13,7 @@
 ;  header instead of a DB9, 2 KB RAM, 7x59 panel driven as 60 columns). Same code
 ;  base as the NET: labels shared with the NIR source mean the same routine. The
 ;  firmware picks keypad, serial-terminal or packet mode at boot (store_init,
-;  mode_test). See CC784_firmware.md section 15.
+;  mode_test). See firmware.md section 15.
 ; ============================================================================
         DEVICE NONE
         OUTPUT "cc710.bin"
@@ -167,7 +167,7 @@ KEY_ECHO_TX          equ RAM_VARS+0x179   ; non-zero = echo accepted keys on ser
 STORE_TEXT_LIMIT     equ RAM_VARS+0x17e   ; free text bytes; scan bound for store_repair
 STORE_WARN_LIMIT     equ RAM_VARS+0x180   ; STORE_END here trips the 100 KEYS LEFT warning
 
-; ---- Wire protocol bytes (CC784_protocol.md) ---------------------------------
+; ---- Wire protocol bytes (protocol.md) ---------------------------------
 FRAME_START          equ 0xb1
 ADDR_BROADCAST       equ 0x2a   ; '*': processed, never answered
 REPLY_ACK            equ 0x06
@@ -203,7 +203,7 @@ CHANNELS             equ 100   ; message channels 0-99
 CHAN_DEMO            equ 100   ; the pseudo-channel that plays DEMO_MESSAGE
 SEQ_LIST_LEN         equ 104   ; SEQ_LIST: up to 100 entries plus FF terminators
 
-; ---- Message attribute bytes (the sign's own names, CC784_firmware.md §8) --------
+; ---- Message attribute bytes (the sign's own names, firmware.md §8) --------
 ATTR_BIG             equ 0x10
 ATTR_NORM            equ 0x11
 ATTR_BOLD            equ 0x12

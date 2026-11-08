@@ -14,7 +14,7 @@
 ;  86-byte rows for the 84-column panel, bit timing for a 1302 Hz tick. Keypad or
 ;  serial input chosen at boot from PORT_IN bit 0; no packet protocol, no ROM-ID
 ;  query, no IR. Labels shared with the CC710 and NIR sources mean the same routine.
-;  See CC784_firmware.md section 16.
+;  See firmware.md section 16.
 ; ============================================================================
         DEVICE NONE
         OUTPUT "cc784.bin"

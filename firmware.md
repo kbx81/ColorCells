@@ -4,7 +4,7 @@ The firmware of the Color Cells CC784 family of LED message signs: four stock RO
 
 **The reference ROM** is the CC784NIR's: ST M27C256B (32 KB, code in `0x0000–0x3C20`, rest `0xFF`). Hand-written Z80 assembly, ROM ID string `78409O1702930205` (read as: model 784, rev 09, 17-02-93, build 0205).
 
-These notes describe the **stock** firmware as shipped. Companion files: the four sources in `src/stock/` (each reassembles byte-identical with sjasmplus), [CC784_protocol.md](CC784_protocol.md) (wire protocol), `cc784.py` / `cc784_esphome.py` (tools), [CC784_hardware.md](CC784_hardware.md) (board). The fixes and additions of the patched build, including the over-the-air update mechanism, are in [CC784_patched.md](CC784_patched.md) and [CC784_ota.md](CC784_ota.md); the bugs they fix are listed in §11 here.
+These notes describe the **stock** firmware as shipped. Companion files: the four sources in `src/stock/` (each reassembles byte-identical with sjasmplus), [protocol.md](protocol.md) (wire protocol), `cc784.py` / `cc784_esphome.py` (tools), [hardware.md](hardware.md) (board). The fixes and additions of the patched build, including the over-the-air update mechanism, are in [patched.md](patched.md) and [ota.md](ota.md); the bugs they fix are listed in §11 here.
 
 **Branches:** `main` carries the untouched reconstruction in `src/stock/` only; `src/patched/` and its tasks live on `wip`.
 
@@ -37,20 +37,20 @@ The four ROMs are one code base, revised in one sequence. The letter after the `
 - Features accumulate in the same order: serial typed as keys (1); the `B1` packet protocol and its queries added beside it (2); 100 channels in 8 KB with terminal mode dropped (3); the IR decoder on an 8 MHz tick, with the keypad scan left in but unreferenced (4).
 - The "700 SERIES" name first appears in the CC710's demo, and the NET's demo still uses it.
 - `NETCC.EXE` v3.0, the packet host, is ©1991, before the NET was built, so the protocol existed before the `CC784-4`, as the CC710 shows.
-- The rating labels agree. Their patent lists grow by one country per sign (US and Australia on the original CC784, Japan added on the CC710, Canada on the NET and NIR), and the keyboard they name changes with the board: the CC100 for the two `CC784-3A` signs, the "CC110 NET" for the two `CC784-4` signs ([hardware notes §14](CC784_hardware.md#14-the-four-boards-side-by-side-h--from-photos)).
+- The rating labels agree. Their patent lists grow by one country per sign (US and Australia on the original CC784, Japan added on the CC710, Canada on the NET and NIR), and the keyboard they name changes with the board: the CC100 for the two `CC784-3A` signs, the "CC110 NET" for the two `CC784-4` signs ([hardware notes §14](hardware.md#14-the-four-boards-side-by-side-h--from-photos)).
 
 **Each step:**
 
-1. **Original CC784 → CC710:** the packet parser, queries `0`–`3` and the boot probe that picks keypad, terminal or packet (the original reads one pin, `PORT_IN` bit 0); a 59-column panel on 74HC595s in place of 84 columns. Same board, RAM and channel count ([hardware notes §11](CC784_hardware.md#11-the-cc784-3a-board-cc710-h), [§13](CC784_hardware.md#13-the-original-cc784s-board-h)).
+1. **Original CC784 → CC710:** the packet parser, queries `0`–`3` and the boot probe that picks keypad, terminal or packet (the original reads one pin, `PORT_IN` bit 0); a 59-column panel on 74HC595s in place of 84 columns. Same board, RAM and channel count ([hardware notes §11](hardware.md#11-the-cc784-3a-board-cc710-h), [§13](hardware.md#13-the-original-cc784s-board-h)).
 2. **CC710 → CC784NET:** the `CC784-4` board, with 8 KB RAM, a DB9 in place of the 10-pin header, the power-fail lockout on the regulated 5 V and the delayed `/M1` in copper; 100 channels with two-byte markers; the boot test cut to keypad or packet.
 3. **CC784NET → CC784NIR:** the 8 MHz crystal and the `/INT` bodge for the IR decoder's 7812.5 Hz tick, the receiver board and the remote; a new demo.
 
 **Open questions:**
 
 - The original CC784's ROM label and its serial sticker both read `9E`, but the ID inside the ROM is `9g`; the CC710's label and ID agree (`9L`, `09l`).
-- The original CC784's board carries the factory `/M1` and beeper bodges ([hardware notes §13](CC784_hardware.md#13-the-original-cc784s-board-h)) but the later CC710's does not. The original CC784 here came new and sealed in its box, so its bodges are factory work, not a later service. The CC710's chip date codes settle the rest: both boards come from the same build period, mid-1990, with exact lots in common ([hardware notes §14](CC784_hardware.md#14-the-four-boards-side-by-side-h--from-photos)). The fix was applied to some boards, not all; the CC710 shipped without a beeper driver, which may be why it went without [M]. The board dates cannot order the two signs, so the order rests on the ROMs.
+- The original CC784's board carries the factory `/M1` and beeper bodges ([hardware notes §13](hardware.md#13-the-original-cc784s-board-h)) but the later CC710's does not. The original CC784 here came new and sealed in its box, so its bodges are factory work, not a later service. The CC710's chip date codes settle the rest: both boards come from the same build period, mid-1990, with exact lots in common ([hardware notes §14](hardware.md#14-the-four-boards-side-by-side-h--from-photos)). The fix was applied to some boards, not all; the CC710 shipped without a beeper driver, which may be why it went without [M]. The board dates cannot order the two signs, so the order rests on the ROMs.
 
-**Beyond these four.** `NETCC.EXE` also knows a "CC6x7" name for this family, NC900-series network controllers (model type 2) with their own control bytes, date record and CC900 graphics, and features it marks "(LK)", later models only ([protocol notes](CC784_protocol.md)). None of those has been seen in the wild. The company is believed to have been acquired or wound up soon after the NIR began shipping, so the NIR is probably the last firmware of this line.
+**Beyond these four.** `NETCC.EXE` also knows a "CC6x7" name for this family, NC900-series network controllers (model type 2) with their own control bytes, date record and CC900 graphics, and features it marks "(LK)", later models only ([protocol notes](protocol.md)). None of those has been seen in the wild. The company is believed to have been acquired or wound up soon after the NIR began shipping, so the NIR is probably the last firmware of this line.
 ## 2. Memory map [H]
 
 | Range | Use |
@@ -69,7 +69,7 @@ The four ROMs are one code base, revised in one sequence. The letter after the `
 | `5FF1–5FFB` | packet-parser state (`PKT_STATE`, `PKT_CKSUM`, `PKT_FLAG`, `PKT_LEN`, `PKT_VECTOR`, `PKT_ADDR`, `PKT_PTR`, `PKT_REMAIN`) |
 | `8000` | memory-mapped write-only **control latch** (`CTRL_LATCH`), shadow copy at `422D` |
 
-Every RAM symbol in the source is written as `FRAMEBUF`, `FRAMEBUF_SIZE` or `RAM_VARS+offset` (the variable block's layout is baked into `INIT_DATA`, so only its base moves). The patched build uses a different geometry ([CC784_patched.md §1](CC784_patched.md#1-memory-map)).
+Every RAM symbol in the source is written as `FRAMEBUF`, `FRAMEBUF_SIZE` or `RAM_VARS+offset` (the variable block's layout is baked into `INIT_DATA`, so only its base moves). The patched build uses a different geometry ([patched.md §1](patched.md#1-memory-map)).
 
 I/O ports: `IN C0` (input mux), `OUT 40` (column shift clock), `OUT 48–4F` (column data, row in A0–A2), `OUT 80` (strobe). See hardware notes.
 
@@ -151,14 +151,14 @@ The command bytes are named in the source (`CMD_*`); the docs use those names, w
 | DELETE_TEXT | `0E` | `cmd_0E_delete_text` | delete the selected channel's existing text |
 | FORE_IDX | `15 n` | `cmd_15_fore_idx` | insert `FG_IDX_TABLE[n]` (`8C 8D 8F 87 83 84 8E 80 8B 81`) |
 | BACK_IDX | `16 n` | `cmd_16_back_idx` | insert `BG_IDX_TABLE[n]` (`91 93 93 93 92 90`) |
-| SET_TIME | `17 hhmm a` | `cmd_17_set_time` | 4 ASCII digits → `CLK_H10..CLK_M1`; `a`=`Y`/`y` AM else PM (patched: `H` = 24-hour, [CC784_patched.md](CC784_patched.md#2-patches) patch 32) |
+| SET_TIME | `17 hhmm a` | `cmd_17_set_time` | 4 ASCII digits → `CLK_H10..CLK_M1`; `a`=`Y`/`y` AM else PM (patched: `H` = 24-hour, [patched.md](patched.md#2-patches) patch 32) |
 | COLOR_A0 | `1E n` | `cmd_1E_color_A0` | insert `A0 \| (n&15)` |
 | APPEND | `B3` | `cmd_B3_append` | insertion point → end of selected channel |
-| QUERY | `B4 c` | `cmd_B4_query` | `c` = ROMID `'0'`, MEMORY `'1'`, NOP `'2'`, DUMP `'3'` — **see bug B1** (patched: `'4'` timing and health counters, `'5'` configuration block, `'6'` sequence list, [CC784_patched.md](CC784_patched.md#2-patches) patches 30 and 35) |
-| CONFIG | `B6 i v` | — | *patched only*: writes byte `i` of the configuration block ([CC784_patched.md](CC784_patched.md#2-patches), patch 35) |
+| QUERY | `B4 c` | `cmd_B4_query` | `c` = ROMID `'0'`, MEMORY `'1'`, NOP `'2'`, DUMP `'3'` — **see bug B1** (patched: `'4'` timing and health counters, `'5'` configuration block, `'6'` sequence list, [patched.md](patched.md#2-patches) patches 30 and 35) |
+| CONFIG | `B6 i v` | — | *patched only*: writes byte `i` of the configuration block ([patched.md](patched.md#2-patches), patch 35) |
 | (text) | other | `pkt_insert_text` | insert byte into the store at the cursor |
 
-The patched build adds OTA (`B5`), [CC784_ota.md](CC784_ota.md).
+The patched build adds OTA (`B5`), [ota.md](ota.md).
 
 `pkt_process_done` (`2B68`): clear flags, `OUT (40)` pulse, re-init render, jump to `main_loop` (never returns to the caller — this is why immediate-mode processing "works" for normal packets).
 
@@ -257,7 +257,7 @@ Glyphs: `char_to_glyph` → index → `FONT + 8*idx`. Movement effects are state
 
 ## 9. IR remote decoder (`ir_*`, `1482–1571`) [H — verified against a capture of the sign's own receiver]
 
-Runs every tick (128 µs) on `PORT_IN` bit 1 (1 = burst present; the receiver module is active-low and the HC14 inverts it). The remote is a Motorola MC14497 PCM transmitter ([hardware notes §9](CC784_hardware.md#9-open-questions)). State machine:
+Runs every tick (128 µs) on `PORT_IN` bit 1 (1 = burst present; the receiver module is active-low and the HC14 inverts it). The remote is a Motorola MC14497 PCM transmitter ([hardware notes §9](hardware.md#9-open-questions)). State machine:
 
 1. idle: line quiet for 130 ticks;
 2. leader burst seen, then its end;
@@ -312,7 +312,7 @@ Consumer (`editor_getkey 233F`): `code & 0x3F` → **`IR_KEY_TABLE` gives a glyp
 > [!NOTE]
 > **Did you know?...**
 > 
-> There is an undocumented test mode: `SEQ` (`SEQ MSG?`), `MAGIC` then `C` copies `TEST_MESSAGE` to `TEST_MSG_BUF`, appends the 16-bit sum of ROM `0000–3FFF` as four hex digits and displays that instead of the sequence (`TEST_MODE`) until the next key — a factory ROM-checksum check. The patched build removes it ([CC784_patched.md](CC784_patched.md#2-patches), patch 29) and reuses `TEST_MODE` for the OTA parked display.
+> There is an undocumented test mode: `SEQ` (`SEQ MSG?`), `MAGIC` then `C` copies `TEST_MESSAGE` to `TEST_MSG_BUF`, appends the 16-bit sum of ROM `0000–3FFF` as four hex digits and displays that instead of the sequence (`TEST_MODE`) until the next key — a factory ROM-checksum check. The patched build removes it ([patched.md](patched.md#2-patches), patch 29) and reuses `TEST_MODE` for the OTA parked display.
 
 ### Key layers [H]
 
@@ -381,11 +381,11 @@ After a bare CLEAR_ALL, or on an empty sign, the renderer is in the ROM demo and
 git clone --recurse-submodules https://github.com/z00m128/sjasmplus && make
 cd src/stock && sjasmplus cc784nir.asm   # -> cc784nir.bin; likewise cc784net.asm, cc710.asm and cc784.asm
 ```
-Or the `Build stock ROM` task, which assembles all four stock sources. Each must stay byte-identical to its dump — `cc784nir.bin` md5 `c021af146a50b93a22d13535201b7eaa`, `cc784net.bin` `872c87932339e9e072c5525d30ffb5df`, `cc710.bin` `f346d39e5aa7b49709a717c85d7c7e11`, `cc784.bin` `3e7a679f77d7dac121926182442f923a` — that is the regression test for every edit to the stock sources, and the `Verify stock ROM is byte-identical` task asserts it. The NET and CC710 sources carry the NIR's labels and comments wherever the code is the same, and the original CC784's carry the CC710's, so a name means the same routine in all four. The patched build and its packaging: [CC784_patched.md §5](CC784_patched.md#5-rebuilding-and-testing).
+Or the `Build stock ROM` task, which assembles all four stock sources. Each must stay byte-identical to its dump — `cc784nir.bin` md5 `c021af146a50b93a22d13535201b7eaa`, `cc784net.bin` `872c87932339e9e072c5525d30ffb5df`, `cc710.bin` `f346d39e5aa7b49709a717c85d7c7e11`, `cc784.bin` `3e7a679f77d7dac121926182442f923a` — that is the regression test for every edit to the stock sources, and the `Verify stock ROM is byte-identical` task asserts it. The NET and CC710 sources carry the NIR's labels and comments wherever the code is the same, and the original CC784's carry the CC710's, so a name means the same routine in all four. The patched build and its packaging: [patched.md §5](patched.md#5-rebuilding-and-testing).
 
-**Emulation.** `tools/cc784_sim.py` runs either build under an emulated Z80 (kosarev's `z80` package; `uv run tools/cc784_sim.py …` fetches it) with a fake 300-baud line, IR receiver and mains NMI. `stack [stock|patched]` prints the stack high-water mark and the transmitted bytes through a scripted session; `compare DIR_A DIR_B` assembles two source trees and checks that the panel sees the same sequence of frames and the PC the same replies. It reproduces the hardware captures byte for byte (`B4 '0'` → `06 B1 01 10 "78409O1702930205" 58`) and B1's overflow on stock, so it is the regression test for anything that moves RAM or touches the interrupt paths. MAGIC mode seeds its randomness from the mains counter, so frame comparisons use a message without it. The emulator also models the AT28C256 with the OTA bodges and the board's watchdog ([CC784_ota.md §6](CC784_ota.md#6-testing)).
+**Emulation.** `tools/cc784_sim.py` runs either build under an emulated Z80 (kosarev's `z80` package; `uv run tools/cc784_sim.py …` fetches it) with a fake 300-baud line, IR receiver and mains NMI. `stack [stock|patched]` prints the stack high-water mark and the transmitted bytes through a scripted session; `compare DIR_A DIR_B` assembles two source trees and checks that the panel sees the same sequence of frames and the PC the same replies. It reproduces the hardware captures byte for byte (`B4 '0'` → `06 B1 01 10 "78409O1702930205" 58`) and B1's overflow on stock, so it is the regression test for anything that moves RAM or touches the interrupt paths. MAGIC mode seeds its randomness from the mains counter, so frame comparisons use a message without it. The emulator also models the AT28C256 with the OTA bodges and the board's watchdog ([ota.md §6](ota.md#6-testing)).
 
-For a W27C512 in the 27C256 socket, program the 32 KB image twice (`cat cc784nir.bin cc784nir.bin > w27c512.bin`): the board ties pin 1 (A15) high so the upper half is what runs. The AT28C256 that makes the ROM writable in circuit is wired per [CC784_upgrades.md](CC784_upgrades.md).
+For a W27C512 in the 27C256 socket, program the 32 KB image twice (`cat cc784nir.bin cc784nir.bin > w27c512.bin`): the board ties pin 1 (A15) high so the upper half is what runs. The AT28C256 that makes the ROM writable in circuit is wired per [upgrades.md](upgrades.md).
 
 ## 13. What is still unknown in the firmware
 
@@ -402,13 +402,13 @@ Same code base, built 14-01-92, 13 months before the NIR's. Read from a CC784NET
 | IR decoder | none | `ir_*` |
 | `keypad_scan` | called from `tick6` and the editor | unreferenced |
 | Input mode | chosen at boot (below) | always serial |
-| Timer ISR | runs the serial bit engines and the row scan every interrupt, at 1302 Hz (4 MHz crystal, [hardware notes §3](CC784_hardware.md#3-timebase-h)) | 7812.5 Hz tick, ÷6 for the same work |
+| Timer ISR | runs the serial bit engines and the row scan every interrupt, at 1302 Hz (4 MHz crystal, [hardware notes §3](hardware.md#3-timebase-h)) | 7812.5 Hz tick, ÷6 for the same work |
 | Packet commands and `B4` queries `0`–`3` | same | same |
 | Demo message | "CC700 SERIES MULTI COLOR DISPLAY ... NETWORKABLE FROM YOUR PC" | "ULTIMATE INFRARED REMOTE CONTROL ..." |
 
 **Boot-time mode test** (`13CB`, called from the store/serial init at `1376`): sync to a tick with `HALT`, interrupts off, then 16 clocks of a `55 55` pattern out on `CTRL_LATCH` bits 6 (data, DB9 pin 7) and 5 (clock, DB9 pin 4), sampling `PORT_IN` bit 0 (DB9 pin 2) after each clock. If the last 8 samples are all 0 the flag at `4223` is set: serial mode, the RX/TX bit engines run from the timer ISR and `rx_consume` feeds the packet parser. Otherwise keypad mode: `tick6` calls `keypad_scan` instead, code `35` (STOP/START) enters the editor, and the serial engines never run. The factory cable's pin 2–5 short is what makes the test pass; a plain crossover leaves a NET sign deaf.
 
-**Editor keys** are the raw key codes (`00`–`3F`, see [hardware notes §6](CC784_hardware.md#6-connectors)): `19` toggles SHIFT, and the charsets are indexed by the code directly, with no `IR_KEY_TABLE`.
+**Editor keys** are the raw key codes (`00`–`3F`, see [hardware notes §6](hardware.md#6-connectors)): `19` toggles SHIFT, and the charsets are indexed by the code directly, with no `IR_KEY_TABLE`.
 
 The timer ISR starts with a check that `(IX)=AA` and `(IY)=55`, the sentinel the mode test sets so that its `HALT` returns without running the tick machinery. The NIR's firmware has no cable test and no such check: its `int_timer` goes straight to the tick counters.
 
@@ -416,7 +416,7 @@ The annotated source is [src/stock/cc784net.asm](src/stock/cc784net.asm) (`mode_
 
 ## 15. The CC710 firmware [H — from a ROM dump, ID `710`]
 
-The original CC784's code base ([§16](#16-the-original-cc784-firmware-h--from-a-rom-dump-id-9g)) with the packet protocol added, the step before the NET's ([§1](#1-lineage-of-the-stock-firmware-m--from-the-four-roms-their-labels-and-the-boards)), for the ten-channel sign on the `CC784-3A` board ([hardware notes §11](CC784_hardware.md#11-the-cc784-3a-board-cc710-h)): 16 KB with code to `307A`, 4 MHz, the 1302 Hz ISR doing everything per interrupt, keypad input through the 10-pin header. Source: [src/stock/cc710.asm](src/stock/cc710.asm); 2959 of 5419 instructions are the NIR's, and the NIR names apply.
+The original CC784's code base ([§16](#16-the-original-cc784-firmware-h--from-a-rom-dump-id-9g)) with the packet protocol added, the step before the NET's ([§1](#1-lineage-of-the-stock-firmware-m--from-the-four-roms-their-labels-and-the-boards)), for the ten-channel sign on the `CC784-3A` board ([hardware notes §11](hardware.md#11-the-cc784-3a-board-cc710-h)): 16 KB with code to `307A`, 4 MHz, the 1302 Hz ISR doing everything per interrupt, keypad input through the 10-pin header. Source: [src/stock/cc710.asm](src/stock/cc710.asm); 2959 of 5419 instructions are the NIR's, and the NIR names apply.
 
 | | CC710 | CC784 (NET/NIR) |
 |---|---|---|
@@ -432,7 +432,7 @@ The original CC784's code base ([§16](#16-the-original-cc784-firmware-h--from-a
 
 **Boot clear** (`boot_clear_check`) [H, verified on a CC100]: keypad mode only, `PORT_IN` bit 1 low at power-up calls `store_clear_all`. `mode_test` leaves keypad row 3 selected and only column bit 1 is read, so holding any row-3 key in column 0, 1, 4 or 5 while powering on wipes the store: `0`, SHIFT, `8` or `6`. By the same reasoning, a row-7 key in an even column (`08`, `1`, `7`, `U`) held at power-up reads `E` = `55` and puts the sign into packet mode, with address `*` (`D` reads `D5`) [H: `1`, `7` and `U` verified on a CC100]. That is a way into packet mode without an adapter. Holding a row-1 key in an even column as well (SPACE, `)`, `Z` or `Y`) makes the pre-clock sample low, so the `55` probe reads `55/55` and the `AA` probe `2A`: the keep path. After a `1` boot (stored pair `2A`/`D5`) the next `Z` + `1` boot gives address `D5`, the one after `*`, and so on [H: `Z` + `1`, ACK and NAK at `D5`, then `*` on the following boot].
 
-**Store corruption** on mains power cycles, in any mode, is not a firmware bug: and the emulated firmware leaves an intact store unchanged boot after boot ([hardware notes §11](CC784_hardware.md#11-the-cc784-3a-board-cc710-h)).
+**Store corruption** on mains power cycles, in any mode, is not a firmware bug: and the emulated firmware leaves an intact store unchanged boot after boot ([hardware notes §11](hardware.md#11-the-cc784-3a-board-cc710-h)).
 
 **Serial handshake** [H], absent from the NIR: `tx_bit_engine` starts a byte only while `PORT_IN` bits 1 and 2 (SK1 pins 8 and 7) are both high; `rx_bit_engine` drives `CTRL_LATCH` bit 5 (SK1 pin 4) high as "ready", drops it while `RX_FIFO` holds 8 bytes, and samples only while bit 1 is high. Same 300-baud bit timing.
 
@@ -444,7 +444,7 @@ The original CC784's code base ([§16](#16-the-original-cc784-firmware-h--from-a
 
 ## 16. The original CC784 firmware [H — from a ROM dump, ID `9g`]
 
-The ancestor of the CC710 code base, read from the original keypad CC784 (a `CC784-3A` board, ROM labelled `CC784-9E-USA`, [hardware notes §13](CC784_hardware.md#13-the-original-cc784s-board-h)): 16 KB image with code to `234C`, everything after it `FF`. Source: [src/stock/cc784.asm](src/stock/cc784.asm). 2673 of its 2800 instructions line up with the CC710's in order (2310 with the NIR's). The CC710 names apply, and where they differ the source uses this ROM's meaning.
+The ancestor of the CC710 code base, read from the original keypad CC784 (a `CC784-3A` board, ROM labelled `CC784-9E-USA`, [hardware notes §13](hardware.md#13-the-original-cc784s-board-h)): 16 KB image with code to `234C`, everything after it `FF`. Source: [src/stock/cc784.asm](src/stock/cc784.asm). 2673 of its 2800 instructions line up with the CC710's in order (2310 with the NIR's). The CC710 names apply, and where they differ the source uses this ROM's meaning.
 
 | | Original CC784 | CC710 |
 |---|---|---|

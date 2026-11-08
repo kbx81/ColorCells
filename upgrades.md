@@ -1,16 +1,16 @@
 # CC784 — upgrades and modifications
 
-Changes to the `CC784-4` controller board, each independent of the others. An earlier `CC784-3A` board (the CC710's) first needs the conversion in [CC784_hardware.md §12](CC784_hardware.md#12-converting-a-cc784-3a-board-to-a-cc784-4).
+Changes to the `CC784-4` controller board, each independent of the others. An earlier `CC784-3A` board (the CC710's) first needs the conversion in [hardware.md §12](hardware.md#12-converting-a-cc784-3a-board-to-a-cc784-4).
 
 | Upgrade | Gives | Parts |
 |---|---|---|
-| **EEPROM and bank register** (§2) | firmware writable in circuit: over-the-air updates with an A/B fallback ([CC784_ota.md](CC784_ota.md)) | AT28C256-15PU, 74LS273 or 74HCT273, 10 k resistor for R32 |
+| **EEPROM and bank register** (§2) | firmware writable in circuit: over-the-air updates with an A/B fallback ([ota.md](ota.md)) | AT28C256-15PU, 74LS273 or 74HCT273, 10 k resistor for R32 |
 | **RAM** (§3) | a 15 K message store instead of 7 K | AS6C62256-55 |
 | **NET to NIR** (§4) | a CC784NET runs the NIR firmware: 8 MHz timebase, and the remote if a receiver is fitted | 8.000 MHz crystal, IR receiver module, optionally a Z84C0008 |
 | **IR and clock add-in board** (§7) | the remote's receiver, and a 32 kHz crystal clock for signs on a DC supply | the assembled add-in board ([hardware/CC784NIR_IR+Clock/](hardware/CC784NIR_IR+Clock/)), a 7-wire cable |
 | **IR off the DB9** (§8) | the remote and a wired keypad on the same sign; required by the patched firmware from patch 36 | 74LS244 or 74HCT244, three 10 k resistors |
 
-All of them run the patched firmware from `src/patched/` ([CC784_patched.md](CC784_patched.md)). The images and tasks are on the **`wip`** branch.
+All of them run the patched firmware from `src/patched/` ([patched.md](patched.md)). The images and tasks are on the **`wip`** branch.
 
 **Method.** Nothing here needs an IC leg bent or soldered to; with some effort, you can replace the 24-pin RAM socket with a 28-pin one and wire its four overhanging pins in Kynar. Every other connection can be made by cutting a track or by moving or removing the factory wire at a socket or pad. Every chip stays swappable, and the original M27C256B goes back in at any point as the fallback. The KiCad schematic ([hardware/CC784-4/](hardware/CC784-4/)) carries notes on where each track is cut and where the wires land.
 
@@ -27,7 +27,7 @@ All of them run the patched firmware from `src/patched/` ([CC784_patched.md](CC7
 
 ## 2. EEPROM and bank register
 
-How the banking works is in [CC784_ota.md](CC784_ota.md); this is the bench view. The chip must be writable in circuit, which the 27C256 socket does not provide, and it becomes two 16 K banks selected by a register the board does not have.
+How the banking works is in [ota.md](ota.md); this is the bench view. The chip must be writable in circuit, which the 27C256 socket does not provide, and it becomes two 16 K banks selected by a register the board does not have.
 
 ### Wiring
 
@@ -52,7 +52,7 @@ The bank register is a second 74LS273 piggybacked on U5, the `8000` control latc
 ### Program the chip — 5 min
 
 - [ ] Seat the chip in the T48 ZIF, **ensuring pin 1 is oriented as shown on the programmer.** Close the lever.
-- [ ] Run task **`AT28C256-15PU -- program`** (`⇧⌘P → Tasks: Run Task`). It builds, runs **`Pack OTA image`** (trailers for both banks) and burns `cc784nir_chip.bin`, 32 K, then verifies. Repeat this step whenever the boot stub changes ([CC784_ota.md §2](CC784_ota.md#2-rom-layout-each-bank)): `push` refuses an image whose stub differs from the sign's.
+- [ ] Run task **`AT28C256-15PU -- program`** (`⇧⌘P → Tasks: Run Task`). It builds, runs **`Pack OTA image`** (trailers for both banks) and burns `cc784nir_chip.bin`, 32 K, then verifies. Repeat this step whenever the boot stub changes ([ota.md §2](ota.md#2-rom-layout-each-bank)): `push` refuses an image whose stub differs from the sign's.
 - [ ] minipro reports **Verification OK** and no ID mismatch. On a contact error, `minipro -p AT28C256 -z` does a pin check.
 
 ### Wire — 30 min
@@ -129,18 +129,18 @@ An AS6C62256 (32 K, 16 K reachable) in place of the HY6264. The firmware detects
 - [ ] Remove the factory wire from U13 pin 8 to pin 26 (CS2 on the 6264, A13 on the 62256) and wire pin 26 to **Z80 pin 3**. Left floating, the boot hangs at once: the stub runs from RAM.
 - [ ] Pin 1 (NC on the 6264, A14 on the 62256) to **Z80 pin 4**. A14 is always 1 while RAM is selected, so the chip's upper half is used; GND would use the lower half equally well.
 - [ ] Check: pin 26 ↔ Z80 pin 3 and pin 1 ↔ Z80 pin 4 beep; pin 26 ↔ U13 pin 8 must **not** beep.
-- [ ] The power-fail deselect still works: U13 gates the RAM's `/CE` with the same signal that drove CS2, so nothing is lost with pin 26 ([hardware notes §7](CC784_hardware.md#7-power--battery)).
+- [ ] The power-fail deselect still works: U13 gates the RAM's `/CE` with the same signal that drove CS2, so nothing is lost with pin 26 ([hardware notes §7](hardware.md#7-power--battery)).
 - [ ] After power-up, `B4 '1'` reports a total of about 15 K (about 7 K with the 6264). A total near 7 K with the 62256 fitted means an address line is not landing.
 
 ---
 
 ## 4. NET to NIR
 
-The CC784NET is the same board with a 4 MHz crystal, the original interrupt gating, no IR parts and a keypad on the DB9 ([CC784_hardware.md §3](CC784_hardware.md#3-timebase-h) and §6). The NIR firmware, and the patched one, need the NIR timebase.
+The CC784NET is the same board with a 4 MHz crystal, the original interrupt gating, no IR parts and a keypad on the DB9 ([hardware.md §3](hardware.md#3-timebase-h) and §6). The NIR firmware, and the patched one, need the NIR timebase.
 
 - [ ] Crystal Y1: 4 MHz out, **8.000 MHz** in.
 - [ ] Cut the track from U14 pin 1 to U10 pin 12; bridge U10 pins 12 and 13. The interrupt is now Q11 of the HC4020 alone, the 7812.5 Hz tick.
-- [ ] Buffer the panel column clock as on the NIR ([CC784_hardware.md §8](CC784_hardware.md#8-factory-bodge-wires-h--from-the-schematic)): cut the track at J2 (SK2) pin 11 only, so U11 and U19 stay on the clock; wire U4 pin 5 (or U11 pin 11) to U18 pin 11; bridge U18 pins 10 and 9; wire U18 pin 8 to J2 pin 11. Check: J2 pin 11 ↔ U4 pin 5 must **not** beep, U18 pin 8 ↔ J2 pin 11 and U18 pin 11 ↔ U4 pin 5 beep.
+- [ ] Buffer the panel column clock as on the NIR ([hardware.md §8](hardware.md#8-factory-bodge-wires-h--from-the-schematic)): cut the track at J2 (SK2) pin 11 only, so U11 and U19 stay on the clock; wire U4 pin 5 (or U11 pin 11) to U18 pin 11; bridge U18 pins 10 and 9; wire U18 pin 8 to J2 pin 11. Check: J2 pin 11 ↔ U4 pin 5 must **not** beep, U18 pin 8 ↔ J2 pin 11 and U18 pin 11 ↔ U4 pin 5 beep.
 - [ ] CPU: the NET's Z8400A is a 4 MHz grade. It runs at 8 MHz in practice; a **Z84C0008** is the in-spec replacement and drops straight in.
 - [ ] Remote, if wanted: the IR and clock add-in board (§7), or the original way: U18 (CD74HC14), the 3-pin receiver header near it and a **30 kHz** receiver module (TSOP4830/TSOP38230 class; the remote's carrier is 31.25 kHz). U18 pin 6 goes to the '244 of §8 (patched firmware), or to the DB9 pin 1 net (stock NIR firmware).
 - [ ] The NET firmware's cable detect is gone with it: no pin 2–5 short is needed on the serial cable. The patched firmware finds a keypad by itself (patch 36).
@@ -172,13 +172,13 @@ The patched firmware answers at address **1** (stock: 0); use `-a 1`.
 
 ## 6. Over-the-air updates
 
-With §2 done, firmware goes in over the serial link: `push` sends only the 64-byte pages that differ, into the bank that is not running, and the sign boots it on the next reset with the old bank as the fallback. Commands, layout, boot stub, trial and rollback, and the emulator tests are in [CC784_ota.md](CC784_ota.md).
+With §2 done, firmware goes in over the serial link: `push` sends only the 64-byte pages that differ, into the bank that is not running, and the sign boots it on the next reset with the old bank as the fallback. Commands, layout, boot stub, trial and rollback, and the emulator tests are in [ota.md](ota.md).
 
 ---
 
 ## 7. IR and clock add-in board
 
-The add-in board ([hardware notes §3](CC784_hardware.md#3-timebase-h)) puts a 74HC151 in the NMI line, choosing between the mains zero-cross and a 64 Hz square wave from its own 32.768 kHz crystal, and carries the TSOP38230 receiver. It needs §2 first: the clock-source select is the added bank register's Q7. The patched firmware picks the crystal by itself when no mains cycle arrives at boot (patch 31).
+The add-in board ([hardware notes §3](hardware.md#3-timebase-h)) puts a 74HC151 in the NMI line, choosing between the mains zero-cross and a 64 Hz square wave from its own 32.768 kHz crystal, and carries the TSOP38230 receiver. It needs §2 first: the clock-source select is the added bank register's Q7. The patched firmware picks the crystal by itself when no mains cycle arrives at boot (patch 31).
 
 Its connector J1, pin 1 at the square pad:
 

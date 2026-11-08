@@ -22,7 +22,7 @@ Opened as `COMn:baud,n,8,2,cs,ds,cd,bin`:
 
 The program sends **one byte at a time with a ~50 ms pause after each byte**. The firmware shows this is *not* required: reception is interrupt-driven into an 8-byte FIFO. What *is* required is not sending the next frame until the sign has ACKed the previous one (see §7).
 
-**Connecting anything else** (a microcontroller, a USB adapter, your own cable): a TX line to the sign's RX on DB9 pin 8 and an RX line from the sign's TX on pin 3, ground on pin 5. The sign expects RS-232 polarity; a MAX3232-class driver is the faithful interface, and the [hardware notes §4](CC784_hardware.md#4-serial-port-h) explain why plain TTL may do. Nothing else is required on a NIR or on the patched firmware. A CC784NET on its stock firmware also needs sign pins 2 and 5 tied together: its boot-time test reads pin 2 low as "a PC is attached" and otherwise runs in keypad mode and ignores serial ([CC784_hardware.md §6](CC784_hardware.md#6-connectors)).
+**Connecting anything else** (a microcontroller, a USB adapter, your own cable): a TX line to the sign's RX on DB9 pin 8 and an RX line from the sign's TX on pin 3, ground on pin 5. The sign expects RS-232 polarity; a MAX3232-class driver is the faithful interface, and the [hardware notes §4](hardware.md#4-serial-port-h) explain why plain TTL may do. Nothing else is required on a NIR or on the patched firmware. A CC784NET on its stock firmware also needs sign pins 2 and 5 tied together: its boot-time test reads pin 2 low as "a PC is attached" and otherwise runs in keypad mode and ignores serial ([hardware.md §6](hardware.md#6-connectors)).
 
 ---
 
@@ -40,7 +40,7 @@ Every transmission to the sign is one frame:
 |---|---|
 | `0xB1` | Start of frame (constant) |
 | `addr` | Sign address as a **binary byte** (as set in the sign's address menu/configuration). `0x2A` (`*`) is used as the broadcast "all signs" address; the program does not wait for an ACK when using it. |
-| `0x80` | Flag. Stock firmware processes the packet immediately if it is exactly `0x80`, else defers it to the main loop (see §7). The [patched firmware](CC784_patched.md) processes every packet at its next render step whatever bit 7 says, and bit 0 asks for DONE: with `0x81` the sign sends a `0x04` byte once the packet has been processed and its reply sent, which is the moment it will accept a new frame; a frame sent before that is parsed and ignored. |
+| `0x80` | Flag. Stock firmware processes the packet immediately if it is exactly `0x80`, else defers it to the main loop (see §7). The [patched firmware](patched.md) processes every packet at its next render step whatever bit 7 says, and bit 0 asks for DONE: with `0x81` the sign sends a `0x04` byte once the packet has been processed and its reply sent, which is the moment it will accept a new frame; a frame sent before that is parsed and ignored. |
 | `len` | Number of payload bytes that follow (does **not** include the checksum) |
 | payload | 1–254 bytes, see §4 |
 | `cksum` | **8-bit additive checksum: sum of all payload bytes, modulo 256.** The 4 header bytes are excluded. No inversion, no two's-complement. |
@@ -254,7 +254,7 @@ Background `0x90 | n`:
 | g | Green | `0x92` |
 | y | Yellow | `0x93` |
 
-The other foreground codes in `0x80`–`0x8F` are the dimmer and mixed shades; all sixteen are named in [CC784_firmware.md §8](CC784_firmware.md#8-rendering-h).
+The other foreground codes in `0x80`–`0x8F` are the dimmer and mixed shades; all sixteen are named in [firmware.md §8](firmware.md#8-rendering-h).
 
 ### 5.6 Built-in graphics (CC600/700 list; editor `G` then letter)
 
@@ -311,15 +311,15 @@ The sign's side of this protocol is read from the firmware itself, and lives in 
 
 | Topic | Where |
 |---|---|
-| The fixed 300 baud, the bit-banged receiver and transmitter | [firmware notes §4](CC784_firmware.md#4-serial-link-h) |
-| The patched firmware's 300 to 1200 baud, set by the first frame after a second of silence | [CC784_patched.md](CC784_patched.md#2-patches), patch 30 |
-| The patched firmware's configuration block: `B6 index value` writes a byte, `B4 '5'` reads the block, `B4 '6'` the sequence list; `cc784.py config` | [CC784_patched.md](CC784_patched.md#2-patches), patch 35 |
-| The patched firmware's health counters in the `B4 '4'` reply; `cc784.py stats` | [CC784_patched.md](CC784_patched.md#2-patches), patch 40 |
-| The patched firmware's unsolicited status reports, `B1 addr 03 'S' channel flags sum`; `cc784.py watch` | [CC784_patched.md](CC784_patched.md#2-patches), patch 41 |
-| The frame parser state by state, ACK, NAK and the silent discard of other addresses | [firmware notes §5](CC784_firmware.md#5-packet-parser-pkt_st_-16ef178c-h) |
-| The complete command list, including the ones NETCC never sends, and the exact reply and dump frame formats | [firmware notes §6](CC784_firmware.md#6-packet-processing-and-command-set-pkt_process-2a68-h) |
-| Every attribute byte with the sign's own name for it, the color codes, the graphics and the European characters | [firmware notes §8](CC784_firmware.md#8-rendering-h) |
-| The board, the DB9 and the serial levels | [hardware notes §4](CC784_hardware.md#4-serial-port-h) |
+| The fixed 300 baud, the bit-banged receiver and transmitter | [firmware notes §4](firmware.md#4-serial-link-h) |
+| The patched firmware's 300 to 1200 baud, set by the first frame after a second of silence | [patched.md](patched.md#2-patches), patch 30 |
+| The patched firmware's configuration block: `B6 index value` writes a byte, `B4 '5'` reads the block, `B4 '6'` the sequence list; `cc784.py config` | [patched.md](patched.md#2-patches), patch 35 |
+| The patched firmware's health counters in the `B4 '4'` reply; `cc784.py stats` | [patched.md](patched.md#2-patches), patch 40 |
+| The patched firmware's unsolicited status reports, `B1 addr 03 'S' channel flags sum`; `cc784.py watch` | [patched.md](patched.md#2-patches), patch 41 |
+| The frame parser state by state, ACK, NAK and the silent discard of other addresses | [firmware notes §5](firmware.md#5-packet-parser-pkt_st_-16ef178c-h) |
+| The complete command list, including the ones NETCC never sends, and the exact reply and dump frame formats | [firmware notes §6](firmware.md#6-packet-processing-and-command-set-pkt_process-2a68-h) |
+| Every attribute byte with the sign's own name for it, the color codes, the graphics and the European characters | [firmware notes §8](firmware.md#8-rendering-h) |
+| The board, the DB9 and the serial levels | [hardware notes §4](hardware.md#4-serial-port-h) |
 
 Two consequences for a host, both covered in detail there: the NETCC-style status query (`17 32`) is a truncated set-time that does nothing useful (and stops the stock firmware's clock), so use QUERY MEMORY and QUERY DUMP instead; and after a RAM loss the stock firmware answers only at address 0 (the patched firmware at 1) until an address is set, so `0x2A` broadcast is the way to reach an unknown sign.
 
@@ -335,7 +335,7 @@ B1 2A 80 03  04 30 30  64                        (sequence: channel 00)
 
 ## 8. The CC710 on the wire
 
-The ten-channel CC710 ([firmware notes §15](CC784_firmware.md#15-the-cc710-firmware-h--from-a-rom-dump-id-710)) speaks the same frames through its 10-pin header, with these differences:
+The ten-channel CC710 ([firmware notes §15](firmware.md#15-the-cc710-firmware-h--from-a-rom-dump-id-710)) speaks the same frames through its 10-pin header, with these differences:
 
 - It must be put into packet mode at boot: the probe (data out on SK1 pin 5, clock on pin 4, sampled on pin 9) has to echo the `55` pattern (an inverting echo yields address `*`; other replies give `~D`, and the fallback path gives `D5`, a firmware bug); the NET cable's plain short of DB9 pins 2 and 5 (SK1 pins 9 and 2) gives serial *terminal* mode instead, where bytes are key codes. Without an adapter, holding `1`, `7` or `U` on the keypad at power-up also selects packet mode, with address `*`; holding `Z` + `1` takes the keep path instead, whose bug alternates the address between `D5` and `*` on successive boots [H].
 - The transmitter waits for SK1 pins 8 and 7 (DB9 pins 1 and 6) high and the receiver raises SK1 pin 4 (DB9 pin 4) as "ready", dropped while its 8-byte FIFO is full.
@@ -345,9 +345,9 @@ The ten-channel CC710 ([firmware notes §15](CC784_firmware.md#15-the-cc710-firm
 - At address `*` (the keypad route) the sign never ACKs, since frames to `*` get no reply; queries still answer [H].
 - `cc784.py --channels 10` sends one-digit channel numbers and reads the one-byte markers in a dump [H]. With it, `time` sends `A`/`P` instead of the CC784's `Y`/`N`; `time24` is refused.
 
-Verified on a CC710 [H]: terminal mode through the host cable ([hardware notes §12](CC784_hardware.md#3-host-cable)); packet mode by holding `1`, then queries `0`–`3` (query `2` with a remark), `09 c` loads including a 314-byte message split over `0E` and `B3` frames, `04`, `17` and `03`; ACK and NAK at address `D5` after a `Z` + `1` boot; terminal-mode `7E` then `*` opens the editor, and `20` releases a WAIT loaded by packet.
+Verified on a CC710 [H]: terminal mode through the host cable ([hardware notes §12](hardware.md#3-host-cable)); packet mode by holding `1`, then queries `0`–`3` (query `2` with a remark), `09 c` loads including a 314-byte message split over `0E` and `B3` frames, `04`, `17` and `03`; ACK and NAK at address `D5` after a `Z` + `1` boot; terminal-mode `7E` then `*` opens the editor, and `20` releases a WAIT loaded by packet.
 
 ## 9. The original CC784 on the wire
 
-The original keypad CC784 ([firmware notes §16](CC784_firmware.md#16-the-original-cc784-firmware-h--from-a-rom-dump-id-9g)) has no packet protocol: none of the frames above reach it. With `PORT_IN` bit 0 low at boot it takes bytes as keys, like the CC710's terminal mode: `01` opens the editor, where bytes are raw ASCII keys echoed on TX and `0D` leaves it; `7E` followed by the byte `MY_ADDRESS` opens the editor, any other byte resets the sign; a `00` resets the sign at any time. Same 300 baud and handshake lines as the CC710. Not tried on the sign.
+The original keypad CC784 ([firmware notes §16](firmware.md#16-the-original-cc784-firmware-h--from-a-rom-dump-id-9g)) has no packet protocol: none of the frames above reach it. With `PORT_IN` bit 0 low at boot it takes bytes as keys, like the CC710's terminal mode: `01` opens the editor, where bytes are raw ASCII keys echoed on TX and `0D` leaves it; `7E` followed by the byte `MY_ADDRESS` opens the editor, any other byte resets the sign; a `00` resets the sign at any time. Same 300 baud and handshake lines as the CC710. Not tried on the sign.
 

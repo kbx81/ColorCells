@@ -128,7 +128,7 @@
     },
     {
       "label": "AT28C256-15PU -- program",
-      "detail": "Burns the packed 32 K chip image (both banks). -u disables software data protection before writing, -P re-enables it after: with /WE on /WR, an unprotected chip gets written by any crash. Bodges per CC784_ota.md §2: pin 27 (/WE) to Z80 /WR with a 10 k pull-up, pin 22 (/OE) to Z80 /RD, pin 1 (A14) to the added '273's Q0.",
+      "detail": "Burns the packed 32 K chip image (both banks). -u disables software data protection before writing, -P re-enables it after: with /WE on /WR, an unprotected chip gets written by any crash. Bodges per ota.md §2: pin 27 (/WE) to Z80 /WR with a 10 k pull-up, pin 22 (/OE) to Z80 /RD, pin 1 (A14) to the added '273's Q0.",
       "type": "shell",
       "command": "minipro",
       "args": [
@@ -151,7 +151,7 @@
     },
     {
       "label": "Build patched ROM (CC710)",
-      "detail": "The same source for the CC710's 59-column panel (-DCC710), on a CC784-3A board converted per CC784_hardware.md §12.",
+      "detail": "The same source for the CC710's 59-column panel (-DCC710), on a CC784-3A board converted per hardware.md §12.",
       "type": "shell",
       "command": "sjasmplus",
       "args": [
