@@ -332,6 +332,7 @@ LATCH_BLINK          equ 0x80        ; CTRL_LATCH bit 7: the FLASH blink clock
 STACK_SIZE           equ 160         ; P35: a boot-time canary measured 130 bytes at most (a 57-channel store fill); 128 overran into the TX segments
 STACK_CANARY         equ 128         ; bytes of 0x55 laid at the stack's bottom at boot; the stats query counts those left
 STALL_FRAMES         equ 3           ; frames without a pkt_poll that count as a renderer stall
+CRAWL_LEAD           equ 8           ; P42: columns the plain crawl keeps in hand (~130 ms at full speed)
 ; P21: packet processing runs in the render loop and replies go out in the
 ; background, so their state cannot share renderer scratch. 32 bytes below the
 ; stack, carved off the store.
@@ -950,7 +951,7 @@ main_loop:
 render_loop:
         CALL pkt_poll
         CALL render_next_char
-        CALL effect_step
+        CALL crawl_step
         ; LD A,(nn) sets no flags, so this JR tests effect_step's exit flags,
         ; not MAGIC_MODE. A is loaded for whatever runs after the branch.
         LD A,(MAGIC_MODE)
@@ -1404,7 +1405,12 @@ rx_ir_stop_key:
         LD (IR_KEY),A
 
 key_handler_jr1:
-        JP key_handler
+        LD A,(TEST_MODE)        ; P43: no editor while an update is under way:
+        INC A                   ; the remote, the keypad and a serial 01 all end here
+        JP nz,key_handler
+        LD (IR_CODE),A          ; the key is used up
+        LD (RX_BYTE),A
+        JR tick6_exit
 
 rx_have_byte:
         LD A,(PKT_STATE)
@@ -3373,6 +3379,43 @@ effect_none:
         LD (EFFECT_VECTOR),HL
         RET
 
+; ---- crawl_step (P42): effect_step for the render loop. The plain crawl draws the
+;      next character once CRAWL_LEAD columns or fewer are left to scroll in, so a
+;      packet processed meanwhile does not stop the scroll. Anything but a plain
+;      character next (attributes, the clock, the end) waits for the full catch-up.
+crawl_step:
+        CALL wait_frame_delay
+
+crawl_wait:
+        CALL pkt_poll
+        LD A,(SCROLLING)
+        AND A
+        JR z,fx_scroll_done
+        LD A,(EFFECT_ID)
+        LD HL,MAGIC_MODE
+        OR (HL)
+        JR nz,crawl_wait
+        LD HL,(STORE_CURSOR)
+        LD A,(HL)
+        CP ATTR_TIME
+        JR z,crawl_wait
+        CALL char_flags
+        JR nz,crawl_wait
+        LD HL,(FB_COLPTR)       ; columns still to scroll in: FB_COLPTR - FB_COL
+        LD DE,(FB_COL)          ; round the ring, less the panel's width
+        OR A
+        SBC HL,DE
+        JR nc,crawl_lead
+        LD DE,FRAMEBUF_SIZE
+        ADD HL,DE
+
+crawl_lead:
+        LD DE,FRAME_COLS+CRAWL_LEAD+1
+        OR A
+        SBC HL,DE
+        JR nc,crawl_wait
+        JR fx_scroll_done
+
 ; ---- effect_step: Called from main loop: jump to EFFECT_VECTOR (current movement effect handler)
 effect_step:
         CALL wait_frame_delay
@@ -3382,6 +3425,8 @@ fx_wait_scroll:
         LD A,(SCROLLING)
         AND A
         JR nz,fx_wait_scroll
+
+fx_scroll_done:
         LD A,(EFFECT_ID)
         AND A
         RET z
@@ -8988,8 +9033,14 @@ CHARSET_EURO:
 ;      sales pitch (~700 bytes) down to a line that still exercises the fonts
 ;      and colors; the room went to the render-loop packet processing.
 DEMO_MESSAGE:
-        db 0x12,"COLOR CELLS ",0x13,0x8c,"CC784 ",0x11,0xbc,0x14,"MULTI-COLOR DISPLAY"
-        db 0xbe,"TINY PRICE",0x10,"LARGE IMPACT",0x03,0xdb
+        db 0x12,"COLOR CELLS ",0x13,0x8c
+    IFDEF CC710
+        db "CC710"
+    ELSE
+        db "CC784"
+    ENDIF
+        db " ",0x11,0xbc,0x14,"MULTI-COLOR DISPLAY"
+        db 0xbe,"TINY PRICE",0x10,"LARGE IMPACT!",0x03,0xdb
 
 ; ---- ota_updating_msg: what the panel shows from B5 'B' to the reboot, via the
 ;      test-mode buffer (28 bytes max). PAUSE, THIN, the word, WAIT: parked until

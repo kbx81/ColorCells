@@ -745,6 +745,12 @@ def cmd_update(baud=300):
     check('B: UPDATING parked on the panel (test mode set, %d frames in 3 s, %d lit columns)' % (len(s.frames), lit),
           s.ram('TEST_MODE')[0] == 0xFF and len(s.frames) <= 1 and lit > 20)
     check('SDP armed by the first write', s.ee.sdp)
+    s.tx_edges.clear()
+    s.ir_key('STOP', stretch_us=100); s.ir_wait(); s.run_ms(800)
+    s.send_bytes(b'\x01'); s.rx_wait(); s.run_ms(800)
+    check('P43: remote STOP and a serial 01 mid-update open no editor (menu %02x, test mode %02x, tx %s)'
+          % (s.ram('MENU_ACTIVE')[0], s.ram('TEST_MODE')[0], s.tx_bytes().hex()),
+          s.ram('MENU_ACTIVE')[0] == 0 and s.ram('TEST_MODE')[0] == 0xFF and s.tx_bytes() == b'')
     for page in pages:
         data = new_bank[page * 64:(page + 1) * 64]
         r = ota_cmd(s, b'\xb5W' + bytes([page]) + cc784_ota.crc16(data).to_bytes(2, 'little') + data, wait_ms=6000)
