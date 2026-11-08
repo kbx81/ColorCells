@@ -274,7 +274,7 @@ From photos and inspection of the board, matched against the KiCad capture in [h
 - BZ1 is fitted: a round magnetic buzzer of the size the silk is drawn for.
 - The sign arrived new and sealed in its box, never used, so everything on the board is as it left the factory.
 - Its NiCd had leaked like the others ([§7](#7-power--battery)), in the sealed box, and is removed.
-- C3, the 1 µF tantalum on the 7805's input, failed short and burned about a minute after the first power-up. C3, C4 and the bulk caps C1/C2 are replaced with electrolytics; C18, the reset capacitor, is still the original, since R3 (10 k) limits any fault there to 0.5 mA [H].
+- C3, the 1 µF tantalum on the 7805's input, failed short at its first power-up. C3, C4 and the bulk caps C1/C2 are replaced with electrolytics; C18, the reset capacitor, is still the original, since R3 (10 k) limits any fault there to 0.5 mA [H].
 - Three factory modifications the CC710's board does not have, below. No other wires or cut tracks found.
 
 **Delayed `/M1` into the I/O decoder.** U17 pin 9 is cut from Z80 pin 27 (`/M1`) and wired to U18 pin 6; U17 pins 3 and 4 are wired to U18 pin 5.

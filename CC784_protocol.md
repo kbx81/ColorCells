@@ -170,7 +170,7 @@ Example 9:41 AM → `17 30 39 34 31 59` → frame `B1 01 80 06 17 30 39 34 31 59
 17 32          ( 0x17 '2' )
 ```
 
-Sent by the "Messages in sign" / "Check sequence usage" screens. The sign replies ACK then a frame whose payload the program scans for `B0 … B0` remark blocks (name/date/size) to build the listing, and reads a "remaining memory" figure. Exact reply layout was not fully decoded — capture one and it should be self-explanatory given the remark format above.
+Sent by the "Messages in sign" / "Check sequence usage" screens. The sign replies ACK then a frame whose payload the program scans for `B0 … B0` remark blocks (name/date/size) to build the listing, and reads a "remaining memory" figure. On the CC784 family firmware `17` is SET_TIME, so `17 32` is a truncated set-time with no reply frame (§7); a host uses QUERY MEMORY and QUERY DUMP instead.
 
 ---
 

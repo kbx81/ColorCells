@@ -1,12 +1,12 @@
 # CC784 ideas and parked work
 
-Everything discussed but not built, with the sizing and the decisions already made, so nothing has to be worked out twice. Firmware sizes are estimates against the patched build; the free ROM count is in [CC784_patched.md](CC784_patched.md#1-memory-map). Sections link to the notes that hold the facts they rely on.
+Work not built, with its sizing and the decisions already made. Firmware sizes are estimates against the patched build; the free ROM count is in [CC784_patched.md](CC784_patched.md#1-memory-map). Sections link to the notes that hold the facts they rely on.
 
 ---
 
 ## 1. The four spare DB9 lines
 
-Dropped (2026-11-07). Every sign has a dongle, and the dongle already does over serial what the lines were for: brightness and mute are configuration bytes (`B6`), an alert is a sequence change sent and later undone, the message boundary is the status report (patch 41, §11), and the heartbeat is a periodic `stats` poll (patch 40): no reply, or an uptime that stops counting, is a hung sign; a boot count that moves is a reboot. The lines also belong to the wired keypad in keypad mode (patch 36), so leaving them alone avoids that conflict. Two are inputs to the sign (`PORT_IN` bits 0 and 2, DB9 pins 2 and 6), two are outputs (`CTRL_LATCH` bits 5 and 6, pins 4 and 7) ([hardware notes §4](CC784_hardware.md#4-serial-port-h)); the four role bytes in the configuration block (3–6) stay unused. The chain of §2 would still need pin 2.
+Dropped. Every sign has a dongle, and the dongle already does over serial what the lines were for: brightness and mute are configuration bytes (`B6`), an alert is a sequence change sent and later undone, the message boundary is the status report (patch 41, §11), and the heartbeat is a periodic `stats` poll (patch 40): no reply, or an uptime that stops counting, is a hung sign; a boot count that moves is a reboot. The lines also belong to the wired keypad in keypad mode (patch 36), so leaving them alone avoids that conflict. Two are inputs to the sign (`PORT_IN` bits 0 and 2, DB9 pins 2 and 6), two are outputs (`CTRL_LATCH` bits 5 and 6, pins 4 and 7) ([hardware notes §4](CC784_hardware.md#4-serial-port-h)); the four role bytes in the configuration block (3–6) stay unused. The chain of §2 would still need pin 2.
 
 ## 2. Several signs on one serial link
 
@@ -28,7 +28,7 @@ Caveats:
 
 - The forwarding sign must not hold interrupts off for a fraction of a bit while a downstream reply passes. The remaining long DI windows are OTA page writes, which happen only while the host talks to that sign, so no downstream traffic exists then. The latch and FIFO critical sections are microseconds.
 - Every sign needs a unique address. After a RAM loss the patched firmware defaults to 1 ([patched notes](CC784_patched.md)), so a battery swap means setting the address again.
-- The chain takes one spare input line, so a chained sign gives up mute or alert on it. Put the chain on pin 2, keep mute on pin 6, and make it a stored setting rather than an autodetect: a mute switch held low at boot would look like an idle upstream transmitter.
+- The chain takes pin 2, as a stored setting rather than an autodetect.
 - A chained sign running stock NET firmware sees pin 2 low at boot as "a PC is attached", which is correct.
 
 **Alternative with no firmware.** The dongle's header carries UART0. A second sign can hang off TXD0 and RXD0 through its own small level board, and the ESP proxies two sign ports. Wins only for exactly two signs.
@@ -50,24 +50,23 @@ Today only LEFT scrolls; UP, DOWN, RIGHT and HOLD are wipes. The engine stages e
 
 Totals: ~150 bytes for UP and DOWN, ~200 with RIGHT; RIGHT can be added later for its ~50 bytes with no store change. Step delay can follow the SPEED attribute for free. A true mirror of the LEFT crawl was ruled out: it needs the store walked backwards and the renderer accumulates fonts and colors forwards.
 
-## 4. Wired keypad support
+## 4. Wired keypad and the remote lock
 
-Done as patch 36 ([patched notes](CC784_patched.md#2-patches)), with the remote moved off the DB9 ([CC784_upgrades.md §8](CC784_upgrades.md#8-ir-off-the-db9)). Open: keypad keys ignore the remote lock; whether they should is a choice for whoever mounts a keypad in public.
+The wired keypad is patch 36 ([patched notes](CC784_patched.md#2-patches)). Its keys ignore the remote lock; whether they should is a choice for whoever mounts a keypad in public.
 
 ## 5. Night mode by the clock
 
-Dim or blank the display between two times of day, set like the clock over serial or from the editor. About 40 bytes. The dongle's mute line (§1) covers the same need from Home Assistant, so this only matters for a sign without a dongle.
+Dim or blank the display between two times of day, set like the clock over serial or from the editor. About 40 bytes. The mute setting (`B6`, configuration byte 2) covers the same need from Home Assistant, so this only matters for a sign without a dongle.
 
-## 6. ROM savings still available
+## 6. ROM savings
 
 | Item | Bytes | Note |
 |---|---|---|
-| The `B4 '4'` timing query | 60 | kept: patch 40 extended it into the health counters |
 | Faster boot CRC | dropped | only ~20 % faster and needs a chip burn; not worth it |
 
 ## 7. Skip empty channels in the sequence
 
-Done as patch 39 ([patched notes](CC784_patched.md#2-patches)): the 99 empty channels after one loaded message take about 60 ms per loop instead of 1.05 s.
+Built: patch 39 ([patched notes](CC784_patched.md#2-patches)).
 
 ## 8. Faster CPU: analyzed and shelved
 

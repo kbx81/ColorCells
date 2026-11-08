@@ -5,7 +5,7 @@ Changes to the `CC784-4` controller board, each independent of the others. An ea
 | Upgrade | Gives | Parts |
 |---|---|---|
 | **EEPROM and bank register** (§2) | firmware writable in circuit: over-the-air updates with an A/B fallback ([CC784_ota.md](CC784_ota.md)) | AT28C256-15PU, 74LS273 or 74HCT273, 10 k resistor for R32 |
-| **RAM** (§3) | a 15246-byte message store instead of 7054 | AS6C62256-55 |
+| **RAM** (§3) | a 15 K message store instead of 7 K | AS6C62256-55 |
 | **NET to NIR** (§4) | a CC784NET runs the NIR firmware: 8 MHz timebase, and the remote if a receiver is fitted | 8.000 MHz crystal, IR receiver module, optionally a Z84C0008 |
 | **IR and clock add-in board** (§7) | the remote's receiver, and a 32 kHz crystal clock for signs on a DC supply | the assembled add-in board ([hardware/CC784NIR_IR+Clock/](hardware/CC784NIR_IR+Clock/)), a 7-wire cable |
 | **IR off the DB9** (§8) | the remote and a wired keypad on the same sign; required by the patched firmware from patch 36 | 74LS244 or 74HCT244, three 10 k resistors |
@@ -130,7 +130,7 @@ An AS6C62256 (32 K, 16 K reachable) in place of the HY6264. The firmware detects
 - [ ] Pin 1 (NC on the 6264, A14 on the 62256) to **Z80 pin 4**. A14 is always 1 while RAM is selected, so the chip's upper half is used; GND would use the lower half equally well.
 - [ ] Check: pin 26 ↔ Z80 pin 3 and pin 1 ↔ Z80 pin 4 beep; pin 26 ↔ U13 pin 8 must **not** beep.
 - [ ] The power-fail deselect still works: U13 gates the RAM's `/CE` with the same signal that drove CS2, so nothing is lost with pin 26 ([hardware notes §7](CC784_hardware.md#7-power--battery)).
-- [ ] After power-up, `B4 '1'` reports `total 15246` (`total 07054` with the 6264). Anything else means an address line is not landing.
+- [ ] After power-up, `B4 '1'` reports a total of about 15 K (about 7 K with the 6264). A total near 7 K with the 62256 fitted means an address line is not landing.
 
 ---
 

@@ -128,7 +128,7 @@ SEQ_ALL_EMPTY        equ RAM_VARS+0x0c3   ; 10 = every listed channel is empty, 
 SEQ_MENU_ACTIVE      equ RAM_VARS+0x0c4   ; FF while the SEQ MSG? dialogue runs
 SHIFT_STATE          equ RAM_VARS+0x0c5   ; SHIFT latch, toggled by key 29 (see section 9)
 PREV_SPACE           equ RAM_VARS+0x0c6   ; 1 = previous char was a space (two in a row reset the background)
-NMI_COUNT            equ RAM_VARS+0x0c7   ; two bytes: magic_short_word reads through it as a pointer, so the 04 high byte is a ROM page
+NMI_COUNT            equ RAM_VARS+0x0c7   ; NMIs this second; magic_short_word also adds it to the random seed
 STORE_TMP            equ RAM_VARS+0x0c8
 REDRAW_FROM          equ RAM_VARS+0x0ca   ; editor redraw: first byte actually displayed (cursor-21, >= INS_PTR)
 TX_BITIDX            equ RAM_VARS+0x0cc
@@ -334,7 +334,7 @@ STACK_CANARY         equ 128         ; bytes of 0x55 laid at the stack's bottom 
 STALL_FRAMES         equ 3           ; frames without a pkt_poll that count as a renderer stall
 CRAWL_LEAD           equ 8           ; P42: columns the plain crawl keeps in hand (~130 ms at full speed)
 ; P21: packet processing runs in the render loop and replies go out in the
-; background, so their state cannot share renderer scratch. 32 bytes below the
+; background, so their state cannot share renderer scratch. 56 bytes below the
 ; stack, carved off the store.
 STREAM_AREA          equ STACK_TOP-STACK_SIZE-STREAM_AREA_SIZE
 TX_SEG0              equ STREAM_AREA+0     ; segment being sent: ptr, count, flags (bit 0 = append the sum)

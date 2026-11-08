@@ -114,7 +114,7 @@ Everything above is modeled in `tools/cc784_sim.py` (AT28C256 with banks, page t
 | `uv run tools/cc784_sim.py compare OLD_TREE src/patched` | same panel frames and replies as the previous source tree |
 | `uv run tools/cc784_sim.py eeprom` | the chip model against the datasheet rules |
 | `uv run tools/cc784_sim.py ota` | the stub's bank choice in every trailer scenario, and the page writer |
-| `uv run tools/cc784_sim.py update` | a whole OTA update over the fake serial line, including refusals |
+| `uv run tools/cc784_sim.py update` | a whole OTA update over the fake serial line, including refusals; STOP and a serial `01` mid-update open no editor (patch 43) |
 | `uv run tools/cc784_sim.py push` | the real `push()` against the emulator |
 | `uv run tools/cc784_sim.py ram` | the build on the 6264 and on a 62256: sizes, fill, dump; a set clock survives a reset |
 | `uv run tools/cc784_sim.py quiet` | packets arriving mid-scroll: no restart, no watchdog clear, replies and DONE in the background, early frames dropped whole, cursor fix-up; the demo's lock survives a packet and a SEQ change is acted on |
@@ -123,14 +123,16 @@ Everything above is modeled in `tools/cc784_sim.py` (AT28C256 with banks, page t
 | `uv run tools/cc784_sim.py clock` | the NMI source: mains on AC, the add-in board's 64 Hz on DC, neither on a bare DC supply, with the clock, the calibration and an OTA page write in each; 12 and 24-hour rollovers |
 | `uv run tools/cc784_sim.py keypad` | the wired keypad (patch 36): serial at boot, keypad mode once the line reads space, keys with contact bounce editing exactly as the same keys on the remote, a held key repeating, the remote working alongside, serial again as soon as a host idles on the line |
 | `uv run tools/cc784_sim.py seq` | the sequence (patch 39): with one message under the default 0–99 sequence the empty channels take under 100 ms per loop; channels 0, 7, 50 and 99 play in order, also after a lower channel grows and after one is emptied; a hint planted past the `DA` on a stale marker is ignored |
+| `uv run tools/cc784_sim.py stats` | the health counters (patch 40): clock source on AC and on DC with the board, a boot count of 1 after fresh RAM and 2 after a reset with RAM kept, uptime against the emulator's clock, stack headroom, good and bad frames, remote frames |
+| `uv run tools/cc784_sim.py status` | status reports (patch 41): none while off; one per channel start when on, the wrap flagged; `FF` when the editor opens; `stats` queries and a long load through `cc784.py` with reports flowing |
 | `uv run tools/cc784_sim.py baud` | a cold sign follows the host at 300, 600 and 1200; replies come back at that rate; a rate change after a pause is followed; 1200 holds over interrupt periods from 126 to 134 µs thanks to the calibration and on a DC supply; 300-baud bare bytes still work. `update 1200` and `push 1200` run those gates at a rate |
-| `uv run tools/cc784_sim.py fuzz [N]` | N power cuts at random instants of an update; every reboot must land in a verified bank (1000/1000 when last run) |
+| `uv run tools/cc784_sim.py fuzz [N]` | N power cuts at random instants of an update; every reboot must land in a verified bank |
 
 The `OTA: emulator regression` task runs the nine fast ones.
 
 ## 7. Not built
 
-- **Layout pinning** (`ALIGN 64` slack between modules, fixed `ORG`s for the tables) so that small code edits stay small pushes. There are ~600 bytes of bank free, not enough yet.
+- **Layout pinning** (`ALIGN 64` slack between modules, fixed `ORG`s for the tables) so that small code edits stay small pushes. The free space is the `FF` run before the trailer ([patched notes §1](CC784_patched.md#1-memory-map)).
 
 ## 8. Gotchas
 
@@ -147,6 +149,6 @@ The `OTA: emulator regression` task runs the nine fast ones.
 
 - **Never load `I` with `C0` or above, never read `C000–FFFF`.** Refresh cycles and reads clock the bank register with whatever is on the bus. The emulator reports both as faults.
 - **The NMI follows the mapped bank.** `NMI_VECTOR` jumps through the jump table at `0246` of whichever bank is in the window, so an NMI that lands while `lib_copy` has the idle bank mapped (`I`, `C`, `F`) runs the *other* image's `nmi_entry` and `clock_tick` against this image's RAM map. The app holds `NMI_MAGIC` off around those copies (`ota_copy`, patch 35); the emulator reports an NMI taken with the idle bank mapped as a fault. The page writer is different: it syncs to the NMI and finishes before the next one.
-- **The RAM library overruns `FRAMEBUF`** (192 bytes) at boot. The application copies only `STUB_LIB_APP_SIZE` bytes; the stub copies all of it, over the first 130 bytes of variables. The clock digits once lived there and reset on every power cycle (patch 20).
+- **The RAM library overruns `FRAMEBUF`** (192 bytes) at boot. The application copies only `STUB_LIB_APP_SIZE` bytes; the stub copies all of it, over the first 130 bytes of variables. Nothing that must survive a reset lives there (patch 20).
 - **A reply is not "ready for the next frame".** Replies and DONE leave in the background while the display runs, and a frame that arrives before DONE is parsed and thrown away unanswered. Use flag `81` and wait for the `04`; without it, allow the reply's wire time plus 1 s.
-- **Binary replies exposed two stock serial bugs**, both fixed in the patched build: a `00` byte offered to a busy transmitter was dropped (B10), and a `20` byte inside a packet counted as the SPACE key and released a WAIT (B12).
+- **Binary replies rely on two stock-bug fixes** in the patched build: a `00` byte offered to a busy transmitter was dropped (B10), and a `20` byte inside a packet counted as the SPACE key and released a WAIT (B12).

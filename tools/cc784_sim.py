@@ -963,7 +963,7 @@ def cmd_ram():
             if s.tx_bytes().endswith(b'\x04'): break
         s.tx_edges.clear(); s.run_ms(200)
 
-    for ram8k, want_total in ((True, 6981), (False, 15173)):     # P21 took 32 bytes for the reply stream, P35 17 for the configuration block and the brightness clock, 64 more of stack and 2 for the IR gate, P36 3 for the keypad, P40 13 for the stats, P41 6 for the status report
+    for ram8k, want_total in ((True, store_total(syms, True)), (False, store_total(syms, False))):
         name = '8 K' if ram8k else '16 K'
         s = Sign(rom, syms, fresh_ram=True, ram8k=ram8k)
         s.run_ms(2500)
@@ -1054,7 +1054,7 @@ def cmd_quiet():
           % (tx.hex(), s.ram('PKT_RESTART')[0], s.wdog_clears, before, after),
           tx == b'\x06\x04' and s.ram('PKT_RESTART')[0] == 0 and s.wdog_clears == 0 and after != before)
     tx = send(s, b'\xb4\x31')
-    check("B4 '1' mid-scroll: reply %s, no restart" % tx[4:14], tx[:4] == b'\x06\xb1\x01\x0a' and tx[4:9] == b'15173' and s.ram('PKT_RESTART')[0] == 0)
+    check("B4 '1' mid-scroll: reply %s, no restart" % tx[4:14], tx[:4] == b'\x06\xb1\x01\x0a' and tx[4:9] == b'%05d' % store_total(syms, False) and s.ram('PKT_RESTART')[0] == 0)
     tx = send(s, b'\x17' + b'1045' + b'P', wait_ms=300)
     check('set time mid-scroll: clock %s, seconds %d and ticks %d zeroed (P23), no restart, no watchdog clear'
           % (s.ram('CLK_H10', 4).hex(), s.ram('CLK_SEC')[0], s.ram('NMI_COUNT')[0]),
@@ -1235,7 +1235,7 @@ def cmd_baud():
         s = Sign(rom, syms, fresh_ram=True, baud=baud); s.run_ms(2500)
         tx = send(s, b'\xb4\x31', wait_ms=int(16 * 10000 / baud) + 500)
         rate = s.ram('BAUD_STEP')[0]
-        check('%4d baud from cold: query reply %s, BAUD_STEP %d, BAUD_T %d' % (baud, tx[:9], rate, s.ram('BAUD_T')[0]), tx[:4] == b'\x06\xb1\x01\x0a' and tx[4:9] == b'15173' and rate == baud // 60)
+        check('%4d baud from cold: query reply %s, BAUD_STEP %d, BAUD_T %d' % (baud, tx[:9], rate, s.ram('BAUD_T')[0]), tx[:4] == b'\x06\xb1\x01\x0a' and tx[4:9] == b'%05d' % store_total(syms, False) and rate == baud // 60)
         tx = send(s, b'\x09\x30\x31\x0e' + text, wait_ms=500)
         d = bytes(s.m.memory[syms['MSG_STORE']:int.from_bytes(s.ram('STORE_END', 2), 'little')])
         check('%4d baud: 220-byte load intact, ACK+DONE %s' % (baud, tx.hex()), text in d and tx == b'\x06\x04')
@@ -1337,6 +1337,11 @@ def cmd_clock():
     check('no faults', not s.faults)
     print('clock: %d/%d checks pass' % (sum(checks), len(checks)))
     return all(checks)
+
+
+def store_total(syms, ram8k):
+    """the store size B4 '1' reports: the ceiling store_init picks, less MSG_STORE, plus one"""
+    return syms['STORE_TOP_8K' if ram8k else 'STORE_TOP'] - syms['MSG_STORE'] + 1
 
 
 def cmd_stats():
