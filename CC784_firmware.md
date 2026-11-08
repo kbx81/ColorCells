@@ -154,7 +154,7 @@ The command bytes are named in the source (`CMD_*`); the docs use those names, w
 | SET_TIME | `17 hhmm a` | `cmd_17_set_time` | 4 ASCII digits → `CLK_H10..CLK_M1`; `a`=`Y`/`y` AM else PM (patched: `H` = 24-hour, [CC784_patched.md](CC784_patched.md#2-patches) patch 32) |
 | COLOR_A0 | `1E n` | `cmd_1E_color_A0` | insert `A0 \| (n&15)` |
 | APPEND | `B3` | `cmd_B3_append` | insertion point → end of selected channel |
-| QUERY | `B4 c` | `cmd_B4_query` | `c` = ROMID `'0'`, MEMORY `'1'`, NOP `'2'`, DUMP `'3'` — **see bug B1** (patched: `'4'` timing, `'5'` configuration block, `'6'` sequence list, [CC784_patched.md](CC784_patched.md#2-patches) patches 30 and 35) |
+| QUERY | `B4 c` | `cmd_B4_query` | `c` = ROMID `'0'`, MEMORY `'1'`, NOP `'2'`, DUMP `'3'` — **see bug B1** (patched: `'4'` timing and health counters, `'5'` configuration block, `'6'` sequence list, [CC784_patched.md](CC784_patched.md#2-patches) patches 30 and 35) |
 | CONFIG | `B6 i v` | — | *patched only*: writes byte `i` of the configuration block ([CC784_patched.md](CC784_patched.md#2-patches), patch 35) |
 | (text) | other | `pkt_insert_text` | insert byte into the store at the cursor |
 

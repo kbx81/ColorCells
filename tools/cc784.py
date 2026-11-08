@@ -9,7 +9,7 @@ Examples
     cc784.py --unsafe id                # ROM ID string (B4 '0')   -- see --unsafe!
     cc784.py --unsafe mem               # memory figures (B4 '1')
     cc784.py --unsafe dump              # dump the message store (B4 '3')
-    cc784.py --unsafe timing            # patched firmware: serial bit time and calibration state (B4 '4')
+    cc784.py --unsafe stats             # patched firmware: serial timing, clock source, uptime, health counters (B4 '4')
     cc784.py msg 0 "HELLO WORLD"        # load channel 0 and display it
     cc784.py msg 1 "@B BOLD @F FLASH @R RED"  # single-letter escapes, see ESC
     cc784.py msg 2 "@{lime}LIME @{d-red}DIM RED @{bg yellow}@{black}ON YELLOW"
@@ -346,10 +346,18 @@ def parse_reply(raw: bytes, kind: str, ten: bool = False):
               (raw[1], ln, "OK" if ok else "BAD/short", printable(data)))
         if kind == 'mem' and len(data) == 10:
             print("  total %s bytes, free %s bytes" % (data[:5].decode(), data[5:].decode()))
-        if kind == 'timing' and len(data) == 4:
-            t300, step, last, nmi = data
+        if kind in ('stats', 'timing') and len(data) >= 4:
+            t300, step, last, nmi = data[:4]
             print("  300-baud bit %d fifths of an interrupt (a %.2f us interrupt), step %d (%d baud), last second's count low byte %d, NMI %s"
                   % (t300, 3333.3 / (t300 / 5.0), step, step * 60, last, 'seen' if nmi else 'none (DC supply without the add-in board: no calibration)'))
+        if kind in ('stats', 'timing') and len(data) == 18:     # patch 40
+            d = data
+            print("  clock %s (%d NMIs a second); boot %d; up %d s; stack headroom %d of 128"
+                  % ({60: 'mains', 64: 'crystal'}.get(d[4], '?'), d[4], d[5], d[9] | d[10] << 8 | d[11] << 16, d[6]))
+            print("  display ticks merged: last second %d, worst second %d; renderer stalls %d, longest %d frames"
+                  % (d[7], d[8], d[12], d[13]))
+            print("  frames: %d good, %d bad checksum; remote: %d decoded, %d dropped (counts wrap at 256)"
+                  % (d[14], d[15], d[16], d[17]))
 
 def add_common_args(ap):
     ap.add_argument('-a', '--addr', default='*', help="sign address 0-255 or '*' (broadcast; a broadcast frame gets no ACK and no DONE)")
@@ -385,11 +393,11 @@ def run(link, a, ap):
                 if b: print(hexs(b), " ", printable(b))
         except KeyboardInterrupt: pass
 
-    elif c in ('id', 'mem', 'dump', 'timing'):
+    elif c in ('id', 'mem', 'dump', 'stats', 'timing'):
         if not a.unsafe:
             sys.exit("'%s' sends a B4 query, which crashes/corrupts the stock CC784NIR firmware "
                      "(stack overflow). Add --unsafe if you really want to." % c)
-        parse_reply(s.query({'id': '0', 'mem': '1', 'dump': '3', 'timing': '4'}[c]), c, ten)
+        parse_reply(s.query({'id': '0', 'mem': '1', 'dump': '3', 'stats': '4', 'timing': '4'}[c]), c, ten)
 
     elif c == 'config':
         # patch 35: B4 '5' reads the 16-byte block, B4 '6' the sequence list,

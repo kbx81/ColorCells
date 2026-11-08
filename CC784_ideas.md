@@ -85,7 +85,7 @@ Dim or blank the display between two times of day, set like the clock over seria
 
 | Item | Bytes | Note |
 |---|---|---|
-| The `B4 '4'` timing query | 60 | only useful while a clock source is being calibrated |
+| The `B4 '4'` timing query | 60 | kept: patch 40 extended it into the health counters |
 | Faster boot CRC | dropped | only ~20 % faster and needs a chip burn; not worth it |
 
 ## 7. Skip empty channels in the sequence

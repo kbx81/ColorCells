@@ -39,6 +39,10 @@ cc784_sim.py - run the CC784NIR ROM under emulation (kosarev's z80 core) with a 
         The sequence over empty channels (patch 39): a short burst after one message,
         and the right channels in order after edits move the store.
 
+    uv run tools/cc784_sim.py stats
+        The health counters in the B4 '4' reply (patch 40): clock source, boot count
+        across a reset, uptime, stack headroom, frame and remote counters.
+
     uv run tools/cc784_sim.py fuzz [RUNS]
         Cut the power at a random instant of an update, RUNS times (default 100);
         every reboot must land in a bank whose trailer and image CRC check out.
@@ -945,7 +949,7 @@ def cmd_ram():
             if s.tx_bytes().endswith(b'\x04'): break
         s.tx_edges.clear(); s.run_ms(200)
 
-    for ram8k, want_total in ((True, 7000), (False, 15192)):     # P21 took 32 bytes for the reply stream, P35 17 for the configuration block and the brightness clock, 64 more of stack and 2 for the IR gate, P36 3 for the keypad
+    for ram8k, want_total in ((True, 6987), (False, 15179)):     # P21 took 32 bytes for the reply stream, P35 17 for the configuration block and the brightness clock, 64 more of stack and 2 for the IR gate, P36 3 for the keypad, P40 13 for the stats
         name = '8 K' if ram8k else '16 K'
         s = Sign(rom, syms, fresh_ram=True, ram8k=ram8k)
         s.run_ms(2500)
@@ -1036,7 +1040,7 @@ def cmd_quiet():
           % (tx.hex(), s.ram('PKT_RESTART')[0], s.wdog_clears, before, after),
           tx == b'\x06\x04' and s.ram('PKT_RESTART')[0] == 0 and s.wdog_clears == 0 and after != before)
     tx = send(s, b'\xb4\x31')
-    check("B4 '1' mid-scroll: reply %s, no restart" % tx[4:14], tx[:4] == b'\x06\xb1\x01\x0a' and tx[4:9] == b'15192' and s.ram('PKT_RESTART')[0] == 0)
+    check("B4 '1' mid-scroll: reply %s, no restart" % tx[4:14], tx[:4] == b'\x06\xb1\x01\x0a' and tx[4:9] == b'15179' and s.ram('PKT_RESTART')[0] == 0)
     tx = send(s, b'\x17' + b'1045' + b'P', wait_ms=300)
     check('set time mid-scroll: clock %s, seconds %d and ticks %d zeroed (P23), no restart, no watchdog clear'
           % (s.ram('CLK_H10', 4).hex(), s.ram('CLK_SEC')[0], s.ram('NMI_COUNT')[0]),
@@ -1217,7 +1221,7 @@ def cmd_baud():
         s = Sign(rom, syms, fresh_ram=True, baud=baud); s.run_ms(2500)
         tx = send(s, b'\xb4\x31', wait_ms=int(16 * 10000 / baud) + 500)
         rate = s.ram('BAUD_STEP')[0]
-        check('%4d baud from cold: query reply %s, BAUD_STEP %d, BAUD_T %d' % (baud, tx[:9], rate, s.ram('BAUD_T')[0]), tx[:4] == b'\x06\xb1\x01\x0a' and tx[4:9] == b'15192' and rate == baud // 60)
+        check('%4d baud from cold: query reply %s, BAUD_STEP %d, BAUD_T %d' % (baud, tx[:9], rate, s.ram('BAUD_T')[0]), tx[:4] == b'\x06\xb1\x01\x0a' and tx[4:9] == b'15179' and rate == baud // 60)
         tx = send(s, b'\x09\x30\x31\x0e' + text, wait_ms=500)
         d = bytes(s.m.memory[syms['MSG_STORE']:int.from_bytes(s.ram('STORE_END', 2), 'little')])
         check('%4d baud: 220-byte load intact, ACK+DONE %s' % (baud, tx.hex()), text in d and tx == b'\x06\x04')
@@ -1318,6 +1322,51 @@ def cmd_clock():
           s.ram('NMI_PER_SEC')[0] == 64 and s.bank_reg & 0x80 and s.ram('NMI_SEEN')[0] == 0 and s.ram('CLK_SEC')[0] == 0 and r == b'\x00' and r2 == b'\x00')
     check('no faults', not s.faults)
     print('clock: %d/%d checks pass' % (sum(checks), len(checks)))
+    return all(checks)
+
+
+def cmd_stats():
+    """P40: B4 '4' appends the clock source, a boot count that survives a reset, stack
+    headroom, merged display ticks, uptime, renderer stalls and frame/remote counters"""
+    rom, syms = assemble(HERE.parent / 'src' / 'patched')
+    checks = []
+    def check(name, cond):
+        checks.append(bool(cond)); print('  %s %s' % ('ok  ' if cond else 'FAIL', name))
+    def stats(s):
+        t0 = s.t / CPU_HZ
+        d = ota_cmd(s, b'\xb44')
+        return None if d is None or len(d) != 18 else dict(t=t0,
+            nmi=d[4], boot=d[5], head=d[6], merge=d[7], merge_max=d[8], up=d[9] | d[10] << 8 | d[11] << 16,
+            stalls=d[12], stall_max=d[13], ok=d[14], bad=d[15], ir=d[16], ir_bad=d[17])
+    s = Sign(rom, syms, fresh_ram=True); s.run_ms(3000)
+    a = stats(s)
+    check('18-byte reply: %s' % a, a is not None)
+    if a is None:
+        return False
+    check('mains: 60 a second, first boot after fresh RAM is 1', a['nmi'] == 60 and a['boot'] == 1)
+    check('uptime %d s after %.1f s' % (a['up'], a['t']), abs(a['up'] - a['t']) <= 1.5)
+    check('stack headroom %d of %d' % (a['head'], syms['STACK_CANARY']), 0 < a['head'] <= syms['STACK_CANARY'])
+    check('the query counted as a good frame (%d), none bad' % a['ok'], a['ok'] == 1 and a['bad'] == 0)
+    s.send_frame(FX_MAGIC, addr=1); s.rx_wait(); s.run_ms(20000)
+    s.send_bytes(bytes([0xB1, 1, 0x80, 1, 0x41, 0x00])); s.rx_wait(); s.run_ms(500)
+    s.ir_key('T', stretch_us=100); s.ir_wait(); s.run_ms(500)
+    b = stats(s)
+    check('after the effects message, a bad frame and a key: %s' % b, b is not None)
+    check('uptime %d s after %.1f s' % (b['up'], b['t']), abs(b['up'] - b['t']) <= 1.5)
+    check('frames: 3 good (%d), 1 bad (%d)' % (b['ok'], b['bad']), b['ok'] == 3 and b['bad'] == 1)
+    check('remote: decoded %d, dropped %d' % (b['ir'], b['ir_bad']), b['ir'] >= 1 and b['ir_bad'] == 0)
+    check('stalls %d, longest %d frames; merged ticks last %d, worst %d' % (b['stalls'], b['stall_max'], b['merge'], b['merge_max']),
+          0 < b['stall_max'] < 255 and b['merge_max'] < 255)
+    ram = bytes(s.m.memory[0x4000:0x8000])
+    s2 = Sign(rom, syms, fresh_ram=True); s2.m.set_memory_block(0x4000, ram); s2.run_ms(3000)
+    c = stats(s2)
+    check('reset with RAM kept: boot 2 (%s), uptime from 0 (%s), counters cleared (%s)' % (c and c['boot'], c and c['up'], c and c['ok']),
+          c is not None and c['boot'] == 2 and c['up'] <= 4 and c['ok'] == 1 and c['bad'] == 0)
+    s3 = Sign(rom, syms, fresh_ram=True, mains=False, crystal=True); s3.run_ms(3000)
+    d = stats(s3)
+    check('DC + board: 64 a second (%s), uptime %s' % (d and d['nmi'], d and d['up']), d is not None and d['nmi'] == 64 and abs(d['up'] - d['t']) <= 1.5)
+    check('no faults', not (s.faults or s2.faults or s3.faults))
+    print('stats: %d/%d checks pass' % (sum(checks), len(checks)))
     return all(checks)
 
 
@@ -1738,7 +1787,7 @@ def cmd_compare(dir_a, dir_b):
 
 if __name__ == '__main__':
     args = sys.argv[1:]
-    if not args or args[0] not in ('stack', 'compare', 'eeprom', 'ota', 'update', 'push', 'fuzz', 'ram', 'quiet', 'speed', 'baud', 'clock', 'config', 'keypad', 'seq'):
+    if not args or args[0] not in ('stack', 'compare', 'eeprom', 'ota', 'update', 'push', 'fuzz', 'ram', 'quiet', 'speed', 'baud', 'clock', 'config', 'keypad', 'seq', 'stats'):
         sys.exit(__doc__)
     if args[0] == 'ram':
         sys.exit(0 if cmd_ram() else 1)
@@ -1754,6 +1803,8 @@ if __name__ == '__main__':
         sys.exit(0 if cmd_seq() else 1)
     if args[0] == 'config':
         sys.exit(0 if cmd_config() else 1)
+    if args[0] == 'stats':
+        sys.exit(0 if cmd_stats() else 1)
     if args[0] == 'quiet':
         sys.exit(0 if cmd_quiet() else 1)
     if args[0] == 'push':

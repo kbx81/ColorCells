@@ -186,7 +186,7 @@ CLK_M10              equ RAM_VARS+0x1f5
 CLK_M1               equ RAM_VARS+0x1f6
 CLK_SEC              equ RAM_VARS+0x1f7
 CLK_PM               equ RAM_VARS+0x1f8
-; RAM_VARS+0x1f9: one byte free (KEY_ECHO_TX moved into BOOT_ZERO)
+BOOT_COUNT           equ RAM_VARS+0x1f9   ; boots since RAM was last fresh
 STORE_LIMIT          equ RAM_VARS+0x1fa
 STORE_SIZE           equ RAM_VARS+0x1fc
 STORE_TEXT_LIMIT     equ RAM_VARS+0x1fe   ; free text bytes; scan bound for store_repair
@@ -330,6 +330,8 @@ IR_BIT               equ 4           ; P36: PORT_IN bit of the IR receiver, on a
 PORT_IR              equ 1<<IR_BIT
 LATCH_BLINK          equ 0x80        ; CTRL_LATCH bit 7: the FLASH blink clock
 STACK_SIZE           equ 160         ; P35: a boot-time canary measured 130 bytes at most (a 57-channel store fill); 128 overran into the TX segments
+STACK_CANARY         equ 128         ; bytes of 0x55 laid at the stack's bottom at boot; the stats query counts those left
+STALL_FRAMES         equ 3           ; frames without a pkt_poll that count as a renderer stall
 ; P21: packet processing runs in the render loop and replies go out in the
 ; background, so their state cannot share renderer scratch. 32 bytes below the
 ; stack, carved off the store.
@@ -358,7 +360,20 @@ IR_QUIET             equ STREAM_AREA+33    ; P35: 1 = the IR decoder waits for t
 KP_MODE              equ STREAM_AREA+34    ; P36: 0 = serial, else the wired keypad is scanned
 KP_SPACE             equ STREAM_AREA+35    ; P36: frames in a row the RX line read space (serial mode)
 KP_HELD              equ STREAM_AREA+36    ; P36: empty scans left before a key's release is reported
-STREAM_AREA_SIZE     equ 37
+STAT_MERGE           equ STREAM_AREA+37    ; display ticks merged this second (a tick marked while still due)
+STATS                equ STREAM_AREA+38    ; the stats query copies STATS_LEN bytes from here
+STAT_MERGE_LAST      equ STREAM_AREA+38    ; ... last second
+STAT_MERGE_MAX       equ STREAM_AREA+39    ; ... worst second since boot
+STAT_UPTIME          equ STREAM_AREA+40    ; seconds since boot, 3 bytes
+STAT_STALLS          equ STREAM_AREA+43    ; times the renderer went STALL_FRAMES frames without polling
+STAT_STALL_MAX       equ STREAM_AREA+44    ; longest such gap in frames
+STAT_PKT_OK          equ STREAM_AREA+45    ; frames with a good checksum (own address or broadcast)
+STAT_PKT_BAD         equ STREAM_AREA+46    ; ... with a bad one
+STAT_IR_OK           equ STREAM_AREA+47    ; remote frames decoded
+STAT_IR_BAD          equ STREAM_AREA+48    ; remote frames dropped after the leader
+STATS_LEN            equ 11
+POLL_AGE             equ STREAM_AREA+49    ; frames since pkt_poll last ran
+STREAM_AREA_SIZE     equ 50
 STORE_TOP            equ STREAM_AREA-1    ; with a 32 K chip (16 K usable)
 STORE_TOP_8K         equ STORE_TOP-0x2000         ; with the stock 8 K chip
 ; store_init derives the warning level, the text allowance (301 = framing) and
@@ -385,7 +400,7 @@ QUERY_ROMID          equ '0'
 QUERY_MEMORY         equ '1'
 QUERY_NOP            equ '2'
 QUERY_DUMP           equ '3'
-QUERY_TIMING         equ '4'         ; P30: BAUD_T, BAUD_STEP, BAUD_CAL_LAST, NMI_SEEN
+QUERY_STATS          equ '4'         ; P30: BAUD_T, BAUD_STEP, BAUD_CAL_LAST, NMI_SEEN; P40: then the health counters
 QUERY_CONFIG         equ '5'         ; P35: the 16-byte configuration block
 QUERY_SEQ            equ '6'         ; P35: SEQ_LIST, 104 bytes
 CMD_OTA              equ 0xb5        ; B5 c ... (patch 11)
@@ -868,6 +883,13 @@ int_disp_reload:
         LD (DISP_ACC),A
         LD (HL),B
         LD HL,SVC_DUE
+        BIT 1,(HL)              ; P40: the last tick still due: this one merges with it
+        JR z,int_disp_mark
+        LD A,(STAT_MERGE)
+        INC A
+        LD (STAT_MERGE),A
+
+int_disp_mark:
         SET 1,(HL)
 
 int_tick6:
@@ -939,6 +961,8 @@ render_loop:
 ; ---- pkt_poll (P21): process a pending packet here, between two render
 ;      steps. pkt_process returns unless the display has to restart.
 pkt_poll:
+        XOR A                   ; P40: the renderer is alive (A and the flags are reloaded next)
+        LD (POLL_AGE),A
         LD A,(PKT_READY)
         AND A
         RET z
@@ -1126,6 +1150,28 @@ row_advance:
         DEC (HL)
 
 frame_idle_held:
+        LD A,(MENU_ACTIVE)      ; P40: renderer stalls; the editor does not poll
+        AND A
+        JR nz,frame_poll_done
+        LD HL,POLL_AGE
+        INC (HL)
+        JR nz,frame_poll_age
+        DEC (HL)
+
+frame_poll_age:
+        LD A,(HL)
+        CP STALL_FRAMES
+        JR nz,frame_poll_max
+        LD HL,STAT_STALLS
+        INC (HL)
+
+frame_poll_max:
+        LD HL,STAT_STALL_MAX
+        CP (HL)
+        JR c,frame_poll_done
+        LD (HL),A
+
+frame_poll_done:
         CALL clock_bank         ; P31: the OTA library may have dropped the clock bit
         LD A,(FRAME_DELAY)
         AND A
@@ -1589,6 +1635,7 @@ seq_set_cursor:
 
 seq_ret:                        ; the emulator's seq gate watches cursor writes from seq_set_cursor to here
 seq_chan_empty:
+        CALL pkt_poll           ; P40: 99 empty channels take ~50 ms; keep packets moving
         LD HL,(SEQ_PTR)
         LD A,(HL)
         CP 0xff
@@ -1924,6 +1971,13 @@ init_clear_stream:
         LD (HL),A
         INC HL
         DJNZ init_clear_stream
+        LD A,0x55               ; P40: HL is at the stack's bottom: lay the canary
+        LD B,STACK_CANARY
+
+init_canary:
+        LD (HL),A
+        INC HL
+        DJNZ init_canary
         LD HL,INIT_DATA
         LD DE,IMAGE
         LD BC,IMAGE_LEN
@@ -1947,6 +2001,7 @@ init_clear_stream:
         LD HL,0
         LD (CLK_M10),HL         ; CLK_M10, CLK_M1
         LD (CLK_SEC),HL         ; CLK_SEC, CLK_PM (0 = AM)
+        LD (CLK_PM),HL          ; P40: and BOOT_COUNT
         ; The message store is noise as well; store_repair would only tidy it
         ; into 100 channels of garbage. Empty it now: init_sequence then finds
         ; every channel empty and runs the demo, as after a CLR ALL.
@@ -1954,6 +2009,8 @@ init_clear_stream:
 
 init_vars_done:
         IM 1
+        LD HL,BOOT_COUNT        ; P40
+        INC (HL)
         LD HL,SEQ_LIST
         LD (SEQ_PTR),HL
         RET
@@ -4277,7 +4334,7 @@ ir_st_leader3:
         JR nz,ir_leader3_count
         IN A,(PORT_IN)
         BIT IR_BIT,A
-        JR z,ir_reset
+        JR z,ir_reject
         PUSH HL
         LD HL,ir_st_start
         LD (TICK_VECTOR),HL
@@ -4297,7 +4354,7 @@ ir_st_start:
         JR nz,ir_start_count
         IN A,(PORT_IN)
         BIT IR_BIT,A
-        JR nz,ir_reset_jr10
+        JR nz,ir_reject
         PUSH HL
         LD HL,ir_st_bits
         LD (TICK_VECTOR),HL
@@ -4308,6 +4365,12 @@ ir_start_count:
         LD (IR_STATE_CNT),A
         POP AF
         RET
+
+ir_reject:                  ; P40: a frame dropped after its leader
+        LD A,(STAT_IR_BAD)
+        INC A
+        LD (STAT_IR_BAD),A
+        JP ir_reset
 
 ; ---- ir_st_bits: sample a data bit (port C0 IR_BIT) into IR_SHIFT every 4 ticks
 ir_st_bits:
@@ -4339,7 +4402,7 @@ ir_bit_verify:
         AND PORT_IR
         CP L
         POP HL
-        JR nz,ir_reset_jr10
+        JR nz,ir_reject
         LD A,(IR_BITCNT)
         DEC A
         LD (IR_BITCNT),A
@@ -4352,15 +4415,18 @@ ir_bit_count:
         RET
 
 ir_frame_done:
+        LD A,(STAT_IR_OK)       ; P40
+        INC A
+        LD (STAT_IR_OK),A
         LD A,(CFG_LOCK)         ; P35: a locked sign drops the key here, before
         AND A                   ; either consumer sees it
-        JR nz,ir_reset_jr10
+        JR nz,ir_done
         LD A,(IR_SHIFT)
         RLCA                    ; P36: bits enter at IR_BIT, so the first lands in bit 7
         OR 0x80
         LD (IR_CODE),A
 
-ir_reset_jr10:
+ir_done:
         JP ir_reset
 
 ; ---- tx_send_byte: Queue byte A for bit-banged transmission; blocks until the previous byte is out
@@ -4970,7 +5036,14 @@ pkt_send_reply:
         CALL tx_send_byte
 
 pkt_check_ok:
+        LD HL,STAT_PKT_OK       ; P40
         LD A,E
+        AND A
+        JR z,pkt_count
+        INC HL                  ; STAT_PKT_BAD
+
+pkt_count:
+        INC (HL)
         AND A
         JR nz,pkt_discard
         LD A,(PKT_LEN)
@@ -5060,6 +5133,27 @@ clock_tick:
         RET nz
         XOR A
         LD (NMI_COUNT),A
+        LD HL,STAT_MERGE        ; P40: roll the merge count, keep the worst, count uptime
+        LD A,(HL)
+        LD (HL),0
+        INC HL
+        LD (HL),A               ; STAT_MERGE_LAST
+        INC HL
+        CP (HL)                 ; STAT_MERGE_MAX
+        JR c,clock_uptime
+        LD (HL),A
+
+clock_uptime:
+        INC HL                  ; STAT_UPTIME, 3 bytes
+        INC (HL)
+        JR nz,clock_uptime_done
+        INC HL
+        INC (HL)
+        JR nz,clock_uptime_done
+        INC HL
+        INC (HL)
+
+clock_uptime_done:
         CALL baud_calibrate     ; P30: a second of NMIs has passed
         LD HL,CLK_SEC
         INC (HL)
@@ -7646,8 +7740,8 @@ cmd_B4_query:
         JR z,pq_memory
         CP QUERY_DUMP
         JR z,pq_dump
-        CP QUERY_TIMING
-        JR z,pq_timing
+        CP QUERY_STATS
+        JP z,pq_stats
         CP QUERY_CONFIG
         JR z,pq_config
         CP QUERY_SEQ
@@ -7677,20 +7771,6 @@ pq_reply:
         LD (PKT_BUF+2),A
         LD E,3
         JR pq_stream
-
-pq_timing:
-        LD IX,PKT_BUF+3         ; P30: the serial timing state, for the bench
-        LD A,(BAUD_T)
-        LD (IX+0),A
-        LD A,(BAUD_STEP)
-        LD (IX+1),A
-        LD A,(BAUD_CAL_LAST)
-        LD (IX+2),A
-        LD A,(NMI_SEEN)
-        LD (IX+3),A
-        LD HL,PKT_BUF+3
-        LD BC,4
-        JR pq_reply
 
 pq_config:
         LD HL,CFG               ; P35
@@ -7734,6 +7814,42 @@ pq_stream:
         LD (TX_SEG0+4),A
         LD (TX_SUM),A
         JP pkt_done_pop
+
+pq_stats:
+        LD IX,PKT_BUF+3         ; P30: the serial timing state, for the bench
+        LD A,(BAUD_T)
+        LD (IX+0),A
+        LD A,(BAUD_STEP)
+        LD (IX+1),A
+        LD A,(BAUD_CAL_LAST)
+        LD (IX+2),A
+        LD A,(NMI_SEEN)
+        LD (IX+3),A
+        LD A,(NMI_PER_SEC)      ; P40: 60 mains, 64 the add-in board's crystal
+        LD (IX+4),A
+        LD A,(BOOT_COUNT)
+        LD (IX+5),A
+        LD HL,STACK_TOP-STACK_SIZE
+        LD A,0x55
+        LD B,STACK_CANARY
+
+pq_canary:
+        CP (HL)
+        JR nz,pq_canary_end
+        INC HL
+        DJNZ pq_canary
+
+pq_canary_end:
+        LD A,STACK_CANARY
+        SUB B
+        LD (IX+6),A
+        LD HL,STATS
+        LD DE,PKT_BUF+3+7
+        LD BC,STATS_LEN
+        LDIR
+        LD HL,PKT_BUF+3
+        LD BC,7+STATS_LEN
+        JP pq_reply
 
 ; ---- cmd_B5_ota: OTA commands (CC784_ota.md §6). B5 must be the first payload
 ;      byte and the frame ends with the command. Runs under pkt_process's DI;
