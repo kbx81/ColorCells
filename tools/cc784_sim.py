@@ -1354,9 +1354,9 @@ def cmd_stats():
     def stats(s):
         t0 = s.t / CPU_HZ
         d = ota_cmd(s, b'\xb44')
-        return None if d is None or len(d) not in (18, 22) else dict(t=t0,
+        return None if d is None or len(d) != 22 else dict(t=t0,
             nmi=d[4], boot=d[5], head=d[6], merge=d[7], merge_max=d[8], up=d[9] | d[10] << 8 | d[11] << 16,
-            stalls=d[12], stall_max=d[13], ok=d[14], bad=d[15], ir=d[16], ir_bad=d[17])
+            stalls=d[12], stall_max=d[13], ok=d[14], bad=d[15], ir=d[16], ir_bad=d[17], rej=tuple(d[18:22]))
     s = Sign(rom, syms, fresh_ram=True); s.run_ms(3000)
     a = stats(s)
     check('stats reply: %s' % a, a is not None)
@@ -1366,6 +1366,7 @@ def cmd_stats():
     check('uptime %d s after %.1f s' % (a['up'], a['t']), abs(a['up'] - a['t']) <= 1.5)
     check('stack headroom %d of %d' % (a['head'], syms['STACK_CANARY']), 0 < a['head'] <= syms['STACK_CANARY'])
     check('the query counted as a good frame (%d), none bad' % a['ok'], a['ok'] == 1 and a['bad'] == 0)
+    check('remote drop counters zero after boot: %s' % (a['rej'],), a['rej'] == (0, 0, 0, 0))
     s.send_frame(FX_MAGIC, addr=1); s.rx_wait(); s.run_ms(20000)
     s.send_bytes(bytes([0xB1, 1, 0x80, 1, 0x41, 0x00])); s.rx_wait(); s.run_ms(500)
     s.ir_key('T', stretch_us=100); s.ir_wait(); s.run_ms(500)
@@ -1373,7 +1374,7 @@ def cmd_stats():
     check('after the effects message, a bad frame and a key: %s' % b, b is not None)
     check('uptime %d s after %.1f s' % (b['up'], b['t']), abs(b['up'] - b['t']) <= 1.5)
     check('frames: 3 good (%d), 1 bad (%d)' % (b['ok'], b['bad']), b['ok'] == 3 and b['bad'] == 1)
-    check('remote: decoded %d, dropped %d' % (b['ir'], b['ir_bad']), b['ir'] >= 1 and b['ir_bad'] == 0)
+    check('remote: decoded %d, dropped %d, by reason %s' % (b['ir'], b['ir_bad'], b['rej']), b['ir'] >= 1 and b['ir_bad'] == 0 and b['rej'] == (0, 0, 0, 0))
     check('stalls %d, longest %d frames; merged ticks last %d, worst %d' % (b['stalls'], b['stall_max'], b['merge'], b['merge_max']),
           0 < b['stall_max'] < 255 and b['merge_max'] < 255)
     ram = bytes(s.m.memory[0x4000:0x8000])
@@ -1423,7 +1424,7 @@ def cmd_status():
     sign = cc784.Sign(link, 1, baud=1200)
     sign.post_ack = 0.2; sign.done = True; sign.quiet = True
     replies = [sign.query('4') for _ in range(8)]
-    bad = [r.hex() for r in replies if len(cc784.reply_data(r)) not in (18, 22)]
+    bad = [r.hex() for r in replies if len(cc784.reply_data(r)) != 22]
     ok = sign.send_frame(b'\x09\x30\x32\x0e' + b'THREE ' * 30)
     check('with reports flowing: 8 stats replies (bad: %s), a 180-byte load ACKed (%s), %d reports filtered'
           % (bad, ok, len(sign.link.reports)), not bad and ok and sign.link.reports)

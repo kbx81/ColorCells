@@ -141,12 +141,12 @@ NMI_PER_SEC          equ RAM_VARS+0x0d2
 CLK_RENDERED         equ RAM_VARS+0x0d3   ; FF just after a clock display; forces LEFT in an effect
 MAGIC_COLOR_IDX      equ RAM_VARS+0x0d4   ; index into MAGIC_COLOR_CYCLE
 EURO_STATE           equ RAM_VARS+0x0d5
-IR_DEBOUNCE          equ RAM_VARS+0x0d6   ; key number seen once, awaiting its second frame
+IR_DEBOUNCE          equ RAM_VARS+0x0d6   ; key number | 0x40 seen once, awaiting its second frame; 0 none
 TICK6_COUNT          equ RAM_VARS+0x0d7
 GEN_COUNTDOWN        equ RAM_VARS+0x0d8   ; IR repeat/hold timer, counts down in tick6 (word)
 IR_STATE_CNT         equ RAM_VARS+0x0da
 IR_BITCNT            equ RAM_VARS+0x0db
-IR_KEY               equ RAM_VARS+0x0dc   ; last accepted key number
+IR_KEY               equ RAM_VARS+0x0dc   ; last seen key number | 0x40; 0 none
 IR_SHIFT             equ RAM_VARS+0x0dd
 IR_CODE              equ RAM_VARS+0x0de
 IR_KEYNUM            equ RAM_VARS+0x0df   ; IR_CODE & 3F = key number 0..63
@@ -4425,6 +4425,7 @@ ir_leader2_fell:
         LD HL,ir_st_leader3
         LD (TICK_VECTOR),HL
         POP HL
+        XOR A
         LD (IR_LEVEL),A         ; low
         LD A,24
         LD (IR_STATE_CNT),A
@@ -4459,8 +4460,6 @@ ir_st_leader3:
         JR nc,ir_leader_again   ; a rise within two ticks of the fall
         CP 15
         JR nc,ir_stray_rise     ; a rise before tick 10
-        LD A,PORT_IR
-        LD (IR_LEVEL),A
         LD A,7                  ; the start cell is decoded like a data cell and
         LD (IR_BITCNT),A        ; falls off the bottom of IR_SHIFT at the sixth shift
         LD A,0x20               ; "a 1 came before": the start cell may open with a rise
@@ -6616,6 +6615,7 @@ getkey_ir:
         LD A,(IR_KEYNUM)
         CP 0x3e
         JR z,getkey_released
+        OR 0x40                 ; a seen key carries bit 6: idle 0 is not key 0
         LD C,A
         LD A,(IR_KEY)
         CP C
@@ -6623,8 +6623,6 @@ getkey_ir:
         LD A,(IR_DEBOUNCE)
         AND A
         JR nz,getkey_accept
-        CP 0x24
-        JR z,getkey_none
         LD HL,(GEN_COUNTDOWN)
         LD A,H
         OR L
@@ -6637,6 +6635,7 @@ getkey_released:
         CALL getkey_pending     ; a first frame still waiting for its second: the
         JR nz,getkey_release_clear   ; release within the window confirms it
         LD A,(IR_KEY)
+        AND 0x3f
         LD (IR_KEYNUM),A
         LD A,0x80+0x3e          ; editor_exit waits for the release code itself
         LD (IR_CODE),A
@@ -6677,6 +6676,7 @@ getkey_other_key:
 
 getkey_first_frame:
         LD A,(IR_KEYNUM)
+        OR 0x40
         LD (IR_KEY),A
         LD (IR_DEBOUNCE),A
         LD HL,IR_DEBOUNCE_WINDOW
@@ -6687,6 +6687,7 @@ getkey_first_frame:
 
 getkey_accept:
         LD A,(IR_KEYNUM)
+        OR 0x40
         LD (IR_KEY),A
         LD HL,IR_REPEAT_DELAY
         LD (GEN_COUNTDOWN),HL
