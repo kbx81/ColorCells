@@ -7245,9 +7245,8 @@ func_search:
         INC HL
         JR func_search
 
-func_cancel:
-        POP HL
-        POP HL
+func_cancel:                    ; P47: one return address since editor_translate_key jumps here
+        POP HL                  ; (stock CALLed; a second POP lifted SP into PKT_READY/PKT_BUF)
         JP editor_reshow
 
 func_store:

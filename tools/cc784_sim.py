@@ -1563,6 +1563,17 @@ def cmd_randbow():
 
     s.send_frame(b'\x09\x30\x30\x0e' + b'AB\xb2\xbcCD', addr=1); s.rx_wait(); s.run_ms(3000)
     s.ir_key('STOP', stretch_us=100); s.ir_wait(); s.run_ms(1500)
+    def idle_sp():
+        sps = set()
+        for _ in range(40):
+            s.run_ms(5); sps.add(s.m.sp)
+        return max(sps)
+    sp0 = idle_sp()
+    for _ in range(3):
+        for k in ('SHIFT', 'STOP', 'T'):
+            s.ir_key(k, stretch_us=100); s.ir_wait(); s.run_ms(400)
+    check('P47: three FUNC cancels leave the editor stack where it was (%04x -> %04x), PKT_READY %02x'
+          % (sp0, idle_sp(), s.ram('PKT_READY')[0]), idle_sp() == sp0 and s.ram('PKT_READY')[0] == 0)
     before = store(s)
     for k in ('SHIFT', 'STOP'):
         s.ir_key(k, stretch_us=100); s.ir_wait(); s.run_ms(400)
