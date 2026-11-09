@@ -184,7 +184,8 @@ IR_REJ_LEADER        equ RAM_VARS+0x1ed   ; no start burst 10-23 ticks after the
 IR_REJ_POS           equ RAM_VARS+0x1ee   ; stray rises between the two positions or past the middle (ignored, not drops)
 IR_REJ_CELL          equ RAM_VARS+0x1ef   ; no rise in a cell after a 1
 IR_REJ_BRIDGE        equ RAM_VARS+0x1f0   ; a burst where a gap belongs: high through a cell's first two ticks after a 1, or a rise opening a cell after a 0
-; RAM_VARS+0x1f1 .. 0x1f2: 2 bytes free
+TERM_MODE            equ RAM_VARS+0x1f1   ; FF: the editor was opened by B7 '1' and takes serial bytes as keys
+EDIT_CLOSE           equ RAM_VARS+0x1f2   ; FF: B7 '0' asks the open editor to close
 ; P20: the clock digits must survive a power cycle, so they live up here next
 ; to the store, out of reach of the stub's library copy (RAM_VARS+00..81).
 CLK_H10              equ RAM_VARS+0x1f3
@@ -394,6 +395,7 @@ FRAME_START          equ 0xb1
 ADDR_BROADCAST       equ 0x2a        ; '*': processed, never answered
 REPLY_ACK            equ 0x06
 REPLY_NAK            equ 0x15
+REPLY_BUSY           equ 0x18        ; a good frame refused because the editor is open (patch 45)
 CMD_SPEED            equ 0x02        ; 02 n
 CMD_CLEAR_ALL        equ 0x03
 CMD_SEQUENCE         equ 0x04        ; 04 dd dd ... [D]
@@ -415,6 +417,7 @@ QUERY_CONFIG         equ '5'         ; P35: the 16-byte configuration block
 QUERY_SEQ            equ '6'         ; P35: SEQ_LIST, 104 bytes
 CMD_OTA              equ 0xb5        ; B5 c ... (patch 11)
 CMD_CONFIG           equ 0xb6        ; B6 index value (patch 35)
+CMD_EDITOR           equ 0xb7        ; B7 '1' opens the editor as a serial terminal, B7 '0' closes it (patch 45)
 DONE_BYTE            equ 0x04        ; sent after processing when the frame's flag was 81 (patch 16)
 
 ; ---- Boot stub and OTA (ota.md) ------------------------------------------
@@ -1159,8 +1162,15 @@ row_advance:
         LD (DISP_STRETCH),A     ; P26: full rate unless the plain crawl below asks
         LD HL,RX_IDLE           ; P30: frames since the last start bit, held at 255
         INC (HL)
-        JR nz,frame_idle_held
+        JR nz,frame_idle_gap
         DEC (HL)
+
+frame_idle_gap:
+        LD A,(HL)               ; P45: a second of silence ends any frame: the next
+        CP BAUD_IDLE_FRAMES     ; byte is timed as a frame's B1 (rx_start)
+        JR nz,frame_idle_held
+        XOR A
+        LD (PKT_STATE),A
 
 frame_idle_held:
         LD A,(MENU_ACTIVE)      ; P40: renderer stalls; the editor does not poll
@@ -1400,7 +1410,14 @@ kp_none:
 rx_consume:
         LD A,(MENU_ACTIVE)
         AND A
-        JR nz,tick6_exit
+        JR z,rx_take
+        CALL rx_key_ready       ; P45: frames are parsed in the editor too; a
+        JR z,tick6_exit         ; terminal key stays in the FIFO for editor_getkey
+        CALL rx_fifo_get
+        JR nc,rx_have_byte
+        JR tick6_exit
+
+rx_take:
         CALL rx_fifo_get
         JR nc,rx_have_byte
         LD A,(IR_CODE)
@@ -1414,6 +1431,8 @@ rx_consume:
 
 rx_ir_stop_key:
         LD (IR_KEY),A
+        XOR A                   ; P45: the remote's editor takes no serial keys
+        LD (TERM_MODE),A
 
 key_handler_jr1:
         LD A,(TEST_MODE)        ; P43: no editor while an update is under way:
@@ -1440,29 +1459,13 @@ rx_idle_byte:
         LD HL,PKT_BUSY
         OR (HL)
         LD (PKT_DISCARD),A
-        LD HL,RX_BYTE
-        JR z,rx_idle_free
-        LD A,(HL)
+        LD A,(RX_BYTE)
         CP FRAME_START
-        JR nz,rx_consume
-        JR rx_frame_start
-
-rx_idle_free:
-        LD A,(HL)
-        CP FRAME_START
-        JR nz,rx_not_start
-
-rx_frame_start:
+        JR nz,rx_consume        ; P45: a byte outside a frame is never a key
         LD A,0xff
         LD (PKT_STATE),A
         LD HL,pkt_st_addr
         LD (PKT_VECTOR),HL
-        JR rx_consume
-
-rx_not_start:
-        LD A,(RX_BYTE)
-        CP 1
-        JR z,key_handler_jr1
         JR rx_consume
 
 ; ---- tick6_exit
@@ -4799,6 +4802,11 @@ rx_start:
         LD A,0
         LD (RX_IDLE),A
         JR c,rx_start_timed
+        LD A,(MENU_ACTIVE)      ; P45: a terminal's keys come seconds apart and need
+        LD B,A                  ; not start like B1: the rate stays as B7 '1' set it
+        LD A,(TERM_MODE)
+        AND B
+        JR nz,rx_start_timed
         LD A,1
         LD (RX_PHASE),A
         RET
@@ -5121,6 +5129,28 @@ rx_fifo_empty:
         SCF
         RET
 
+; ---- rx_key_ready (P45): Z if the FIFO's head is a key for the editor: it was
+;      opened by B7 '1', no frame is being parsed and the head is not a B1
+rx_key_ready:
+        LD A,(TERM_MODE)
+        AND A
+        JR z,rx_key_no
+        LD A,(PKT_STATE)
+        AND A
+        JR nz,rx_key_no
+        LD A,(RX_COUNT)
+        AND A
+        JR z,rx_key_no
+        LD A,(RX_FIFO)
+        CP FRAME_START
+        JR z,rx_key_no
+        CP A
+        RET
+
+rx_key_no:
+        OR 1
+        RET
+
 ; ---- pkt_feed_byte: Feed RX_BYTE to the packet parser state in PKT_VECTOR
 pkt_feed_byte:
         LD A,(RX_BYTE)
@@ -5137,7 +5167,22 @@ pkt_st_addr:
 ; ---- pkt_st_flag: store 3rd header byte -> PKT_FLAG (0x80 from PC)
 pkt_st_flag:
         LD (PKT_FLAG),A
+        AND 0xfe                ; P45: 80 or 81, else this was no header: look for
+        CP 0x80                 ; the next B1, which may be this very byte
+        JR nz,pkt_flag_bad
         LD HL,pkt_st_len
+        LD (PKT_VECTOR),HL
+        RET
+
+pkt_flag_bad:
+        LD A,(PKT_FLAG)
+        LD HL,pkt_st_addr
+        CP FRAME_START
+        JR z,pkt_flag_restart
+        XOR A
+        LD (PKT_STATE),A
+
+pkt_flag_restart:
         LD (PKT_VECTOR),HL
         RET
 
@@ -5203,9 +5248,17 @@ pkt_st_cksum:
         JR nz,pkt_discard
         LD A,E
         AND A
+        LD A,REPLY_NAK
+        JR nz,pkt_send_reply
+        LD A,(MENU_ACTIVE)      ; P45: while the editor is open only B7 is taken;
+        AND A                   ; anything else is answered BUSY and dropped
         LD A,REPLY_ACK
         JR z,pkt_send_reply
-        LD A,REPLY_NAK
+        LD A,(PKT_BUF)
+        CP CMD_EDITOR
+        LD A,REPLY_ACK
+        JR z,pkt_send_reply
+        LD A,REPLY_BUSY
 
 pkt_send_reply:
         LD D,A                  ; P41: a status report streaming: the ACK follows it
@@ -5233,9 +5286,15 @@ pkt_count:
         LD A,(PKT_LEN)
         AND A
         JR z,pkt_discard
-        LD A,0xff
+        LD A,(PKT_BUF)
+        CP CMD_EDITOR
+        JR z,pkt_editor
+        LD A,(MENU_ACTIVE)
+        AND A
+        JR nz,pkt_discard       ; answered BUSY
+        DEC A
         LD (PKT_READY),A        ; P21: the render loop picks it up at its next step
-        XOR A
+        INC A
         LD (PKT_STATE),A
         RET
 
@@ -5247,6 +5306,35 @@ pkt_discard_frame:
         XOR A
         LD (PKT_STATE),A
         RET
+
+; ---- pkt_editor (P45): B7 '1' opens the editor as a serial terminal (or makes the
+;      open one take serial keys), B7 '0' closes it as STOP would. ACK only, no DONE.
+pkt_editor:
+        LD A,(PKT_BUF+1)
+        CP '0'
+        JR z,pkt_editor_close
+        CP '1'
+        JR nz,pkt_discard
+        LD A,(MENU_ACTIVE)
+        AND A
+        JR nz,pkt_editor_term
+        LD A,(TEST_MODE)        ; P43: no editor during an update
+        INC A
+        JR z,pkt_discard
+        XOR A
+        LD (PKT_STATE),A
+        DEC A
+        LD (TERM_MODE),A
+        JP key_handler          ; resets the stack, as a STOP key does
+
+pkt_editor_term:
+        LD (TERM_MODE),A
+        JR pkt_discard
+
+pkt_editor_close:
+        LD A,(MENU_ACTIVE)
+        LD (EDIT_CLOSE),A       ; nothing when the editor is shut
+        JR pkt_discard
 
 ; ---- tx_send_frame: Send reply frame: B1, MY_ADDRESS, then (HL)=len, len bytes, 8-bit sum of the data bytes
 tx_send_frame:                  ; ota_reply, its one caller, keeps nothing
@@ -5484,13 +5572,14 @@ clrglyph_loop:
 key_handler:
         LD A,0xff
         LD (CAPS_LOCK),A
-        LD A,1
+        XOR A
         LD (KEY_ECHO_TX),A
 
 editor_start:
         LD SP,STACK_TOP
         XOR A
         LD (SVC_ACTIVE),A       ; P26: entered from rx_consume inside the service
+        LD (EDIT_CLOSE),A
         LD A,0xff
         LD (MENU_ACTIVE),A
         EI
@@ -6579,11 +6668,21 @@ editor_exit_jr17:
 
 ; ---- menu_getchar
 menu_getchar:
+        LD A,(EDIT_CLOSE)
+        AND A
+        JR nz,editor_close
         CALL editor_getkey
         LD A,(EDIT_KEY)
         AND A
         JR z,menu_getchar
         RET
+
+editor_close:                   ; P45: B7 '0' leaves as STOP does, from any prompt
+        LD A,0xff               ; (the time prompt stops the clock)
+        LD (CLK_RUN),A
+        XOR A
+        LD (SEQ_MENU_ACTIVE),A
+        JP exit_add_to_seq
 
 ; ---- editor_getkey: Editor key source: echoes the previous key on the serial TX, then takes a key from the serial RX FIFO if present, else from the IR decoder (IR_CODE). So the on-sign editor can be driven from a serial terminal as well as the remote.
 editor_getkey:
@@ -6593,13 +6692,15 @@ editor_getkey:
         CALL tx_send_byte
 
 getkey_serial:
+        CALL rx_key_ready       ; P45: only with B7 '1', and never a frame's byte:
+        JR nz,getkey_ir         ; rx_consume parses those, and leaves a key's head alone
         CALL rx_fifo_get
-        JR c,getkey_ir
+        LD C,A                  ; RX_BYTE is rx_consume's too
         AND A
         JR z,getkey_ir
         XOR A
         LD (EURO_STATE),A
-        LD A,(RX_BYTE)
+        LD A,C
         LD (EDIT_KEY),A
         LD (KEY_ECHO_TX),A
         RET

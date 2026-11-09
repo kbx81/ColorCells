@@ -47,6 +47,10 @@ cc784_sim.py - run the CC784NIR ROM under emulation (kosarev's z80 core) with a 
         Status reports (patch 41): off by default, one per channel start when on,
         FF when the editor opens, and the host tool working with reports flowing.
 
+    uv run tools/cc784_sim.py term
+        Frames only on the serial port (patch 45): loose bytes, a lost byte, a bad
+        header, BUSY while the editor is open, B7 '1' and B7 '0'.
+
     uv run tools/cc784_sim.py fuzz [RUNS]
         Cut the power at a random instant of an update, RUNS times (default 100);
         every reboot must land in a bank whose trailer and image CRC check out.
@@ -748,9 +752,10 @@ def cmd_update(baud=300):
     s.tx_edges.clear()
     s.ir_key('STOP', stretch_us=100); s.ir_wait(); s.run_ms(800)
     s.send_bytes(b'\x01'); s.rx_wait(); s.run_ms(800)
-    check('P43: remote STOP and a serial 01 mid-update open no editor (menu %02x, test mode %02x, tx %s)'
+    s.send_frame(b'\xb7\x31', addr=1); s.rx_wait(); s.run_ms(800)
+    check("P43: remote STOP, a serial 01 and B7 '1' mid-update open no editor (menu %02x, test mode %02x, tx %s)"
           % (s.ram('MENU_ACTIVE')[0], s.ram('TEST_MODE')[0], s.tx_bytes().hex()),
-          s.ram('MENU_ACTIVE')[0] == 0 and s.ram('TEST_MODE')[0] == 0xFF and s.tx_bytes() == b'')
+          s.ram('MENU_ACTIVE')[0] == 0 and s.ram('TEST_MODE')[0] == 0xFF and s.tx_bytes() == b'\x06')
     for page in pages:
         data = new_bank[page * 64:(page + 1) * 64]
         r = ota_cmd(s, b'\xb5W' + bytes([page]) + cc784_ota.crc16(data).to_bytes(2, 'little') + data, wait_ms=6000)
@@ -1265,14 +1270,14 @@ def cmd_baud():
     s.run_ms(1500); s.set_baud(1200)
     tx = send(s, b'\xb4\x33', wait_ms=6500)   # the query can wait behind the empty-channel scans, then 3 s of dump
     check('then 1200: a store dump comes back whole at 1200 (%d bytes, ends %s)' % (len(tx), tx[-1:].hex()), tx[:4] == b'\x06\xb1\x01' + bytes([len(tx) - 6]) and tx[-1:] == b'\x04' if False else len(tx) > 20 and b'FAST' in tx and b'SLOW' in tx and tx.endswith(b'\x04'))
-    # NETCC habits at 300: a bare STOP byte after silence, then keys, then a frame
+    # a terminal session at 300 (P45): B7 '1' opens the editor, then keys, 0D leaves
     s = Sign(rom, syms, fresh_ram=True); s.run_ms(2500)
     send(s, b'\x09\x30\x30\x0e' + b'HELLO', wait_ms=500); s.run_ms(1500)
-    s.send_bytes(b'\x01'); s.rx_wait(); s.run_ms(500)
+    tx = send(s, b'\xb7\x31', wait_ms=500, flag=0x80)
     menu = s.ram('MENU_ACTIVE')[0]
     s.send_bytes(b'X'); s.rx_wait(); s.run_ms(500)
     s.send_bytes(b'\x0d'); s.rx_wait(); s.run_ms(1500)
-    check('300 baud bare 01 after 1.5 s idle opens the editor (%02x), X typed, 0D leaves (%02x)' % (menu, s.ram('MENU_ACTIVE')[0]), menu == 0xff and s.ram('MENU_ACTIVE')[0] == 0)
+    check("300 baud B7 '1' after 1.5 s idle opens the editor (%s, %02x), X typed, 0D leaves (%02x)" % (tx.hex(), menu, s.ram('MENU_ACTIVE')[0]), tx[:1] == b'\x06' and menu == 0xff and s.ram('MENU_ACTIVE')[0] == 0)
     check('no faults', not s.faults)
     print('baud: %d/%d checks pass' % (sum(checks), len(checks)))
     return all(checks)
@@ -1441,6 +1446,77 @@ def cmd_status():
     return all(checks)
 
 
+def cmd_term():
+    """P45: the serial port carries frames only. Loose bytes are never keys; a lost
+    byte costs one frame (a second of silence resets the parser); a bad flag byte
+    sends the parser back to look for B1; while the editor is open frames are
+    answered BUSY, except B7: '1' makes it a serial terminal, '0' closes it"""
+    rom, syms = assemble(HERE.parent / 'src' / 'patched')
+    checks = []
+    def check(name, cond):
+        checks.append(bool(cond)); print('  %s %s' % ('ok  ' if cond else 'FAIL', name))
+    def store(s):
+        return bytes(s.m.memory[syms['MSG_STORE']:int.from_bytes(s.ram('STORE_END', 2), 'little')])
+    def frame(payload, flag=0x80):
+        return bytes([0xB1, 1, flag, len(payload)]) + payload + bytes([sum(payload) & 0xff])
+    def send(s, data, wait_ms=1500):
+        s.tx_edges.clear(); s.send_bytes(data); s.rx_wait(); s.run_ms(wait_ms)
+        return s.tx_bytes()
+    load = lambda text: frame(b'\x09\x30\x30\x0e' + text)
+    s = Sign(rom, syms, fresh_ram=True); s.run_ms(2500)
+    send(s, load(b'HELLO'), 2000)
+
+    tx = send(s, b'\x01HI\x0d\x01')
+    check('display mode: loose bytes, 01 among them, open nothing (menu %02x, tx %s)' % (s.ram('MENU_ACTIVE')[0], tx.hex()),
+          s.ram('MENU_ACTIVE')[0] == 0 and tx == b'')
+    tx = send(s, load(b'LOST')[1:] + b'\x30' * 20, 1200) + send(s, load(b'AFTER'), 2000)
+    check('a frame without its B1 is dropped, the next one taken (tx %s)' % tx.hex(), tx == b'\x06' and b'AFTER' in store(s))
+    f = load(b'SHORT')
+    tx = send(s, f[:6] + f[7:], 1200) + send(s, load(b'RESYNC'), 2000)
+    check('a frame one byte short, a second of silence, the next one taken (tx %s)' % tx.hex(), tx == b'\x06' and b'RESYNC' in store(s))
+    tx = send(s, b'\xb1\x05\x41' + load(b'FLAG'), 2000)
+    check('a B1 followed by no header, then a frame at once: taken (tx %s)' % tx.hex(), tx == b'\x06' and b'FLAG' in store(s))
+    tx = send(s, b'\xb1\x01' + load(b'B1FLAG'), 2000)
+    check('a B1 in the flag position starts the frame over (tx %s)' % tx.hex(), tx == b'\x06' and b'B1FLAG' in store(s))
+
+    s.ir_key('STOP', stretch_us=100); s.ir_wait(); s.run_ms(1500)
+    before = store(s)
+    tx = send(s, load(b'BUSY'), 2000)
+    check("remote's editor: a load is answered BUSY (%s) and not stored" % tx.hex(), tx == b'\x18' and store(s) == before)
+    tx = send(s, b'XYZ \x0d', 1500)
+    check('remote\'s editor: loose bytes are not typed (tx %s, menu %02x)' % (tx.hex(), s.ram('MENU_ACTIVE')[0]),
+          store(s) == before and s.ram('MENU_ACTIVE')[0] == 0xFF and tx == b'')
+    tx = send(s, frame(b'\xb7\x31'), 800) + send(s, b'Q', 1500)
+    check("B7 '1' in the open editor: ACK, then serial keys type (tx %s)" % tx.hex(), tx[:1] == b'\x06' and store(s) != before)
+    typed = store(s)
+    tx = send(s, load(b'TERM'), 2000)
+    check('terminal: a frame is answered BUSY (%s), none of its bytes typed' % tx.hex(), tx[:1] == b'\x18' and store(s) == typed)
+    tx = send(s, frame(b'\xb7\x30'), 2500)
+    check("B7 '0' closes the editor (tx %s, menu %02x)" % (tx.hex(), s.ram('MENU_ACTIVE')[0]), tx[:1] == b'\x06' and s.ram('MENU_ACTIVE')[0] == 0)
+    tx = send(s, frame(b'\xb7\x30'), 1500)
+    check("B7 '0' with the editor shut: ACK, nothing else (%s, menu %02x)" % (tx.hex(), s.ram('MENU_ACTIVE')[0]), tx == b'\x06' and s.ram('MENU_ACTIVE')[0] == 0)
+
+    tx = send(s, frame(b'\xb7\x31'), 1500)
+    check("B7 '1' from display mode opens the editor (tx %s, menu %02x)" % (tx.hex(), s.ram('MENU_ACTIVE')[0]), tx[:1] == b'\x06' and s.ram('MENU_ACTIVE')[0] == 0xFF)
+    send(s, b'\x17', 1500); send(s, b'12', 1500)
+    stopped = s.ram('CLK_RUN')[0]
+    tx = send(s, frame(b'\xb7\x30'), 2500)
+    check("B7 '0' halfway through TIME? (clock stopped: %02x): closed, clock running (%02x, menu %02x)"
+          % (stopped, s.ram('CLK_RUN')[0], s.ram('MENU_ACTIVE')[0]), stopped == 0 and s.ram('CLK_RUN')[0] == 0xFF and s.ram('MENU_ACTIVE')[0] == 0)
+    tx = send(s, frame(b'\xb4\x31'), 2500)
+    check('then a query is answered as usual (%s)' % tx[:4].hex(), tx[:4] == b'\x06\xb1\x01\x0a')
+    check('no faults', not s.faults)
+
+    # keys typed seconds apart at 1200: no re-timing as if each were a B1
+    s = Sign(rom, syms, fresh_ram=True, baud=1200); s.run_ms(2500)
+    send(s, frame(b'\xb7\x31'), 1500)
+    echo = b''.join(send(s, k, 1500) for k in (b'B', b'Z', b'\x7f')) + send(s, b'\x7f', 1500)
+    check('1200 baud, keys 1.5 s apart: echoed intact (%s)' % echo.hex(), echo == b'BZ\x7f\x7f')
+    check('no faults at 1200', not s.faults)
+    print('term: %d/%d checks pass' % (sum(checks), len(checks)))
+    return all(checks)
+
+
 def cmd_config():
     """P35: the configuration block: defaults after a RAM loss, kept across a reset,
     rejected when its sum is wrong; B6 writes with the protected bytes refused and the
@@ -1584,15 +1660,15 @@ def cmd_config():
     s.ir_key('STOP'); s.ir_wait(); s.run_ms(800)
     opened = s.ram('MENU_ACTIVE')[0]
     check('remote lock: STOP ignored (%02x); unlocked: editor opens (%02x)' % (locked, opened), locked == 0 and opened == 0xFF)
-    s.send_bytes(b'\x0d', gap_bits=20); s.rx_wait()  # leave the editor: 0D is the STOP/START key as a serial byte
+    s.send_frame(b'\xb7\x30', addr=1); s.rx_wait()  # leave the editor: B7 '0' (P45)
     for _ in range(50):
         if not s.ram('MENU_ACTIVE')[0]: break
         s.run_ms(100)
 
-    # the editor's ADDRESS? dialog reseals the block (driven as serial keys: a bare
-    # 01 opens the editor, B7 1F is FUNC MAGIC, three digits, 0D is STOP/START)
-    s.run_ms(3000)                                   # a bare 01 is ignored while a packet is busy
-    s.send_bytes(b'\x01', gap_bits=20); s.rx_wait()
+    # the editor's ADDRESS? dialog reseals the block (driven as serial keys: frame
+    # B7 '1' opens the editor as a terminal, B7 1F is FUNC MAGIC, three digits, 0D is STOP/START)
+    s.run_ms(3000)
+    s.send_frame(b'\xb7\x31', addr=1); s.rx_wait()
     for _ in range(50):
         if s.ram('MENU_ACTIVE')[0]: break
         s.run_ms(100)
@@ -1858,7 +1934,7 @@ def cmd_compare(dir_a, dir_b):
 
 if __name__ == '__main__':
     args = sys.argv[1:]
-    if not args or args[0] not in ('stack', 'compare', 'eeprom', 'ota', 'update', 'push', 'fuzz', 'ram', 'quiet', 'speed', 'baud', 'clock', 'config', 'keypad', 'seq', 'stats', 'status'):
+    if not args or args[0] not in ('stack', 'compare', 'eeprom', 'ota', 'update', 'push', 'fuzz', 'ram', 'quiet', 'speed', 'baud', 'clock', 'config', 'keypad', 'seq', 'stats', 'status', 'term'):
         sys.exit(__doc__)
     if args[0] == 'ram':
         sys.exit(0 if cmd_ram() else 1)
@@ -1878,6 +1954,8 @@ if __name__ == '__main__':
         sys.exit(0 if cmd_stats() else 1)
     if args[0] == 'status':
         sys.exit(0 if cmd_status() else 1)
+    if args[0] == 'term':
+        sys.exit(0 if cmd_term() else 1)
     if args[0] == 'quiet':
         sys.exit(0 if cmd_quiet() else 1)
     if args[0] == 'push':

@@ -114,7 +114,7 @@ Everything above is modeled in `tools/cc784_sim.py` (AT28C256 with banks, page t
 | `uv run tools/cc784_sim.py compare OLD_TREE src/patched` | same panel frames and replies as the previous source tree |
 | `uv run tools/cc784_sim.py eeprom` | the chip model against the datasheet rules |
 | `uv run tools/cc784_sim.py ota` | the stub's bank choice in every trailer scenario, and the page writer |
-| `uv run tools/cc784_sim.py update` | a whole OTA update over the fake serial line, including refusals; STOP and a serial `01` mid-update open no editor (patch 43) |
+| `uv run tools/cc784_sim.py update` | a whole OTA update over the fake serial line, including refusals; STOP, a serial `01` and `B7 '1'` mid-update open no editor (patches 43 and 45) |
 | `uv run tools/cc784_sim.py push` | the real `push()` against the emulator |
 | `uv run tools/cc784_sim.py ram` | the build on the 6264 and on a 62256: sizes, fill, dump; a set clock survives a reset |
 | `uv run tools/cc784_sim.py quiet` | packets arriving mid-scroll: no restart, no watchdog clear, replies and DONE in the background, early frames dropped whole, cursor fix-up; the demo's lock survives a packet and a SEQ change is acted on |

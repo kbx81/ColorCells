@@ -316,6 +316,7 @@ The sign's side of this protocol is read from the firmware itself, and lives in 
 | The patched firmware's configuration block: `B6 index value` writes a byte, `B4 '5'` reads the block, `B4 '6'` the sequence list; `cc784.py config` | [patched.md](patched.md#2-patches), patch 35 |
 | The patched firmware's health counters in the `B4 '4'` reply; `cc784.py stats` | [patched.md](patched.md#2-patches), patches 40 and 44 |
 | The patched firmware's unsolicited status reports, `B1 addr 03 'S' channel flags sum`; `cc784.py watch` | [patched.md](patched.md#2-patches), patch 41 |
+| The patched firmware's serial line carries frames only: a flag byte of `80` or `81` and no gap of a second inside a frame; `18` (BUSY) while the editor is open; `B7 '1'` opens the editor as a serial terminal, `B7 '0'` closes it; `cc784.py stop` and `start` | [patched.md](patched.md#2-patches), patch 45 |
 | The frame parser state by state, ACK, NAK and the silent discard of other addresses | [firmware notes §5](firmware.md#5-packet-parser-pkt_st_-16ef178c-h) |
 | The complete command list, including the ones NETCC never sends, and the exact reply and dump frame formats | [firmware notes §6](firmware.md#6-packet-processing-and-command-set-pkt_process-2a68-h) |
 | Every attribute byte with the sign's own name for it, the color codes, the graphics and the European characters | [firmware notes §8](firmware.md#8-rendering-h) |

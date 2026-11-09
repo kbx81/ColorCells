@@ -24,8 +24,8 @@ Examples
     cc784.py time                       # set clock from the PC (12-hour)
     cc784.py time24                     # patched firmware: 24-hour clock, no AM/PM
     cc784.py raw 09 30 30 0e 48 49      # send an arbitrary payload
-    cc784.py stop                       # bare 0x01: stop the display, enter the editor
-    cc784.py start                      # bare 0x0D: resume running (only if stopped)
+    cc784.py stop                       # patched firmware: B7 '1', open the editor as a serial terminal
+    cc784.py start                      # patched firmware: B7 '0', close the editor, resume the display
 
 Options
     -p PORT      serial device (default /dev/tty.usbserial-110)
@@ -34,10 +34,11 @@ Options
     -t SEC       reply timeout (default 3)
     -v           hex-dump everything sent/received
 
-'stop' and 'start' send one bare byte each, not a B1 frame: they take the
-keystroke path rather than the packet parser, so -a is irrelevant to them and
-nothing is ACKed. While stopped the sign is in its editor and accepts typed
-characters straight off the wire, so you can compose a message by hand.
+'stop' and 'start' are frames (patch 45) and want the sign's address. After
+'stop' the sign is in its editor and takes bytes outside frames as typed keys,
+so a terminal can compose a message by hand; 0D or 'start' leaves. While the
+editor is open, however it was opened, every other frame is answered BUSY (18).
+Stock firmware takes a bare 01 and 0D instead.
 
 Wiring notes: the sign transmits on DB9 pin 3 and receives on pin 2 (DTE-like),
 so a PC needs a crossover. If 'sniff' shows nothing and 'id' gets no reply, swap
@@ -52,6 +53,7 @@ except ImportError:          # only needed for the local-port front-end
     serial = None
 
 ACK, NAK, START, DONE = 0x06, 0x15, 0xB1, 0x04   # DONE: patched firmware, after a flag-81 frame
+BUSY = 0x18                                      # patched firmware: the editor is open
 
 # ---- message escapes -------------------------------------------------------
 # Single-letter form:  @B bold, @R red ...   (see ESC)
@@ -247,6 +249,8 @@ class Sign:
                 return True
             if r == bytes([NAK]):
                 print("  NAK (checksum rejected) - retrying"); continue
+            if r == bytes([BUSY]):
+                print("  BUSY: the sign's editor is open ('start' closes it)"); return False
             print("  no reply (attempt %d/%d)%s" % (attempt, retries,
                   "" if r == b"" else " got " + hexs(r)))
         return False
@@ -543,30 +547,10 @@ def run(link, a, ap):
         if r: print("  reply:", hexs(r), " ", printable(r))
 
     elif c in ('stop', 'start'):
-        # Bare bytes, not framed packets - these go through rx_consume's
-        # keystroke path, not the B1 parser, so there is no address, no
-        # checksum and no ACK. 0x01 is caught at 0x02F1 (CP 1 -> key_handler)
-        # and drops the sign into the editor; 0x0D is the STOP/START key's
-        # own character (CP 13 -> editor_exit in the editor dispatch) and resumes
-        # the display. 0x0D only does anything if the sign is already stopped.
-        #
-        # While stopped, rx_consume returns immediately on MENU_ACTIVE, so the
-        # packet parser is bypassed entirely - ordinary commands are swallowed
-        # as keystrokes and echoed back instead of being executed. Send 'start'
-        # before anything else.
-        #
-        # Beware the reverse, too: a bare 0x01 arriving while the parser is
-        # idle always means "stop". Any frame to address 1 contains a 0x01, so
-        # a desynced or interleaved frame (retries at 300 baud will do it) can
-        # drop the sign into the editor on its own. Seen in practice.
-        b = 1 if c == 'stop' else 13
-        link.reset_input()
-        link.write(bytes([b]))
-        print("  sent %02X - %s" % (b, "stopped; sign is now in the editor and "
-                                       "takes typed characters directly"
-                                       if c == 'stop' else "running"))
-        r = s.read_reply(1.5)      # the editor echoes keys when KEY_ECHO_TX is set
-        if r: print("  reply:", hexs(r), " ", printable(r))
+        # B7 is answered with an ACK only, never a DONE
+        if s.send_frame(b'\xb7' + (b'1' if c == 'stop' else b'0'), flag=0x80):
+            print("  " + ("editor open; bytes outside frames are typed keys, 0D leaves"
+                          if c == 'stop' else "editor closed"))
     else:
         ap.error("unknown command " + c)
 
