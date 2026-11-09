@@ -55,6 +55,10 @@ cc784_sim.py - run the CC784NIR ROM under emulation (kosarev's z80 core) with a 
         RANDBOW (patch 46): the shuffled deck, plain RAINBOW unchanged, FUNC2 in
         the editor, DEL of the pair, B2 across a reset.
 
+    uv run tools/cc784_sim.py scroll
+        SCROLL UP and DOWN (patch 48): every step against the two pages, yellow while
+        moving and colors at rest, the plain wipe unchanged, FUNC2 in the editor.
+
     uv run tools/cc784_sim.py fuzz [RUNS]
         Cut the power at a random instant of an update, RUNS times (default 100);
         every reboot must land in a bank whose trailer and image CRC check out.
@@ -1617,6 +1621,64 @@ def cmd_randbow():
     return all(checks)
 
 
+def cmd_scroll():
+    """P48: B2 1A / B2 1B scroll the staged page in one row a step, pushing the panel's
+    page out, in yellow (no color bytes while moving), then rest in its colors; plain
+    1A still wipes; FUNC2 UP and FUNC2 SHIFT UP insert them in the editor"""
+    rom, syms = assemble(HERE.parent / 'src' / 'patched')
+    checks = []
+    def check(name, cond):
+        checks.append(bool(cond)); print('  %s %s' % ('ok  ' if cond else 'FAIL', name))
+    fb, n = syms['FRAMEBUF'], syms['FRAME_COLS']
+    pix = lambda b: 0 if b & 0x80 else b
+    s = Sign(rom, syms, fresh_ram=True); s.run_ms(2500)
+    s.send_frame(b'\x09\x30\x30\x0e\x19\x8cFIRST\xb2\x1a\x83SECOND\xb2\x1b\x8dTHIRD\x1aFOURTH', addr=1)
+    s.rx_wait()
+    seq, last, quiet = [], None, 0
+    for _ in range(9000):                  # a step takes ~10 ms to write: keep each burst's last state
+        s.run_ms(2)
+        win = bytes(s.m.memory[fb:fb + n])
+        if win != last:
+            if seq and quiet < 10:
+                seq.pop()
+            seq.append((s.ram('EFFECT_ID')[0], win)); last, quiet = win, 0
+        else:
+            quiet += 1
+    blank = bytes([0x80]) * n
+    for eid, name, shift in ((6, 'UP', lambda o, w, k: ((o >> k) | (w << (7 - k))) & 0x7f),
+                             (7, 'DOWN', lambda o, w, k: ((o << k) | (w >> (7 - k))) & 0x7f)):
+        i0 = next((i for i, (e, w) in enumerate(seq) if e == eid), None)
+        i1 = next((i for i in range(i0, len(seq)) if seq[i][0] != eid), len(seq)) if i0 is not None else 0
+        run = [w for e, w in seq[i0:i1]] if i0 is not None else []
+        run = [w for w in run if w != blank]
+        if len(run) < 7:
+            check('SCROLL %s ran (%d frames)' % (name, len(run)), False); continue
+        old, steps, new = (run[-8] if len(run) >= 8 else seq[i0 - 1][1]), run[-7:-1], run[-1]
+        want = [bytes(shift(pix(o), pix(w), k) for o, w in zip(old, new)) for k in range(1, 7)]
+        check('SCROLL %s: %d steps, each the old page moved k rows and the new one k rows in' % (name, len(steps)),
+              steps[:6] == want)
+        check('SCROLL %s: no color bytes while moving; the resting page keeps its %d color bytes, as the wipes do'
+              % (name, sum(1 for c in new if c & 0x80 and c != 0x80)),
+              all(not c & 0x80 for st in steps for c in st) and any(c & 0x80 and c != 0x80 for c in new))
+    check('plain UP still wipes (effect 2 seen)', any(e == 2 for e, w in seq))
+    check('no faults', not s.faults)
+
+    def store(s):
+        return bytes(s.m.memory[syms['MSG_STORE']:int.from_bytes(s.ram('STORE_END', 2), 'little')])
+    s.send_frame(b'\x09\x30\x30\x0eAB', addr=1); s.rx_wait(); s.run_ms(3000)
+    s.ir_key('STOP', stretch_us=100); s.ir_wait(); s.run_ms(1500)
+    for keys in (('SHIFT', 'STOP', 'SHIFT', '1A'), ('SHIFT', 'STOP', 'SHIFT', 'SHIFT', '1A')):
+        for k in keys:
+            s.ir_key(k, stretch_us=100); s.ir_wait(); s.run_ms(400)
+        s.run_ms(1000)
+    check('editor: FUNC2 UP and FUNC2 SHIFT UP insert B2 1A and B2 1B (%s)' % store(s)[:10].hex(),
+          b'\xb2\x1a\xb2\x1b' in store(s))
+    s.send_frame(b'\xb7\x30', addr=1); s.rx_wait(); s.run_ms(2000)
+    check('no faults in the editor', not s.faults)
+    print('scroll: %d/%d checks pass' % (sum(checks), len(checks)))
+    return all(checks)
+
+
 def cmd_config():
     """P35: the configuration block: defaults after a RAM loss, kept across a reset,
     rejected when its sum is wrong; B6 writes with the protected bytes refused and the
@@ -2034,7 +2096,7 @@ def cmd_compare(dir_a, dir_b):
 
 if __name__ == '__main__':
     args = sys.argv[1:]
-    if not args or args[0] not in ('stack', 'compare', 'eeprom', 'ota', 'update', 'push', 'fuzz', 'ram', 'quiet', 'speed', 'baud', 'clock', 'config', 'keypad', 'seq', 'stats', 'status', 'term', 'randbow'):
+    if not args or args[0] not in ('stack', 'compare', 'eeprom', 'ota', 'update', 'push', 'fuzz', 'ram', 'quiet', 'speed', 'baud', 'clock', 'config', 'keypad', 'seq', 'stats', 'status', 'term', 'randbow', 'scroll'):
         sys.exit(__doc__)
     if args[0] == 'ram':
         sys.exit(0 if cmd_ram() else 1)
@@ -2058,6 +2120,8 @@ if __name__ == '__main__':
         sys.exit(0 if cmd_term() else 1)
     if args[0] == 'randbow':
         sys.exit(0 if cmd_randbow() else 1)
+    if args[0] == 'scroll':
+        sys.exit(0 if cmd_scroll() else 1)
     if args[0] == 'quiet':
         sys.exit(0 if cmd_quiet() else 1)
     if args[0] == 'push':

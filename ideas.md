@@ -33,22 +33,9 @@ Caveats:
 
 **Alternative with no firmware.** The dongle's header carries UART0. A second sign can hang off TXD0 and RXD0 through its own small level board, and the ESP proxies two sign ports. Wins only for exactly two signs.
 
-## 3. Scrolling up, down and right
+## 3. Scrolling right
 
-Today only LEFT scrolls; UP, DOWN, RIGHT and HOLD are wipes. The engine stages every non-LEFT effect as an 86-column page in `TXBUF` and hands it to the routine in `EFFECT_VECTOR` ([firmware notes §8](firmware.md#8-rendering-h)), so the scrolls are three more page routines. Like the wipes, each acts on the text between one movement attribute and the next, at most a screenful, centered by `STAGE_OFFSET`.
-
-| Piece | Design | ROM |
-|---|---|---|
-| Store | one new byte, `0xB2` SCROLL, as a prefix: `B2 1A` scroll up, `B2 1B` scroll down, `B2 0F` scroll right. Plain `1A`/`1B`/`0F` stay the wipes, so no stored message changes. Only `0xB2` and `0xBF` have no meaning anywhere in the code space today | 1 byte RAM for the flag |
-| Renderer | one check in the attribute chain sets the flag; the three existing setters pick the slide routine instead of the wipe when it is set | ~30 |
-| UP / DOWN | the page slides in one row per step from the bottom or top, pushing the current page out, 7 steps, then the usual hold. In-place shift of the 86 panel bytes with the next page's row bit OR'd in; one routine with a direction flag. During motion the page is one color (its first color byte), since color bytes are separate stream bytes; colors return at rest, which is what the stock UP/DOWN wipes already do in yellow | ~75 |
-| RIGHT | the page slides in from the left one column per frame, 86 minus `STAGE_OFFSET` steps, pushing the current page off; color bytes travel with their glyphs, so full color throughout. Page 2 enters to the left of page 1 only when a section exceeds 86 columns and gets split, which the stock effects also do | ~45 |
-| Row color latch for a page in motion | | ~15 |
-| Editor | the `0xB2` slot in the second label table is empty; the message reads `.SCROLL..UP.`; FUNC then LEFT inserts it (LEFT has no FUNC meaning) | ~16 |
-| Host tool | `scroll up` sends `B2 1A`; three rows in the protocol notes | 0 |
-| Emulator | a `scroll` gate: each frame's panel is the previous one shifted by a row or a column | 0 |
-
-Totals: ~150 bytes for UP and DOWN, ~200 with RIGHT; RIGHT can be added later for its ~50 bytes with no store change. Step delay can follow the SPEED attribute for free. A true mirror of the LEFT crawl was ruled out: it needs the store walked backwards and the renderer accumulates fonts and colors forwards.
+SCROLL UP and SCROLL DOWN are patch 48 ([patched notes](patched.md#2-patches)), the `B2` variants of the UP and DOWN wipes. SCROLL RIGHT would be `B2 0F`, the variant of RIGHT: the staged page slides in from the left one column per frame, pushing the panel's page off to the right, in full color since the text moves sideways. It reuses patch 48's unrolled outgoing page and the `B2` plumbing; in the editor FUNC2 + SHIFT + BEEP (RIGHT is SHIFT + BEEP on the remote). About 50 bytes. A true mirror of the LEFT crawl stays ruled out: it needs the store walked backwards, and the renderer accumulates fonts and colors forwards.
 
 ## 4. Wired keypad and the remote lock
 

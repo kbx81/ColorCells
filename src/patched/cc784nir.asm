@@ -387,7 +387,8 @@ POLL_AGE             equ STREAM_AREA+49    ; frames since pkt_poll last ran
 STATUS_BUF           equ STREAM_AREA+50    ; P41: the status report being sent, B1 addr 03 'S' channel flags
 RANDBOW_DECK         equ STREAM_AREA+56    ; P46: bit 7 = RANDBOW, bits 0-4 = RAINBOW's colors not yet dealt this round
 ALT_NEXT             equ STREAM_AREA+57    ; P46: the editor inserts this after a FUNC2 key's B2
-STREAM_AREA_SIZE     equ 58
+ALT_FX               equ STREAM_AREA+58    ; P48: FF = the UP or DOWN that follows scrolls instead of wiping
+STREAM_AREA_SIZE     equ 59
 STORE_TOP            equ STREAM_AREA-1    ; with a 32 K chip (16 K usable)
 STORE_TOP_8K         equ STORE_TOP-0x2000         ; with the stock 8 K chip
 ; store_init derives the warning level, the text allowance (301 = framing) and
@@ -2660,6 +2661,14 @@ rainbow_mod5:
 rainbow_alt:                    ; P46: B2 BC is RANDBOW; a B2 before anything else is skipped
         LD HL,(STORE_CURSOR)
         LD A,(HL)
+        AND 0xfe
+        CP ATTR_UP              ; P48: B2 1A / B2 1B: the UP or DOWN scrolls
+        JR nz,rainbow_alt_bc
+        LD A,0xff
+        LD (ALT_FX),A
+
+rainbow_alt_bc:
+        LD A,(HL)
         CP ATTR_RAINBOW
         LD A,ATTR_ALT
         RET nz
@@ -3689,19 +3698,30 @@ fx_pause:
         LD HL,fxv_pause
         JR fx_staged
 
-fx_up:
-        LD A,2
-        LD HL,fxv_wipe_updown
-        JR fx_staged
-
 fx_hold:
         LD A,5
         LD HL,fxv_hold
         JR fx_set
 
+fx_up:
+        LD A,2
+        JR fx_vertical
+
 fx_down:
         LD A,3
+
+fx_vertical:
         LD HL,fxv_wipe_updown
+        LD C,A
+        LD A,(ALT_FX)           ; P48: after B2, SCROLL UP (6) or SCROLL DOWN (7)
+        AND A
+        LD A,C
+        JR z,fx_staged
+        XOR A
+        LD (ALT_FX),A
+        LD A,C
+        ADD A,4
+        LD HL,fxv_scroll
 
 fx_staged:
         LD C,A
@@ -4323,6 +4343,107 @@ wipev_next_pass:
         DEC A
         JR nz,wipev_pass
         JR fx_hold_done
+
+; ---- fxv_scroll (P48): effects 6 (SCROLL UP) and 7 (SCROLL DOWN): the staged page
+;      pushes the panel's page out one row a step, in yellow (vertical motion shows
+;      only pixels, so the color bytes stay out), then rests in its colors. The
+;      outgoing page waits in GLYPH_BUF, the incoming one 96 bytes up the ring.
+fxv_scroll:
+        LD HL,(FB_OUT_PTR)      ; the panel as it stands, unrolled from the ring
+        LD DE,GLYPH_BUF
+        LD BC,(FB_OUT_LEN)
+        CALL scroll_copy
+        LD HL,FRAMEBUF
+        LD BC,(FB_EXTRA_LEN)
+        CALL scroll_copy
+        XOR A
+        LD (DISP_ON),A
+        CALL fxv_prepare
+        LD BC,96
+        EX DE,HL
+        ADD HL,BC
+        EX DE,HL
+        LD A,(COL_COUNT)
+        LD C,A
+        LDIR
+        LD C,1                  ; step 1..6; 7 is the page itself
+
+scroll_step:
+        CALL wait_row6
+        LD IX,FRAMEBUF
+        LD DE,GLYPH_BUF
+        LD B,FRAME_COLS
+
+scroll_col:
+        LD A,(DE)
+        CALL scroll_pixels
+        LD H,A
+        LD A,(IX+96)
+        CALL scroll_pixels
+        LD L,A
+        PUSH BC
+        LD B,C
+        LD A,(EFFECT_ID)
+        RRA
+        JR c,scroll_col_down
+        LD A,H                  ; UP: incoming in H, outgoing x2 in L, both moved
+        ADD A,A                 ; down the 15-bit pair k+1 times
+        LD H,L
+        LD L,A
+        INC B
+
+scroll_shift_up:
+        SRL H
+        RR L
+        DJNZ scroll_shift_up
+        LD A,L
+        JR scroll_col_put
+
+scroll_col_down:
+        SLA L                   ; DOWN: outgoing in H, incoming x2 in L, moved up k times
+
+scroll_shift_down:
+        ADD HL,HL
+        DJNZ scroll_shift_down
+        LD A,H
+
+scroll_col_put:
+        POP BC
+        AND 0x7f
+        LD (IX+0),A
+        INC IX
+        INC DE
+        DJNZ scroll_col
+        LD A,0xff
+        LD (DISP_ON),A
+        LD A,3
+        LD (FRAME_DELAY),A
+        CALL wait_frame_delay
+        INC C
+        LD A,C
+        CP 7
+        JR c,scroll_step
+        CALL wait_row6
+        LD HL,FRAMEBUF+96
+        LD DE,FRAMEBUF
+        LD BC,FRAME_COLS
+        LDIR
+        JP fx_hold_done
+
+; ---- scroll_copy: LDIR that copies nothing for BC = 0
+scroll_copy:
+        LD A,B
+        OR C
+        RET z
+        LDIR
+        RET
+
+; ---- scroll_pixels: A = a column's pixels; a color byte has none
+scroll_pixels:
+        OR A
+        RET p
+        XOR A
+        RET
 
 ; ---- store_clear_all: Reset MSG_STORE: 100 empty channels D0..? then DA
 store_clear_all:
@@ -7218,7 +7339,9 @@ editor_key_to_attr:
         LD B,A                  ; FF FUNC, 2 FUNC2
         LD A,(EDIT_KEY)
         CP KEY_SHIFT            ; P46: SHIFT after FUNC makes it FUNC2, the shift
-        JR nz,func_lookup       ; itself undone
+        JR nz,func_lookup       ; itself undone; in FUNC2 it shifts the next key (P48)
+        INC B
+        RET nz
         LD A,2
         LD (FUNC_PENDING),A
         XOR A
@@ -7284,6 +7407,8 @@ FUNC_TABLE:
 FUNC2_TABLE:
         db ATTR_COLOR, ATTR_RAINBOW
         db 0x8f, ATTR_RAINBOW
+        db ATTR_UP, ATTR_UP         ; P48
+        db ATTR_DOWN, ATTR_DOWN
         db 0xff
 
 ; ---- apply_color_prefix: COLOR n -> FG_IDX_TABLE, BGRND n -> BG_IDX_TABLE
@@ -8972,8 +9097,8 @@ STR_CLOSE:
         db ATTR_FLASH,"FLASH",0x16,0x00
         db ATTR_LEFT,"LEFT",0x16,0x00
         db ATTR_PAUSE,"PAUSE",0x16,0x00
-        db ATTR_UP,"UP",0x16,0x00
-        db ATTR_DOWN,"DOWN",0x16,0x00
+        db ATTR_UP,"W-UP",0x16,0x00          ; P48: W- wipes, S- scrolls
+        db ATTR_DOWN,"W-DOWN",0x16,0x00
         db ATTR_MAGIC,"MAGIC",0x16,0x00
         db COLOR_BASE+0,"BLACK",0x16,0x00
         db COLOR_BASE+1,"D-GRE",0x16,0x00
@@ -9002,6 +9127,8 @@ STR_CLOSE:
         db ATTR_HOLD,"HOLD",0x16,0x00
         db ATTR_RAINBOW,"RAINBOW",0x16,0x00
         db ATTR_RAINBOW^0x40,"RANDBOW",0x16,0x00   ; P46: B2 BC; a variant's key is its attribute ^ 40
+        db ATTR_UP^0x40,"S-UP",0x16,0x00
+        db ATTR_DOWN^0x40,"S-DOWN",0x16,0x00
         db ATTR_MAGIC_OFF,"MAGIC OFF",0x16,0x00
         db ATTR_TINY,"TINY",0x16,0x00
         db 0xff
