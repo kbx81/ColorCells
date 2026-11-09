@@ -83,7 +83,8 @@ NAMED.update({'normal': 0x11, 'bold': 0x12, 'italic': 0x13, 'flash': 0x14, 'larg
               'up': 0x1A, 'down': 0x1B, 'right': 0x0F, 'hold': 0xBB, 'left': 0x18, 'pause': 0x19,
               'halt': 0x06, 'beep': 0x07, 'time': 0x5F,
               'rainbow': 0xBC, 'wait': 0xBA, 'remark': 0xB0, 'graphic': 0xB8,
-              'tiny': 0xBE, 'restart': 0xBD})
+              'tiny': 0xBE, 'restart': 0xBD,
+              'randbow': (0xB2, 0xBC)})                   # patched firmware: a variant, B2 + RAINBOW
 
 def encode_text(s: str) -> bytes:
     out = bytearray(); i = 0
@@ -93,7 +94,8 @@ def encode_text(s: str) -> bytes:
             j = s.index('}', i)
             name = s[i + 2:j].strip().lower()
             if name in NAMED:
-                out.append(NAMED[name])
+                v = NAMED[name]
+                out += bytes(v) if isinstance(v, tuple) else bytes([v])
             elif len(name) == 2 and all(ch in '0123456789abcdef' for ch in name):
                 out.append(int(name, 16))                    # raw byte, e.g. @{9f}
             else:

@@ -51,6 +51,10 @@ cc784_sim.py - run the CC784NIR ROM under emulation (kosarev's z80 core) with a 
         Frames only on the serial port (patch 45): loose bytes, a lost byte, a bad
         header, BUSY while the editor is open, B7 '1' and B7 '0'.
 
+    uv run tools/cc784_sim.py randbow
+        RANDBOW (patch 46): the shuffled deck, plain RAINBOW unchanged, FUNC2 in
+        the editor, DEL of the pair, B2 across a reset.
+
     uv run tools/cc784_sim.py fuzz [RUNS]
         Cut the power at a random instant of an update, RUNS times (default 100);
         every reboot must land in a bank whose trailer and image CRC check out.
@@ -1517,6 +1521,91 @@ def cmd_term():
     return all(checks)
 
 
+def cmd_randbow():
+    """P46: B2 BC is RANDBOW: RAINBOW's five colors dealt as a shuffled deck, no color
+    twice in a row; plain RAINBOW unchanged; FUNC SHIFT COLOR in the editor inserts
+    B2 BC (FUNC2), DEL takes both; B2 survives a reset"""
+    rom, syms = assemble(HERE.parent / 'src' / 'patched')
+    checks = []
+    def check(name, cond):
+        checks.append(bool(cond)); print('  %s %s' % ('ok  ' if cond else 'FAIL', name))
+    def store(s):
+        return bytes(s.m.memory[syms['MSG_STORE']:int.from_bytes(s.ram('STORE_END', 2), 'little')])
+    def deals(s, ms):
+        """RAINBOW_IDX as set per character, split at each (re)start of the cycle"""
+        a = syms['RAINBOW_IDX']
+        s.watch = {a}; s.watch_log.clear(); s.m.mark_addrs(a, 1, s.m.WRITE_MARK)
+        s.run_ms(ms)
+        runs, cur = [], None
+        for t, pc, addr, v in s.watch_log:
+            if syms['rainbow_on'] <= pc < syms['rainbow_step']:
+                cur = []; runs.append(cur)
+            elif cur is not None and v & 7 and syms['rainbow_apply'] <= pc < syms['rainbow_apply'] + 16:
+                cur.append(v & 7)
+        return [r for r in runs if len(r) >= 10]
+    text = b'ABCDEFGHIJKLMNOPQRSTUVWXYZ' * 2
+
+    s = Sign(rom, syms, fresh_ram=True); s.run_ms(2500)
+    s.send_frame(b'\x09\x30\x30\x0e\xb2\xbc' + text, addr=1); s.rx_wait(); s.run_ms(500)
+    runs = deals(s, 30000)
+    def shuffled(r):
+        return all(sorted(r[i:i + 5]) == [1, 2, 3, 4, 5] for i in range(0, len(r) - 4, 5)) \
+            and len(set(r[len(r) - len(r) % 5:])) == len(r) % 5
+    check('RANDBOW: %d passes, %s ...' % (len(runs), runs[0][:15] if runs else None),
+          len(runs) >= 2 and all(shuffled(r) for r in runs))
+    check('no color twice in a row, decks differ between passes',
+          all(a != b for r in runs for a, b in zip(r, r[1:])) and len({tuple(r[:10]) for r in runs}) > 1)
+
+    s.send_frame(b'\x09\x30\x30\x0e\xbc' + text, addr=1); s.rx_wait(); s.run_ms(500)
+    runs = deals(s, 15000)
+    steps = [{(b - a) % 5 for a, b in zip(r, r[1:])} for r in runs]
+    check('plain RAINBOW still steps one color at a time, one direction a pass (%s)' % steps, runs and all(len(x) == 1 and x <= {1, 4} for x in steps))
+
+    s.send_frame(b'\x09\x30\x30\x0e' + b'AB\xb2\xbcCD', addr=1); s.rx_wait(); s.run_ms(3000)
+    s.ir_key('STOP', stretch_us=100); s.ir_wait(); s.run_ms(1500)
+    before = store(s)
+    for k in ('SHIFT', 'STOP'):
+        s.ir_key(k, stretch_us=100); s.ir_wait(); s.run_ms(400)
+    func = s.ram('FUNC_PENDING')[0]
+    s.ir_key('SHIFT', stretch_us=100); s.ir_wait(); s.run_ms(400)
+    func2, shift = s.ram('FUNC_PENDING')[0], s.ram('SHIFT_STATE')[0]
+    s.ir_key('COLOR', stretch_us=100); s.ir_wait(); s.run_ms(1500)
+    after = store(s)
+    check('FUNC (%02x), then SHIFT: FUNC2 (%02x, shift %02x), then COLOR: B2 BC inserted (%d -> %d)'
+          % (func, func2, shift, before.count(b'\xb2\xbc'), after.count(b'\xb2\xbc')),
+          func == 0xFF and func2 == 2 and shift == 0 and after.count(b'\xb2\xbc') == before.count(b'\xb2\xbc') + 1
+          and len(after) == len(before) + 2)
+    s.ir_key('DEL', stretch_us=100); s.ir_wait(); s.run_ms(1500)
+    check('DEL takes the B2 along (store %s)' % store(s)[-12:].hex(), store(s) == before)
+    for k in ('SHIFT', 'STOP', 'COLOR'):
+        s.ir_key(k, stretch_us=100); s.ir_wait(); s.run_ms(400)
+    s.run_ms(1000)
+    plain = store(s)
+    for k in ('SHIFT', 'STOP', 'C'):
+        s.ir_key(k, stretch_us=100); s.ir_wait(); s.run_ms(400)
+    s.run_ms(1000)
+    check('FUNC C types a comma', len(store(s)) == len(plain) + 1 and store(s).count(b',') == plain.count(b',') + 1)
+    check('FUNC COLOR is still plain RAINBOW (one BC, no B2 added)',
+          len(plain) == len(before) + 1 and plain.count(b'\xbc') == before.count(b'\xbc') + 1 and plain.count(b'\xb2') == before.count(b'\xb2'))
+    seen = []
+    for k in ('LEFT',) * 6 + ('RIGHT',) * 6:
+        s.ir_key(k, stretch_us=100); s.ir_wait(); s.run_ms(500)
+        seen.append(s.m.memory[int.from_bytes(s.ram('STORE_CURSOR', 2), 'little')])
+    check('LEFT and RIGHT step over the B2, stopping on its BC (%s)' % bytes(seen).hex(),
+          0xB2 not in seen and 0xBC in seen[:6] and 0xBC in seen[6:])
+    s.send_frame(b'\xb7\x30', addr=1); s.rx_wait(); s.run_ms(3000)
+    check('editor closed', s.ram('MENU_ACTIVE')[0] == 0)
+
+    s2 = Sign(rom, syms, fresh_ram=True)
+    s2.m.set_memory_block(0x4000, bytes(s.m.memory[0x4000:0x8000]))
+    s2.run_ms(3000)
+    kept = bytes(s2.m.memory[syms['MSG_STORE']:syms['MSG_STORE'] + len(store(s)) + 1])
+    check('B2 BC survives a reset (store_repair keeps it): %s' % kept[:16].hex(), kept == store(s) + b'\xda')
+    check('no faults', not s.faults and not s2.faults)
+    print('randbow: %d/%d checks pass' % (sum(checks), len(checks)))
+    return all(checks)
+
+
 def cmd_config():
     """P35: the configuration block: defaults after a RAM loss, kept across a reset,
     rejected when its sum is wrong; B6 writes with the protected bytes refused and the
@@ -1934,7 +2023,7 @@ def cmd_compare(dir_a, dir_b):
 
 if __name__ == '__main__':
     args = sys.argv[1:]
-    if not args or args[0] not in ('stack', 'compare', 'eeprom', 'ota', 'update', 'push', 'fuzz', 'ram', 'quiet', 'speed', 'baud', 'clock', 'config', 'keypad', 'seq', 'stats', 'status', 'term'):
+    if not args or args[0] not in ('stack', 'compare', 'eeprom', 'ota', 'update', 'push', 'fuzz', 'ram', 'quiet', 'speed', 'baud', 'clock', 'config', 'keypad', 'seq', 'stats', 'status', 'term', 'randbow'):
         sys.exit(__doc__)
     if args[0] == 'ram':
         sys.exit(0 if cmd_ram() else 1)
@@ -1956,6 +2045,8 @@ if __name__ == '__main__':
         sys.exit(0 if cmd_status() else 1)
     if args[0] == 'term':
         sys.exit(0 if cmd_term() else 1)
+    if args[0] == 'randbow':
+        sys.exit(0 if cmd_randbow() else 1)
     if args[0] == 'quiet':
         sys.exit(0 if cmd_quiet() else 1)
     if args[0] == 'push':

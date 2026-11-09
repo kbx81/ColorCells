@@ -228,6 +228,7 @@ NETCC's names for these are not the sign's. The sign's own editor labels each by
 | R | Remark / comment (hidden text, terminated by another `0xB0`) | `0xB0` |
 | G | User-drawn graphic follows | `0xB8` (184) |
 | A | Rainbow | `0xBC` (188) |
+| — | Randbow, the patched firmware's variant of Rainbow: the five colors in a shuffled order ([patched.md](patched.md#2-patches), patch 46; `@{randbow}`) | `0xB2 0xBC` |
 | E, K, O, Q, V | Sync, sync&crawl, var. space, blank, date | **not supported on CC6x7** (listed "(LK)" = later models only) |
 
 ### 5.5 Colors

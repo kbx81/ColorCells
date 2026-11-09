@@ -297,6 +297,7 @@ ATTR_GRAPH           equ 0x1e
 ATTR_MAGIC           equ 0x1f
 ATTR_TIME            equ 0x5f
 ATTR_REM             equ 0xb0        ; remark: skipped up to the next B0
+ATTR_ALT             equ 0xb2        ; P46: the variant of the attribute after it: B2 BC = RANDBOW
 KEY_EURO             equ 0xb6
 KEY_FUNC             equ 0xb7
 KEY_DEL              equ 0x7f
@@ -384,7 +385,9 @@ STAT_IR_BAD          equ STREAM_AREA+48    ; remote frames dropped after the lea
 STATS_LEN            equ 11
 POLL_AGE             equ STREAM_AREA+49    ; frames since pkt_poll last ran
 STATUS_BUF           equ STREAM_AREA+50    ; P41: the status report being sent, B1 addr 03 'S' channel flags
-STREAM_AREA_SIZE     equ 56
+RANDBOW_DECK         equ STREAM_AREA+56    ; P46: bit 7 = RANDBOW, bits 0-4 = RAINBOW's colors not yet dealt this round
+ALT_NEXT             equ STREAM_AREA+57    ; P46: the editor inserts this after a FUNC2 key's B2
+STREAM_AREA_SIZE     equ 58
 STORE_TOP            equ STREAM_AREA-1    ; with a 32 K chip (16 K usable)
 STORE_TOP_8K         equ STORE_TOP-0x2000         ; with the stock 8 K chip
 ; store_init derives the warning level, the text allowance (301 = framing) and
@@ -2609,8 +2612,14 @@ attr_hold_check:
 ; ---- attr_rainbow: BC starts the per-character color cycle
 attr_rainbow:
         LD A,(CUR_CHAR)
+        CP ATTR_ALT
+        JR z,rainbow_alt
         CP ATTR_RAINBOW
         JR nz,rainbow_step
+        XOR A
+
+rainbow_set:
+        LD (RANDBOW_DECK),A
         LD A,(MAGIC_MODE)
         AND A
         JR z,rainbow_on
@@ -2646,7 +2655,18 @@ rainbow_mod5:
         LD (RAINBOW_IDX),A
         LD (MAGIC_COLOR_SET),A ; any non-zero value means "set"
         POP HL
-        JR render_next_char_jr4
+        JP render_next_char
+
+rainbow_alt:                    ; P46: B2 BC is RANDBOW; a B2 before anything else is skipped
+        LD HL,(STORE_CURSOR)
+        LD A,(HL)
+        CP ATTR_RAINBOW
+        LD A,ATTR_ALT
+        RET nz
+        INC HL
+        LD (STORE_CURSOR),HL
+        LD A,0x80               ; an empty deck: the first character deals a new one
+        JR rainbow_set
 
 rainbow_step:
         LD A,(RAINBOW_IDX)
@@ -2659,6 +2679,10 @@ rainbow_step:
         RET nz
         LD A,(RAINBOW_IDX)
         LD B,A
+        LD A,(RANDBOW_DECK)
+        RLCA
+        JR c,randbow_deal
+        LD A,B
         AND 7
         BIT 7,B
         JR nz,rainbow_back
@@ -2693,6 +2717,52 @@ rainbow_apply:
         LD (RAINBOW_IDX),A
         LD A,(CUR_CHAR)
         RET
+
+; ---- randbow_deal (P46): B = RAINBOW_IDX. RAINBOW's five colors dealt in a
+;      shuffled order, a new deck when all five are out; a new deck never starts
+;      with the color that ended the last, so no color shows twice in a row
+randbow_deal:
+        LD HL,RANDBOW_DECK
+        LD A,(HL)
+        AND 0x1f
+        JR nz,randbow_draw
+        LD (HL),0x9f
+
+randbow_draw:
+        LD A,(RND_SEED)         ; 5x+1: a full period, so every color turns up
+        LD C,A
+        ADD A,A
+        ADD A,A
+        ADD A,C
+        INC A
+        LD (RND_SEED),A
+
+randbow_mod5:
+        SUB 5
+        JR nc,randbow_mod5
+        ADD A,5
+        LD E,A                  ; 0..4
+        INC A
+        XOR B
+        AND 7
+        JR z,randbow_draw       ; the color just shown
+        LD C,E
+        LD A,1
+
+randbow_bit:
+        DEC C
+        JP m,randbow_take
+        ADD A,A
+        JR randbow_bit
+
+randbow_take:
+        AND (HL)
+        JR z,randbow_draw       ; already dealt this round
+        XOR (HL)
+        LD (HL),A
+        LD A,E
+        INC A
+        JR rainbow_lookup
 
 ; ---- RAINBOW_COLORS: per-character cycle red, orange, yellow, lime, green
 RAINBOW_COLORS:
@@ -5686,8 +5756,16 @@ editor_loop:
         CALL editor_redraw
 
 editor_next_key:
+        LD HL,ALT_NEXT          ; P46: a FUNC2 attribute's second byte, after its B2
+        LD A,(HL)
+        LD (HL),0
+        LD (EDIT_KEY),A
+        AND A
+        JR nz,editor_have_key
         CALL menu_getchar
         CALL editor_translate_key
+
+editor_have_key:
         LD A,(EDIT_KEY)
         LD (CUR_CHAR),A
         CP KEY_SHIFT
@@ -6920,6 +6998,9 @@ delete_do:
         LD A,0xff
         LD (DISP_ON),A
         LD HL,(STORE_CURSOR)
+        LD A,(HL)               ; P46: a variant's B2 goes with it
+        CP ATTR_ALT
+        JR z,delete_do
         JP editor_back_if_mark
 
 ; ---- cursor_right: 0A
@@ -6935,6 +7016,12 @@ cursor_right:
         INC HL
 
 cursor_right_set:
+        LD A,(HL)               ; P46: a variant's B2 is passed over: the cursor
+        CP ATTR_ALT             ; never rests on it
+        JR nz,cursor_right_store
+        INC HL
+
+cursor_right_store:
         LD (STORE_CURSOR),HL
 
 cursor_right_done:
@@ -6967,6 +7054,12 @@ cursor_left:
 
 cursor_left_do:
         DEC HL
+        LD A,(HL)               ; P46: past a variant's B2 too
+        CP ATTR_ALT
+        JR nz,cursor_left_set
+        DEC HL
+
+cursor_left_set:
         LD (STORE_CURSOR),HL
         LD A,(HL)
         CALL is_marker
@@ -7116,16 +7209,30 @@ apply_speed_prefix:
         RET
 
 ; ---- editor_key_to_attr: FUNC (B7) second functions: GRAPH->B8 DRAW, NORM->B9 THIN,
-;      PAUSE->BA WAIT, FLASH->B0 REM, BOLD->06 HALT, COLOR->BC RAINBOW, Q->?, X->!,
+;      PAUSE->BA WAIT, FLASH->B0 REM, BOLD->06 HALT, COLOR->BC RAINBOW, Q->?, X->!, C->,,
 ;      MAGIC->5E (ADDRESS? menu), BIG->BE TINY; anything else cancels
 editor_key_to_attr:
         LD A,(FUNC_PENDING)
         AND A
         RET z
+        LD B,A                  ; FF FUNC, 2 FUNC2
+        LD A,(EDIT_KEY)
+        CP KEY_SHIFT            ; P46: SHIFT after FUNC makes it FUNC2, the shift
+        JR nz,func_lookup       ; itself undone
+        LD A,2
+        LD (FUNC_PENDING),A
+        XOR A
+        LD (SHIFT_STATE),A
+        RET
+
+func_lookup:
         XOR A
         LD (FUNC_PENDING),A
         LD A,(EDIT_KEY)
         LD HL,FUNC_TABLE
+        INC B
+        JR z,func_search
+        LD HL,FUNC2_TABLE
 
 func_search:
         LD C,(HL)
@@ -7144,7 +7251,14 @@ func_cancel:
         JP editor_reshow
 
 func_store:
+        LD A,B                  ; a FUNC2 attribute is B2 and its second byte
+        AND A
         LD A,(HL)
+        JR z,func_store_key
+        LD (ALT_NEXT),A
+        LD A,ATTR_ALT
+
+func_store_key:
         LD (EDIT_KEY),A
         RET
 
@@ -7161,8 +7275,16 @@ FUNC_TABLE:
         db 0x71, '?'
         db 0x58, '!'
         db 0x78, '!'
+        db 0x43, ','            ; P46: the remote has no comma key
+        db 0x63, ','
         db ATTR_MAGIC, 0x5e
         db ATTR_BIG, ATTR_TINY
+        db 0xff
+
+; ---- FUNC2_TABLE (P46): key, the attribute that follows B2
+FUNC2_TABLE:
+        db ATTR_COLOR, ATTR_RAINBOW
+        db 0x8f, ATTR_RAINBOW
         db 0xff
 
 ; ---- apply_color_prefix: COLOR n -> FG_IDX_TABLE, BGRND n -> BG_IDX_TABLE
@@ -7394,7 +7516,15 @@ redraw_show_label:
         AND 0xf8
         CP SPEED_BASE
         JR z,redraw_speed_label
+        LD HL,(REDRAW_PTR)
+        DEC HL
+        LD A,(HL)
+        CP ATTR_ALT
         LD A,(CUR_CHAR)
+        JR nz,label_key
+        XOR 0x40                ; P46: after B2 the variant's label (B2 itself has none)
+
+label_key:
         LD D,A
         LD HL,LABELS
 
@@ -7484,6 +7614,9 @@ status_not_bgrnd:
         OR A
         JR z,status_not_func
         LD HL,STR_FUNC
+        CP 2
+        JR nz,status_show
+        LD HL,STR_FUNC2
         JR status_show
 
 status_not_func:
@@ -8869,6 +9002,7 @@ STR_CLOSE:
         db ATTR_WAIT,"WAIT",0x16,0x00
         db ATTR_HOLD,"HOLD",0x16,0x00
         db ATTR_RAINBOW,"RAINBOW",0x16,0x00
+        db ATTR_RAINBOW^0x40,"RANDBOW",0x16,0x00   ; P46: B2 BC; a variant's key is its attribute ^ 40
         db ATTR_MAGIC_OFF,"MAGIC OFF",0x16,0x00
         db ATTR_TINY,"TINY",0x16,0x00
         db 0xff
@@ -8885,6 +9019,8 @@ STR_BGRND:
         db "BGRND",0x00
 STR_FUNC:
         db "FUNC",0x00
+STR_FUNC2:
+        db "FUNC2",0x00
 STR_EURO:
         db "EURO",0x00
 STR_SHIFT:
@@ -9194,7 +9330,7 @@ FONT_G184:
 CHAR_FLAGS:
         db 0xfe,0xfa,0xff,0xfe,0xaa,0x80,0xaa,0xfe,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00   ; char 00-3f
         db 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00   ; char 40-7f
-        db 0xaa,0xaa,0xaa,0xaa,0xaa,0x00,0x00,0x03,0x00,0x00,0x00,0x00,0xbf,0xff,0x2a,0xab   ; char 80-bf
+        db 0xaa,0xaa,0xaa,0xaa,0xaa,0x00,0x00,0x03,0x00,0x00,0x00,0x00,0xbb,0xff,0x2a,0xab   ; char 80-bf
         db 0x00,0x00,0x00,0x00,0xaa,0xaa,0xab,0x00,0x00,0x00,0x00,0x00,0xaa,0xaa,0xff,0xff   ; char c0-ff
 
 ; ============================================================================
