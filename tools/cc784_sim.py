@@ -1354,12 +1354,12 @@ def cmd_stats():
     def stats(s):
         t0 = s.t / CPU_HZ
         d = ota_cmd(s, b'\xb44')
-        return None if d is None or len(d) != 18 else dict(t=t0,
+        return None if d is None or len(d) not in (18, 22) else dict(t=t0,
             nmi=d[4], boot=d[5], head=d[6], merge=d[7], merge_max=d[8], up=d[9] | d[10] << 8 | d[11] << 16,
             stalls=d[12], stall_max=d[13], ok=d[14], bad=d[15], ir=d[16], ir_bad=d[17])
     s = Sign(rom, syms, fresh_ram=True); s.run_ms(3000)
     a = stats(s)
-    check('18-byte reply: %s' % a, a is not None)
+    check('stats reply: %s' % a, a is not None)
     if a is None:
         return False
     check('mains: 60 a second, first boot after fresh RAM is 1', a['nmi'] == 60 and a['boot'] == 1)
@@ -1423,7 +1423,7 @@ def cmd_status():
     sign = cc784.Sign(link, 1, baud=1200)
     sign.post_ack = 0.2; sign.done = True; sign.quiet = True
     replies = [sign.query('4') for _ in range(8)]
-    bad = [r.hex() for r in replies if len(cc784.reply_data(r)) != 18]
+    bad = [r.hex() for r in replies if len(cc784.reply_data(r)) not in (18, 22)]
     ok = sign.send_frame(b'\x09\x30\x32\x0e' + b'THREE ' * 30)
     check('with reports flowing: 8 stats replies (bad: %s), a 180-byte load ACKed (%s), %d reports filtered'
           % (bad, ok, len(sign.link.reports)), not bad and ok and sign.link.reports)

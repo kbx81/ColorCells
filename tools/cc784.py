@@ -401,7 +401,7 @@ def parse_reply(raw: bytes, kind: str, ten: bool = False):
             t300, step, last, nmi = data[:4]
             print("  300-baud bit %d fifths of an interrupt (a %.2f us interrupt), step %d (%d baud), last second's count low byte %d, NMI %s"
                   % (t300, 3333.3 / (t300 / 5.0), step, step * 60, last, 'seen' if nmi else 'none (DC supply without the add-in board: no calibration)'))
-        if kind in ('stats', 'timing') and len(data) == 18:     # patch 40
+        if kind in ('stats', 'timing') and len(data) in (18, 22):     # patch 40, 44
             d = data
             print("  clock %s (%d NMIs a second); boot %d; up %d s; stack headroom %d of 128"
                   % ({60: 'mains', 64: 'crystal'}.get(d[4], '?'), d[4], d[5], d[9] | d[10] << 8 | d[11] << 16, d[6]))
@@ -409,6 +409,9 @@ def parse_reply(raw: bytes, kind: str, ten: bool = False):
                   % (d[7], d[8], d[12], d[13]))
             print("  frames: %d good, %d bad checksum; remote: %d decoded, %d dropped (counts wrap at 256)"
                   % (d[14], d[15], d[16], d[17]))
+            if len(data) == 22:
+                print("  remote frames: no start after the leader %d, stray rises ignored %d, rise missing after a 1 %d, burst in a gap %d"
+                      % tuple(d[18:22]))
 
 def add_common_args(ap):
     ap.add_argument('-a', '--addr', default='*', help="sign address 0-255 or '*' (broadcast; a broadcast frame gets no ACK and no DONE)")

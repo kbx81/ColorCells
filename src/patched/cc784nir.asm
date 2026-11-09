@@ -177,7 +177,14 @@ TEST_MSG_BUF         equ RAM_VARS+0x157   ; the message shown in TEST_MODE, 28 b
 DRAW_BUF             equ RAM_VARS+0x173   ; 16 packed hex columns of a DRAW graphic
 ; ---- SEQ_LIST survives a reset: it must stay above the stub's library copy (RAM_VARS+00..81)
 SEQ_LIST             equ RAM_VARS+0x183
-; RAM_VARS+0x1eb .. 0x1f2: 8 bytes free
+IR_LEVEL             equ RAM_VARS+0x1eb   ; the IR line as the decoder last saw it, for edge detection
+IR_CELL              equ RAM_VARS+0x1ec   ; the current cell's verdict: FF none yet, 0 or 1
+IR_REJ               equ RAM_VARS+0x1ed   ; remote frames dropped, by reason: four counters the stats query appends
+IR_REJ_LEADER        equ RAM_VARS+0x1ed   ; no start burst 10-23 ticks after the leader
+IR_REJ_POS           equ RAM_VARS+0x1ee   ; stray rises between the two positions or past the middle (ignored, not drops)
+IR_REJ_CELL          equ RAM_VARS+0x1ef   ; no rise in a cell after a 1
+IR_REJ_BRIDGE        equ RAM_VARS+0x1f0   ; a burst where a gap belongs: high through a cell's first two ticks after a 1, or a rise opening a cell after a 0
+; RAM_VARS+0x1f1 .. 0x1f2: 2 bytes free
 ; P20: the clock digits must survive a power cycle, so they live up here next
 ; to the store, out of reach of the stub's library copy (RAM_VARS+00..81).
 CLK_H10              equ RAM_VARS+0x1f3
@@ -261,6 +268,7 @@ HOLD_FRAMES          equ 80          ; frames a PAUSE, HOLD, wipe or clock holds
 BEEP_LEN             equ 150         ; beeper on for this many tick6 periods (~115 ms)
 IR_REPEAT_DELAY      equ 1300        ; tick6 periods a held remote key waits before repeating (~1 s)
 IR_REPEAT_TICKS      equ 300         ; ... and between repeats (~0.23 s)
+IR_DEBOUNCE_WINDOW   equ 400         ; tick6 periods a lone first frame waits for its second or its release (~0.3 s)
 
 ; ---- Message store format ------------------------------------------------------
 MARK_LO              equ 0xd0        ; channel markers are two bytes D0+tens, D0+units
@@ -785,6 +793,9 @@ ROM_ID:
 app_start:
         LD SP,STACK_TOP
         CALL init_vars
+        LD HL,0
+        LD (IR_REJ),HL
+        LD (IR_REJ+2),HL
         CALL store_init
         CALL ir_init
         CALL init_nmi_rate
@@ -4340,8 +4351,8 @@ ir_init:
 
 ; ---- ir_reset: IR decoder: reset state, wait for leader (port C0 IR_BIT)
 ir_reset:
-        LD A,0x82
-        LD (IR_STATE_CNT),A
+        LD A,8                  ; quiet ticks before a leader counts: 1 ms, where no
+        LD (IR_STATE_CNT),A     ; gap inside a frame but the leader's exceeds 0.8 ms (was 130)
         LD A,6
         LD (IR_BITCNT),A
         XOR A
@@ -4414,52 +4425,76 @@ ir_leader2_fell:
         LD HL,ir_st_leader3
         LD (TICK_VECTOR),HL
         POP HL
-        LD A,0x15
+        LD (IR_LEVEL),A         ; low
+        LD A,24
         LD (IR_STATE_CNT),A
 
 ir_leader2_ret:
         POP AF
         RET
 
-; ---- ir_st_leader3
+; ---- ir_st_leader3: the gap after the leader. The start burst's rise must come
+;      10 to 23 ticks after the leader fell (2300 us nominal): later is no start at
+;      all. A rise within two ticks of the fall is the leader resuming after a
+;      dropout and is waited out again; any other early rise is a stray burst and
+;      is ignored. From the start rise on the cells are clocked by the line's rises
+;      (ir_st_bits), so neither the interrupt period nor the receiver's stretch
+;      accumulates over the frame.
 ir_st_leader3:
         PUSH AF
-        LD A,(IR_STATE_CNT)
-        DEC A
-        JR nz,ir_leader3_count
-        IN A,(PORT_IN)
-        BIT IR_BIT,A
-        JR z,ir_reject
         PUSH HL
-        LD HL,ir_st_start
-        LD (TICK_VECTOR),HL
-        POP HL
-        LD A,3
-
-ir_leader3_count:
-        LD (IR_STATE_CNT),A
-        POP AF
-        RET
-
-; ---- ir_st_start
-ir_st_start:
-        PUSH AF
-        LD A,(IR_STATE_CNT)
-        DEC A
-        JR nz,ir_start_count
+        LD HL,IR_STATE_CNT
+        DEC (HL)
+        JR z,ir_rej_leader      ; 24 ticks and no start burst
         IN A,(PORT_IN)
-        BIT IR_BIT,A
-        JR nz,ir_reject
-        PUSH HL
+        AND PORT_IR
+        LD HL,IR_LEVEL
+        CP (HL)
+        LD (HL),A
+        JR z,ir_pop_ret         ; no edge
+        AND A
+        JR z,ir_pop_ret         ; a fall
+        LD A,(IR_STATE_CNT)
+        CP 22
+        JR nc,ir_leader_again   ; a rise within two ticks of the fall
+        CP 15
+        JR nc,ir_stray_rise     ; a rise before tick 10
+        LD A,PORT_IR
+        LD (IR_LEVEL),A
+        LD A,7                  ; the start cell is decoded like a data cell and
+        LD (IR_BITCNT),A        ; falls off the bottom of IR_SHIFT at the sixth shift
+        LD A,0x20               ; "a 1 came before": the start cell may open with a rise
+        LD (IR_SHIFT),A
         LD HL,ir_st_bits
         LD (TICK_VECTOR),HL
-        POP HL
-        LD A,8
+        JR ir_cell_start
 
-ir_start_count:
-        LD (IR_STATE_CNT),A
-        POP AF
-        RET
+ir_leader_again:
+        LD HL,ir_st_leader2
+        LD (TICK_VECTOR),HL
+        JR ir_pop_ret
+
+ir_rej_leader:
+        LD HL,IR_REJ_LEADER
+        JR ir_rej_count
+
+ir_stray_rise:              ; counted in IR_REJ_POS but not fatal: the cell keeps waiting for its edge
+        LD HL,IR_REJ_POS
+        INC (HL)
+        JR ir_pop_ret
+
+ir_rej_cell:
+        LD HL,IR_REJ_CELL
+        JR ir_rej_count
+
+ir_rej_bridge:
+        LD HL,IR_REJ_BRIDGE
+
+ir_rej_count:
+        INC (HL)
+
+ir_reject_hl:
+        POP HL
 
 ir_reject:                  ; P40: a frame dropped after its leader
         LD A,(STAT_IR_BAD)
@@ -4467,47 +4502,95 @@ ir_reject:                  ; P40: a frame dropped after its leader
         LD (STAT_IR_BAD),A
         JP ir_reset
 
-; ---- ir_st_bits: sample a data bit (port C0 IR_BIT) into IR_SHIFT every 4 ticks
+ir_pop_ret:
+        POP HL
+        POP AF
+        RET
+
+; ---- ir_st_bits: a cell is 8 ticks counted down in IR_STATE_CNT. A rise seen
+;      at count 8-6 opens the cell (a 1), one at 4-2 is its middle (a 0), and
+;      either restarts the count, so every cell is timed from its own edge. A 1
+;      after a 0 has no rise of its own (the bursts merge), and after a 1 every
+;      cell has one: a cell without a rise is checked against the bit before it,
+;      and so is one that opens with a rise. Only rises are trusted: the receiver
+;      stretches every burst's end by about 250 us, and a rise in a cell that has
+;      had its burst is ignored (a dropout's end). Drops are counted by reason in IR_REJ.
 ir_st_bits:
         PUSH AF
+        PUSH HL
+        IN A,(PORT_IN)
+        AND PORT_IR
+        LD HL,IR_LEVEL
+        CP (HL)
+        LD (HL),A
+        JR z,ir_cell_steady
+        AND A
+        JR z,ir_cell_tick       ; a fall
+        LD A,(IR_CELL)
+        INC A
+        JR nz,ir_cell_tick      ; the cell has had its burst: a dropout's end, or noise
         LD A,(IR_STATE_CNT)
-        DEC A
-        JR z,ir_bit_verify
-        CP 4
-        JR nz,ir_bit_count
+        CP 6
+        JR nc,ir_cell_start
+        CP 5
+        JR z,ir_stray_rise      ; between the two positions: a stray burst
+        CP 2
+        JR c,ir_stray_rise      ; count 1: past the middle
+        XOR A                   ; the middle: a 0
+        LD (IR_CELL),A
+        LD A,3
+        JR ir_cell_set
+
+ir_cell_start:
+        LD HL,IR_SHIFT          ; after a 0 the bursts merge: a 1 cannot open with a rise
+        BIT 5,(HL)              ; (a burst where the gap belongs; letting it pass reads a
+        JR z,ir_rej_bridge      ; 0 as a 1 when it runs on into the real burst)
+        LD A,1
+        LD (IR_CELL),A
+        LD A,7
+
+ir_cell_set:
         LD (IR_STATE_CNT),A
-        PUSH HL
+        JR ir_cell_tick
+
+ir_cell_steady:                 ; no edge: a 1's burst has ended before the cell's first
+        AND A                   ; tick, so a line high through its first two was bridged by noise
+        JR z,ir_cell_tick
+        LD A,(IR_STATE_CNT)
+        CP 7
+        JR nz,ir_cell_tick
+        LD HL,IR_SHIFT          ; after any 1: a rise-opened 1 may itself be a 0 faked by
+        BIT 5,(HL)              ; a burst at its start that ran on into the real one
+        JR nz,ir_rej_bridge
+
+ir_cell_tick:
+        LD HL,IR_STATE_CNT
+        DEC (HL)
+        JR nz,ir_pop_ret
         LD HL,IR_SHIFT
-        RRC (HL)
-        IN A,(PORT_IN)
-        AND PORT_IR
-        OR (HL)
-        LD (IR_SHIFT),A
-        POP HL
-        POP AF
-        RET
+        LD A,(IR_CELL)
+        INC A
+        JR nz,ir_cell_known
+        BIT 5,(HL)              ; no rise: a 1 merged with the 0 before it
+        JP nz,ir_rej_cell
+        LD A,2
 
-ir_bit_verify:
-        PUSH HL
-        LD A,(IR_SHIFT)
-        CPL
-        AND PORT_IR
-        LD L,A
-        IN A,(PORT_IN)
-        AND PORT_IR
-        CP L
-        POP HL
-        JR nz,ir_reject
-        LD A,(IR_BITCNT)
+ir_cell_known:
         DEC A
-        LD (IR_BITCNT),A
-        JR z,ir_frame_done
+        RRCA
+        RRCA
+        RRCA                    ; bit 0 -> bit 5: the code arrives least significant bit first
+        SRL (HL)
+        OR (HL)
+        LD (HL),A
+        LD A,0xff
+        LD (IR_CELL),A
         LD A,8
-
-ir_bit_count:
         LD (IR_STATE_CNT),A
-        POP AF
-        RET
+        LD HL,IR_BITCNT
+        DEC (HL)
+        JP nz,ir_pop_ret
+        POP HL
 
 ir_frame_done:
         LD A,(STAT_IR_OK)       ; P40
@@ -4517,7 +4600,6 @@ ir_frame_done:
         AND A                   ; either consumer sees it
         JR nz,ir_done
         LD A,(IR_SHIFT)
-        RLCA                    ; P36: bits enter at IR_BIT, so the first lands in bit 7
         OR 0x80
         LD (IR_CODE),A
 
@@ -6537,7 +6619,7 @@ getkey_ir:
         LD C,A
         LD A,(IR_KEY)
         CP C
-        JR nz,getkey_first_frame
+        JR nz,getkey_other_key
         LD A,(IR_DEBOUNCE)
         AND A
         JR nz,getkey_accept
@@ -6552,6 +6634,18 @@ getkey_ir:
         JR getkey_check_shift
 
 getkey_released:
+        CALL getkey_pending     ; a first frame still waiting for its second: the
+        JR nz,getkey_release_clear   ; release within the window confirms it
+        LD A,(IR_KEY)
+        LD (IR_KEYNUM),A
+        LD A,0x80+0x3e          ; editor_exit waits for the release code itself
+        LD (IR_CODE),A
+        XOR A
+        LD (IR_KEY),A
+        LD (IR_DEBOUNCE),A
+        JR getkey_check_shift
+
+getkey_release_clear:
         XOR A
         LD (IR_KEY),A
         LD (IR_DEBOUNCE),A
@@ -6561,10 +6655,32 @@ getkey_none:
         LD (IR_KEY_CHAR),A
         JP getkey_return
 
+; ---- getkey_pending: Z = a lone first frame is waiting and its window is open
+getkey_pending:
+        LD A,(IR_DEBOUNCE)
+        AND A
+        JR z,getkey_pending_no
+        LD HL,(GEN_COUNTDOWN)
+        LD A,H
+        OR L
+        JR z,getkey_pending_no
+        XOR A
+        RET
+
+getkey_pending_no:
+        OR 1
+        RET
+
+getkey_other_key:
+        CALL getkey_pending     ; two different keys inside one window: one of
+        JR z,getkey_release_clear    ; them was mis-decoded, so neither counts
+
 getkey_first_frame:
         LD A,(IR_KEYNUM)
         LD (IR_KEY),A
         LD (IR_DEBOUNCE),A
+        LD HL,IR_DEBOUNCE_WINDOW
+        LD (GEN_COUNTDOWN),HL
         XOR A
         LD (IR_CODE),A
         JR getkey_none
@@ -7955,8 +8071,11 @@ pq_canary_end:
         LD DE,PKT_BUF+3+7
         LD BC,STATS_LEN
         LDIR
+        LD HL,IR_REJ            ; then the remote's drop reasons
+        LD BC,4
+        LDIR
         LD HL,PKT_BUF+3
-        LD BC,7+STATS_LEN
+        LD BC,7+STATS_LEN+4
         JP pq_reply
 
 ; ---- cmd_B5_ota: OTA commands (ota.md §6). B5 must be the first payload
