@@ -266,6 +266,10 @@ FRAME_COLS           equ 60          ; columns sent per row: the CC710 panel's 5
 FRAME_COLS           equ 86          ; columns sent per row: the panel's 84 plus two that fall off the chain
     ENDIF
 HOLD_FRAMES          equ 80          ; frames a PAUSE, HOLD, wipe or clock holds the panel (~1.3 s); P35: the default of CFG_HOLD
+TWINKLE_TICK         equ 4           ; P49: frames a TWINKLE's dark pixels stay dark
+GLIMMER_TICK         equ 3           ; P50: frames between a GLIMMER's row steps
+GLIMMER_BAND         equ 0x07        ; P50: a stripe's dark rows; it rolls through 8 (7 rows and the unused bit 7)
+TWINKLE_DOTS         equ 80          ; P49: random spots darkened each tick; about 30 land on lit pixels in plain text
 BEEP_LEN             equ 150         ; beeper on for this many tick6 periods (~115 ms)
 IR_REPEAT_DELAY      equ 1300        ; tick6 periods a held remote key waits before repeating (~1 s)
 IR_REPEAT_TICKS      equ 300         ; ... and between repeats (~0.23 s)
@@ -388,9 +392,11 @@ STATUS_BUF           equ STREAM_AREA+50    ; P41: the status report being sent, 
 RANDBOW_DECK         equ STREAM_AREA+56    ; P46: bit 7 = RANDBOW, bits 0-4 = RAINBOW's colors not yet dealt this round
 ALT_NEXT             equ STREAM_AREA+57    ; P46: the editor inserts this after a FUNC2 key's B2
 ALT_FX               equ STREAM_AREA+58    ; P48: FF = the UP or DOWN that follows scrolls instead of wiping
-STREAM_AREA_SIZE     equ 59
-STORE_TOP            equ STREAM_AREA-1    ; with a 32 K chip (16 K usable)
-STORE_TOP_8K         equ STORE_TOP-0x2000         ; with the stock 8 K chip
+SPARKLE              equ STREAM_AREA+59    ; P49/P50: the page's hold twinkles (1) or glimmers (2); 0 = a plain hold
+SPARKLE_RND          equ STREAM_AREA+60    ; P49: the holds' 16-bit xorshift state, never 0
+STREAM_AREA_SIZE     equ 62
+STORE_TOP            equ STREAM_AREA-1     ; with a 32 K chip (16 K usable)
+STORE_TOP_8K         equ STORE_TOP-0x2000  ; with the stock 8 K chip
 ; store_init derives the warning level, the text allowance (301 = framing) and
 ; the B4 '1' size from whichever ceiling the RAM test picks.
 
@@ -431,7 +437,7 @@ APP_INT              equ STUB_END+3
 APP_NMI              equ STUB_END+6
 STUB_STACK           equ PKT_READY
 STUB_RAM             equ 0x4000      ; stub_lib runs here (FRAMEBUF: idle at boot and during pkt_process)
-STUB_LIB_SIZE        equ stub_lib_end-stub_lib             ; the whole library, copied at boot
+STUB_LIB_SIZE        equ stub_lib_end-stub_lib            ; the whole library, copied at boot
 STUB_LIB_APP_SIZE    equ lib_app_end-STUB_RAM             ; the part the app copies: lib_copy and the page writer
 ROM_CRC16            equ stub_lib+(lib_crc16-STUB_RAM)    ; position-independent: callable in ROM too
 TRAILER_MAGIC        equ 0x3141544f  ; "OTA1"
@@ -2661,6 +2667,12 @@ rainbow_mod5:
 rainbow_alt:                    ; P46: B2 BC is RANDBOW; a B2 before anything else is skipped
         LD HL,(STORE_CURSOR)
         LD A,(HL)
+        LD C,1
+        CP ATTR_PAUSE           ; P49: B2 19: TWINKLE; P50: B2 BB: GLIMMER;
+        JR z,rainbow_alt_sparkle ; modifiers for the page's hold, not effects
+        INC C
+        CP ATTR_HOLD
+        JR z,rainbow_alt_sparkle
         AND 0xfe
         CP ATTR_UP              ; P48: B2 1A / B2 1B: the UP or DOWN scrolls
         JR nz,rainbow_alt_bc
@@ -2676,6 +2688,14 @@ rainbow_alt_bc:
         LD (STORE_CURSOR),HL
         LD A,0x80               ; an empty deck: the first character deals a new one
         JR rainbow_set
+
+rainbow_alt_sparkle:
+        LD A,C
+        LD (SPARKLE),A
+        INC HL
+        LD (STORE_CURSOR),HL
+        POP HL
+        JP render_next_char
 
 rainbow_step:
         LD A,(RAINBOW_IDX)
@@ -3732,6 +3752,8 @@ fx_staged:
 fx_set:
         LD (EFFECT_ID),A
         LD (EFFECT_VECTOR),HL
+        XOR A                   ; P49/P50: a modifier follows its effect
+        LD (SPARKLE),A
         LD A,FRAME_COLS
         LD (COL_COUNT),A
         JR render_next_char_jr2
@@ -3739,6 +3761,7 @@ fx_set:
 fx_left:
         CALL effect_none
         LD (COL_COUNT),A
+        LD (SPARKLE),A
         JR render_next_char_jr2
 
 ; ---- fx_magic
@@ -4267,10 +4290,17 @@ fxv_pause:
 
 ; ---- fx_hold_done: an effect has its frame up: hold it, then end the effect
 fx_hold_done:
-        LD A,(CFG_HOLD)         ; P35
-        LD (FRAME_DELAY),A
         XOR A
         LD (SCROLLING),A
+        LD HL,SPARKLE           ; P49/P50: TWINKLE or GLIMMER holds instead
+        LD A,(HL)
+        LD (HL),0
+        DEC A
+        JP z,fxv_twinkle
+        DEC A
+        JP z,fxv_glimmer
+        LD A,(CFG_HOLD)         ; P35
+        LD (FRAME_DELAY),A
         JR fx_done_jr9
 
 ; ---- fxv_wipe_updown: effects 2 (UP) and 3 (DOWN): eight passes copying the
@@ -4429,6 +4459,220 @@ scroll_col_put:
         LD BC,FRAME_COLS
         LDIR
         JP fx_hold_done
+
+; ---- fxv_twinkle (P49): TWINKLE's hold: the page held CFG_HOLD frames; every
+;      TWINKLE_TICK frames a fresh TWINKLE_DOTS random spots in the text go dark
+fxv_twinkle:
+        CALL sparkle_init       ; frames are built in the hidden half and flipped in
+        CALL twinkle_seed
+        LD A,(CFG_HOLD)
+
+twinkle_tick:
+        PUSH AF
+        LD A,TWINKLE_TICK       ; counted from here: the dots take a good part of a frame
+        LD (FRAME_DELAY),A
+        CALL page_back
+        LD C,TWINKLE_DOTS
+
+twinkle_dot:
+        LD HL,(STAGE_OFFSET)
+        LD A,L
+        ADD A,A
+        NEG
+        ADD A,FRAME_COLS        ; the text's width: it is centered
+        CALL twinkle_pick       ; leaves D = 0
+        LD E,A
+        ADD HL,DE
+        CALL fb_back
+        ADD HL,DE
+        BIT 7,(HL)              ; a color byte has no pixels
+        JR nz,twinkle_next
+        LD A,7
+        CALL twinkle_pick
+        LD B,A
+        INC B
+        LD A,0x80
+
+twinkle_bit:
+        RLCA
+        DJNZ twinkle_bit
+        CPL
+        AND (HL)
+        LD (HL),A
+
+twinkle_next:
+        DEC C
+        JR nz,twinkle_dot
+        CALL wait_frame_delay   ; no wait_row6: it ends just after row 6 and would add a frame
+        CALL fb_flip
+        POP AF
+        SUB TWINKLE_TICK
+        JR nc,twinkle_tick
+        CALL twinkle_page
+        JP fx_done
+
+; ---- fxv_glimmer (P50): GLIMMER's hold: the page held CFG_HOLD frames, with dark
+;      diagonal stripes rolling through it, up or down at random
+fxv_glimmer:
+        CALL sparkle_init
+        CALL twinkle_seed
+        LD A,2
+        CALL twinkle_pick
+        RRCA
+        LD C,A                  ; bit 7: the stripes slant the other way
+        LD A,2
+        CALL twinkle_pick
+        NEG
+        AND 6
+        INC A
+        OR C
+        LD E,A                  ; rolls a tick: 1 is a row down, 7 a row up
+        LD D,GLIMMER_BAND
+        LD A,(CFG_HOLD)
+
+glimmer_tick:
+        PUSH AF
+        LD A,GLIMMER_TICK
+        LD (FRAME_DELAY),A
+        PUSH DE
+        CALL page_back
+        CALL fb_back
+        EX DE,HL
+        POP DE
+        LD B,FRAME_COLS
+        LD A,D
+
+glimmer_col:
+        BIT 7,(HL)              ; a color byte takes no column on the panel
+        JR nz,glimmer_next
+        LD C,A
+        CPL
+        AND (HL)
+        LD (HL),A
+        LD A,C
+        RLCA                    ; a row lower each column to the right
+        BIT 7,E
+        JR z,glimmer_next
+        RRCA                    ; or a row higher
+        RRCA
+
+glimmer_next:
+        INC HL
+        DJNZ glimmer_col
+        LD A,E
+        AND 7
+        LD B,A
+
+glimmer_roll:
+        RLC D
+        DJNZ glimmer_roll
+        PUSH DE
+        CALL wait_frame_delay
+        CALL fb_flip
+        POP DE
+        POP AF
+        SUB GLIMMER_TICK
+        JR nc,glimmer_tick
+        CALL twinkle_page
+        JP fx_done
+
+; ---- sparkle_init: the effect's last frame, up in the front half, into the back
+;      too, so the columns around the text (HOLD's fill) match
+sparkle_init:
+        LD HL,FRAMEBUF
+        LD DE,FRAMEBUF_ROW1
+        LD BC,FRAME_COLS
+        LDIR
+        RET
+
+; ---- page_back: the staged page into the hidden half (DE = its start + offset)
+page_back:
+        CALL fb_back
+        LD HL,(STAGE_OFFSET)
+        ADD HL,DE
+        EX DE,HL
+        LD HL,TXBUF
+        LD B,0
+        LD A,(COL_COUNT)
+        LD C,A
+        LDIR
+        RET
+
+; ---- fb_back: DE = the framebuffer half the panel is not showing
+fb_back:
+        LD DE,FRAMEBUF
+        LD A,(FB_OUT_PTR)       ; FRAMEBUF's low byte is 0
+        AND A
+        RET nz
+        LD E,FRAME_COLS
+        RET
+
+; ---- fb_flip: show the hidden half; just after a frame end, so no row pass is split
+fb_flip:
+        CALL fb_back
+        LD (FB_OUT_PTR),DE
+        LD (FB_COL),DE          ; the frame end resets FB_OUT_PTR to FB_COL
+        RET
+
+; ---- twinkle_page: the staged page up again
+twinkle_page:
+        CALL fxv_pointers
+        LD B,0
+        LD A,(COL_COUNT)
+        LD C,A
+        LDIR
+        RET
+
+; ---- twinkle_seed: SPARKLE_RND = a nonzero seed from R and RND_SEED
+twinkle_seed:
+        LD A,R
+        LD HL,RND_SEED
+        ADD A,(HL)
+        LD (HL),A
+        LD H,A
+        LD A,R
+        OR 1
+        LD L,A
+        LD (SPARKLE_RND),HL
+        RET
+
+; ---- twinkle_pick: A = n -> A = a random 0..n-1, the high byte of the next SPARKLE_RND * n
+twinkle_pick:
+        PUSH HL
+        PUSH BC
+        LD E,A
+        LD D,0
+        LD HL,(SPARKLE_RND)     ; xorshift 7,9,8: an 8-bit generator reaches only
+                                ; 256 spots, each pick fixed by the one before
+        LD A,H
+        RRA
+        LD A,L
+        RRA
+        XOR H
+        LD H,A
+        LD A,L
+        RRA
+        LD A,H
+        RRA
+        XOR L
+        LD L,A
+        XOR H
+        LD H,A
+        LD (SPARKLE_RND),HL
+        LD L,D
+        LD B,8
+
+twinkle_mul:
+        ADD HL,HL
+        JR nc,twinkle_mul_next
+        ADD HL,DE
+
+twinkle_mul_next:
+        DJNZ twinkle_mul
+        LD A,H
+        POP BC
+        POP HL
+        RET
 
 ; ---- scroll_copy: LDIR that copies nothing for BC = 0
 scroll_copy:
@@ -7409,6 +7653,8 @@ FUNC2_TABLE:
         db 0x8f, ATTR_RAINBOW
         db ATTR_UP, ATTR_UP         ; P48
         db ATTR_DOWN, ATTR_DOWN
+        db ATTR_PAUSE, ATTR_PAUSE   ; P49
+        db ATTR_HOLD, ATTR_HOLD     ; P50
         db 0xff
 
 ; ---- apply_color_prefix: COLOR n -> FG_IDX_TABLE, BGRND n -> BG_IDX_TABLE
@@ -9129,6 +9375,8 @@ STR_CLOSE:
         db ATTR_RAINBOW^0x40,"RANDBOW",0x16,0x00   ; P46: B2 BC; a variant's key is its attribute ^ 40
         db ATTR_UP^0x40,"S-UP",0x16,0x00
         db ATTR_DOWN^0x40,"S-DOWN",0x16,0x00
+        db ATTR_PAUSE^0x40,"TWINKLE",0x16,0x00
+        db ATTR_HOLD^0x40,"GLIMMER",0x16,0x00
         db ATTR_MAGIC_OFF,"MAGIC OFF",0x16,0x00
         db ATTR_TINY,"TINY",0x16,0x00
         db 0xff

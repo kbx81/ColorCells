@@ -78,7 +78,7 @@ data protection are modeled; so is the board's watchdog, which zeroes
 CTRL_LATCH 512 us after the last interrupt acknowledge. Faults are collected in
 Sign.faults rather than raised, so a session can report them at the end.
 """
-import hashlib, os, pathlib, random, subprocess, sys, tempfile, time
+import functools, hashlib, operator, os, pathlib, random, subprocess, sys, tempfile, time
 
 import z80
 
@@ -597,8 +597,9 @@ def cmd_ota():
     def check(name, cond):
         checks.append(bool(cond)); print('  %s %s' % ('ok  ' if cond else 'FAIL', name))
 
-    def corrupt(bank, at=0x2000):
-        b = bytearray(bank); b[at] ^= 0x01; return bytes(b)
+    def corrupt(bank, at=0x3fbf):
+        # a free byte under the trailer: "both corrupt" runs bank 0, which must not hit a flipped opcode
+        b = bytearray(bank); assert b[at] == 0xff; b[at] ^= 0x01; return bytes(b)
 
     def boot(image, ms=3000, **kw):
         s = Sign(image, syms, fresh_ram=True, **kw)
@@ -1679,6 +1680,180 @@ def cmd_scroll():
     return all(checks)
 
 
+def _shown_watch(s, syms):
+    """log writes to both framebuffer halves, the output pointer and SPARKLE; shown() reads the half on the panel"""
+    fb, n, ptr, sp = syms['FRAMEBUF'], syms['FRAME_COLS'], syms['FB_OUT_PTR'], syms['SPARKLE']
+    s.watch = set(range(fb, fb + 2 * n)) | {ptr, ptr + 1, sp}; s.watch_log.clear()
+    s.m.mark_addrs(fb, 2 * n, s.m.WRITE_MARK); s.m.mark_addrs(ptr, 2, s.m.WRITE_MARK); s.m.mark_addrs(sp, 1, s.m.WRITE_MARK)
+    s.ptr0 = bytearray(s.m.memory[ptr:ptr + 2]); s.fb0 = bytearray(s.m.memory[fb:fb + 2 * n])
+    return lambda: bytes(s.m.memory[int.from_bytes(s.ram('FB_OUT_PTR', 2), 'little'):][:n])
+
+
+def _shown_writes(s, syms):
+    """writes by the TWINKLE/GLIMMER bodies that landed in the half the panel was showing"""
+    n, ptr = syms['FRAME_COLS'], syms['FB_OUT_PTR']
+    lo, hi = syms['fxv_twinkle'], syms['twinkle_page']
+    cur, bad = bytearray(s.ptr0), 0
+    for t, pc, a, v in s.watch_log:
+        if a in (ptr, ptr + 1):
+            cur[a - ptr] = v
+        elif lo <= pc < hi:
+            p = int.from_bytes(cur, 'little')
+            bad += p <= a < p + n
+    return bad
+
+
+def _sparkle_play(s, syms, chan0, ms):
+    """load channel 0, play it ms, and cut out each TWINKLE/GLIMMER hold: from fx_hold_done taking a
+    set SPARKLE to the final page copy (fxv_pointers); kind, effect, ms, frames, and the page
+    that copy leaves, replayed from the write log (the next effect may start before a sample)"""
+    s.send_frame(b'\x09\x30\x30\x0e' + chan0, addr=1); s.rx_wait()
+    shown, samples = _shown_watch(s, syms), []
+    for _ in range(ms // 2):
+        s.run_ms(2)
+        samples.append((s.t, s.ram('EFFECT_ID')[0], shown()))
+    fb, n, sp, ptr = syms['FRAMEBUF'], syms['FRAME_COLS'], syms['SPARKLE'], syms['FB_OUT_PTR']
+    hold, wipe = syms['fx_hold_done'], syms['fxv_wipe_updown']
+    pointers, right = syms['fxv_pointers'], syms['fxv_right']
+    copy, pick = syms['twinkle_page'], syms['twinkle_pick']
+    spans, last, start, mem, ending = [], 0, None, bytearray(s.fb0), None
+    for t, pc, a, v in s.watch_log:
+        if ending and not (copy <= pc < pick or pointers <= pc < right):
+            spans.append(ending + (bytes(mem[:n]),)); ending = None
+        if a == sp:
+            if v == 0 and hold <= pc < wipe and last:
+                start = (last, t)
+            last = v
+        elif a in (ptr, ptr + 1):
+            if a == ptr and start and pointers <= pc < right:
+                ending = start + (t,); start = None
+        else:
+            mem[a - fb] = v
+    if ending:
+        spans.append(ending + (bytes(mem[:n]),))
+    runs = []
+    for kind, t0, t1, after in spans:
+        frames = [(e, w) for t, e, w in samples if t0 <= t < t1]
+        if frames:
+            runs.append(dict(kind=kind, effect=frames[0][0], ms=(t1 - t0) / US / 1000,
+                             frames=[w for e, w in frames], page=after))
+    return runs
+
+
+# PAUSE, W-UP, W-DOWN, W-RIGHT, HOLD, S-UP, S-DOWN: effects 1-7, each a page with the modifier
+SPARKLE_PAGES = [(b'\x19', b'PAUSE'), (b'\x1a', b'UP'), (b'\x1b', b'DOWN'), (b'\x0f', b'RIGHT'),
+                 (b'\xbb', b'HOLD'), (b'\xb2\x1a', b'S-UP'), (b'\xb2\x1b', b'S-DOWN')]
+
+
+def _sparkle_common(check, s, syms, runs, kind, mod, name):
+    """checks both modifiers share: every staged effect, the hold's length, frames inside the
+    page, the page whole after; then no hold for a crawl, a modifier before its effect, or none"""
+    n = syms['FRAME_COLS']
+    hold_ms = s.ram('CFG_HOLD')[0] * 1000 / 62
+    runs = [r for r in runs if r['kind'] == kind]
+    check('%s holds after effects %s' % (name, sorted({r['effect'] for r in runs})),
+          {r['effect'] for r in runs} == set(range(1, 8)))
+    ms = [r['ms'] for r in runs] or [0]
+    check('each hold %.0f-%.0f ms, a plain hold %.0f ms' % (min(ms), max(ms), hold_ms),
+          all(0.85 < m / hold_ms < 1.15 for m in ms))
+    inside = all(all((w[c] == r['page'][c]) if r['page'][c] & 0x80 else not (w[c] & ~r['page'][c])
+                     for c in range(n)) for r in runs for w in r['frames'])
+    check('every frame is the page with lit pixels taken away, color bytes untouched', inside)
+    whole = all(r['page'] == bytes(functools.reduce(lambda x, y: [a | b if not a & 0x80 else a for a, b in zip(x, y)],
+                                                    r['frames'], list(r['page']))) for r in runs)
+    check('the page rests whole at the end', whole)
+    check('frames are built in the hidden half: %d writes to the shown one' % _shown_writes(s, syms), not _shown_writes(s, syms))
+    check('no faults', not s.faults)
+    none = _sparkle_play(s, syms, mod + b'CRAWL ' + mod + b'\x19BEFORE\x19PLAIN\xbbHOLD', 9000)
+    check('no %s for a crawl, a modifier before its effect, or plain PAUSE/HOLD (%d)' % (name, len(none)), not none)
+    return runs
+
+
+def _sparkle_editor(check, s, syms, keys, code, label):
+    def store(s):
+        return bytes(s.m.memory[syms['MSG_STORE']:int.from_bytes(s.ram('STORE_END', 2), 'little')])
+    s.send_frame(b'\x09\x30\x30\x0eAB', addr=1); s.rx_wait(); s.run_ms(3000)
+    s.ir_key('STOP', stretch_us=100); s.ir_wait(); s.run_ms(1500)
+    for k in keys:
+        s.ir_key(k, stretch_us=100); s.ir_wait(); s.run_ms(400)
+    s.run_ms(1000)
+    check('editor: %s inserts %s (%s)' % (label, code.hex(), store(s)[:10].hex()), code in store(s))
+    s.send_frame(b'\xb7\x30', addr=1); s.rx_wait(); s.run_ms(2000)
+    check('no faults in the editor', not s.faults)
+
+
+def cmd_twinkle():
+    """P49: B2 19 (TWINKLE) after PAUSE, a wipe, HOLD or a scroll: the page, once up, is held
+    with random lit pixels going dark a tick at a time, then left whole; alone or before its
+    effect it does nothing; FUNC2 PAUSE inserts it in the editor"""
+    rom, syms = assemble(HERE.parent / 'src' / 'patched')
+    checks = []
+    def check(name, cond):
+        checks.append(bool(cond)); print('  %s %s' % ('ok  ' if cond else 'FAIL', name))
+    n = syms['FRAME_COLS']
+    s = Sign(rom, syms, fresh_ram=True); s.run_ms(2500)
+    runs = _sparkle_play(s, syms, b''.join(fx + b'\xb2\x19' + w for fx, w in SPARKLE_PAGES) + b'\x19END', 20000)
+    pats, most, reach = [], 0, []
+    for r in runs:
+        page, dark = r['page'], [w for w in r['frames'] if w != r['page']]
+        pats.append(len(set(dark)))
+        for w in dark:
+            most = max(most, sum(bin(page[c] & ~w[c]).count('1') for c in range(n) if not page[c] & 0x80))
+        lit = sum(bin(page[c]).count('1') for c in range(n) if not page[c] & 0x80)
+        ever = [page[c] & ~functools.reduce(operator.and_, (w[c] for w in dark), 0xff) for c in range(n)]
+        reach.append(sum(bin(ever[c]).count('1') for c in range(n) if not page[c] & 0x80) / max(lit, 1))
+    check('%s different patterns per hold (~20 ticks)' % sorted(set(pats)), pats and min(pats) >= 15)
+    check('at most %d pixels dark at once (most %d)' % (syms['TWINKLE_DOTS'], most), 0 < most <= syms['TWINKLE_DOTS'])
+    check('the dots reach %.0f%%+ of each page\'s lit pixels over a hold' % (100 * min(reach or [0])), reach and min(reach) >= 0.85)
+    _sparkle_common(check, s, syms, runs, 1, b'\xb2\x19', 'TWINKLE')
+    _sparkle_editor(check, s, syms, ('SHIFT', 'STOP', 'SHIFT', 'JUMP'), b'\xb2\x19', 'FUNC2 PAUSE')
+    print('twinkle: %d/%d checks pass' % (sum(checks), len(checks)))
+    return all(checks)
+
+
+def cmd_glimmer():
+    """P50: B2 BB (GLIMMER) after PAUSE, a wipe, HOLD or a scroll: the page, once up, is held
+    with a dark band rolled one row per panel column, so the stripes run diagonally, and one
+    row per tick, up or down and slanting either way at random; alone or before its effect it does nothing;
+    FUNC2 SHIFT SEQ (HOLD) inserts it in the editor"""
+    rom, syms = assemble(HERE.parent / 'src' / 'patched')
+    checks = []
+    def check(name, cond):
+        checks.append(bool(cond)); print('  %s %s' % ('ok  ' if cond else 'FAIL', name))
+    n, band = syms['FRAME_COLS'], syms['GLIMMER_BAND']
+    rot = lambda m, k: ((m << (k % 8)) | (m >> (8 - k % 8))) & 0xff
+    s = Sign(rom, syms, fresh_ram=True); s.run_ms(2500)
+    runs = _sparkle_play(s, syms, b''.join(fx + b'\xb2\xbb' + w for fx, w in SPARKLE_PAGES) + b'\x19END', 34000)
+    dirs, slants, fits, total, oneway = set(), set(), 0, 0, True
+    for r in runs:
+        page = r['page']
+        cols = [c for c in range(n) if not page[c] & 0x80]
+        phases = []
+        for w in r['frames']:
+            dark = [page[c] & ~w[c] for c in cols]
+            if not any(dark):
+                continue
+            total += 1
+            p = [(sl, ph) for sl in (1, -1) for ph in range(8)
+                 if all(d == page[c] & rot(band, ph + sl * k) & 0x7f for k, (c, d) in enumerate(zip(cols, dark)))]
+            if p:
+                fits += 1
+                slants.add(p[0][0])
+                if not phases or phases[-1] != p[0][1]:
+                    phases.append(p[0][1])
+        steps = {(b - a) % 8 for a, b in zip(phases, phases[1:])}
+        oneway &= len(steps) == 1
+        dirs |= steps
+    check('%d of %d dark frames are one band rolled a row per panel column' % (fits, total), total and fits >= 0.9 * total)
+    check('the stripes slant both ways: %s' % sorted({1: 'down-right', -1: 'up-right'}[x] for x in slants), slants == {1, -1})
+    check('each GLIMMER rolls one way a row a tick; seen: %s' % sorted({1: 'down', 7: 'up'}.get(d, str(d)) for d in dirs),
+          oneway and dirs == {1, 7})
+    _sparkle_common(check, s, syms, runs, 2, b'\xb2\xbb', 'GLIMMER')
+    _sparkle_editor(check, s, syms, ('SHIFT', 'STOP', 'SHIFT', 'SHIFT', 'SEQ'), b'\xb2\xbb', 'FUNC2 SHIFT SEQ')
+    print('glimmer: %d/%d checks pass' % (sum(checks), len(checks)))
+    return all(checks)
+
+
 def cmd_config():
     """P35: the configuration block: defaults after a RAM loss, kept across a reset,
     rejected when its sum is wrong; B6 writes with the protected bytes refused and the
@@ -2096,7 +2271,7 @@ def cmd_compare(dir_a, dir_b):
 
 if __name__ == '__main__':
     args = sys.argv[1:]
-    if not args or args[0] not in ('stack', 'compare', 'eeprom', 'ota', 'update', 'push', 'fuzz', 'ram', 'quiet', 'speed', 'baud', 'clock', 'config', 'keypad', 'seq', 'stats', 'status', 'term', 'randbow', 'scroll'):
+    if not args or args[0] not in ('stack', 'compare', 'eeprom', 'ota', 'update', 'push', 'fuzz', 'ram', 'quiet', 'speed', 'baud', 'clock', 'config', 'keypad', 'seq', 'stats', 'status', 'term', 'randbow', 'scroll', 'twinkle', 'glimmer'):
         sys.exit(__doc__)
     if args[0] == 'ram':
         sys.exit(0 if cmd_ram() else 1)
@@ -2122,6 +2297,10 @@ if __name__ == '__main__':
         sys.exit(0 if cmd_randbow() else 1)
     if args[0] == 'scroll':
         sys.exit(0 if cmd_scroll() else 1)
+    if args[0] == 'twinkle':
+        sys.exit(0 if cmd_twinkle() else 1)
+    if args[0] == 'glimmer':
+        sys.exit(0 if cmd_glimmer() else 1)
     if args[0] == 'quiet':
         sys.exit(0 if cmd_quiet() else 1)
     if args[0] == 'push':
