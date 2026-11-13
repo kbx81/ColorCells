@@ -19,8 +19,9 @@ Transport options (everything else is identical to cc784.py):
 The proxy UART is reconfigured to the chosen rate (-b, default 300), 8 data bits,
 no parity, 2 stop bits on connect (serial_proxy_configure), so the YAML baud_rate
 does not matter.
-Writes are fed to the proxy in 32-byte pieces at the line rate: handing it a
-whole 259-byte frame at once lost bytes and dropped the API connection.
+Each frame goes to the proxy in one write, which needs the UART's tx_buffer_size
+to hold a whole frame (the dongle config sets 1024). Without it the proxy has only
+the 128-byte FIFO and stalls or trims longer writes: use --chunk 32 there.
 """
 import os, sys, asyncio, threading, queue, argparse, time
 
@@ -39,7 +40,7 @@ class ESPHomeLink:
     The asyncio loop runs on a background thread; the command code in cc784.py
     stays synchronous and pulls received bytes from a thread-safe queue."""
 
-    def __init__(self, host, key, port=6053, instance=None, verbose=False, list_only=False, chunk=32, baud=300):
+    def __init__(self, host, key, port=6053, instance=None, verbose=False, list_only=False, chunk=0, baud=300):
         self.baud = baud
         self.host, self.key, self.port, self.verbose = host, key, port, verbose
         self.chunk = chunk
@@ -111,9 +112,8 @@ class ESPHomeLink:
 
     # -- sync link interface used by cc784.Sign --------------------------------
     def write(self, data: bytes):
-        # The proxy's UART buffer is shallow: a 259-byte frame handed over at once
-        # lost bytes and then dropped the API connection. Feed it in pieces paced
-        # at the line rate (300 baud = 27 bytes/s) so it never holds more than one.
+        # chunk > 0: for a proxy without a TX buffer, pieces paced at the line rate
+        # (11 bits a byte with two stop bits) so its FIFO never holds more than one
         data = bytes(data)
         if self.chunk <= 0:                      # whole frame in one write
             self._run(self._write(data))
@@ -122,7 +122,7 @@ class ESPHomeLink:
             piece = data[i:i + self.chunk]
             self._run(self._write(piece))
             if i + self.chunk < len(data):
-                time.sleep(len(piece) * 10.0 / self.baud)
+                time.sleep(len(piece) * 11.0 / self.baud)
 
     def read(self, n: int, timeout: float) -> bytes:
         out = bytearray(); end = time.time() + timeout
@@ -156,8 +156,8 @@ def main():
     ap.add_argument('-P', '--api-port', type=int, default=6053)
     ap.add_argument('-i', '--instance', default=None, help='serial_proxy name or index (default 0)')
     ap.add_argument('--list', action='store_true', help='list serial_proxy instances and exit')
-    ap.add_argument('--chunk', type=int, default=32,
-                    help='bytes per proxy write, paced at the line rate (default 32; 0 = one write)')
+    ap.add_argument('--chunk', type=int, default=0,
+                    help='bytes per proxy write, paced at the line rate (default 0 = one write; 32 for a proxy without tx_buffer_size)')
     cc784.add_common_args(ap)
     a = ap.parse_args()
     if not a.key:
