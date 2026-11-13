@@ -1365,6 +1365,19 @@ def cmd_clock():
     s.send_frame(b'\x09\x30\x30\x0e' + b'IT IS \x5f NOW', addr=1, flag=0x81); s.rx_wait(); s.frames.clear(); s.run_ms(4000)
     lit = sum(1 for f in s.frames if any(f[1:]))
     check('24-hour: a message with the clock renders (%d lit frames, no faults)' % lit, lit > 50 and not s.faults)
+    def shown(s):
+        # the characters handed to the glyph lookup, the clock code itself left out
+        out = bytearray()
+        for _ in range(16000):
+            s.run_ms(0.25)
+            c = s.ram('CUR_CHAR')[0]
+            if c != 0x5f and c != (out[-1] if out else None):
+                out.append(c)
+        return bytes(out)
+    settime(s, b'1234', b'H'); got = shown(s)
+    check('24-hour: the clock reads 12:34 and no AM or PM (%r)' % got, b' 12:34 NOW' in got)
+    settime(s, b'1234', b'N'); got = shown(s)
+    check('12-hour: the clock reads 12:34 PM (%r)' % got, b' 12:34 PM NOW' in got)
     # DC with the add-in board
     s = Sign(rom, syms, fresh_ram=True, mains=False, crystal=True); s.run_ms(3000)
     check('DC + board: 64 a second, bank bit set, NMI seen (%d, %02x, %s)' % (s.ram('NMI_PER_SEC')[0], s.bank_reg, s.ram('NMI_SEEN').hex()),
@@ -1424,7 +1437,10 @@ def cmd_stats():
     check('remote drop counters zero after boot: %s' % (a['rej'],), a['rej'] == (0, 0, 0, 0))
     s.send_frame(FX_MAGIC, addr=1); s.rx_wait(); s.run_ms(20000)
     s.send_bytes(bytes([0xB1, 1, 0x80, 1, 0x41, 0x00])); s.rx_wait(); s.run_ms(500)
+    global SLICE                        # the remote at 16-cycle slices, as the keypad gate runs it:
+    SLICE, coarse = 16, SLICE           # at 128 a DI holds an interrupt back and can cost a frame
     s.ir_key('T', stretch_us=100); s.ir_wait(); s.run_ms(500)
+    SLICE = coarse
     b = stats(s)
     check('after the effects message, a bad frame and a key: %s' % b, b is not None)
     check('uptime %d s after %.1f s' % (b['up'], b['t']), abs(b['up'] - b['t']) <= 1.5)
@@ -1693,6 +1709,8 @@ def cmd_scroll():
         i1 = next((i for i in range(i0, len(seq)) if seq[i][0] != eid), len(seq)) if i0 is not None else 0
         run = [w for e, w in seq[i0:i1]] if i0 is not None else []
         run = [w for w in run if w != blank]
+        if run and all(not c & 0x80 for c in run[-1]):   # the effect ended within a sample of its last copy:
+            run += [w for e, w in seq[i1:i1 + 2] if w != blank][:1]   # the resting page is the next state
         if len(run) < 7:
             check('SCROLL %s ran (%d frames)' % (name, len(run)), False); continue
         old, steps, new = (run[-8] if len(run) >= 8 else seq[i0 - 1][1]), run[-7:-1], run[-1]

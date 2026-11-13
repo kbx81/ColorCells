@@ -401,8 +401,8 @@ PKT_SEQ_CHANGED      equ STREAM_AREA+28    ; P27: FF once the packet has rewritt
 DISP_STRETCH         equ STREAM_AREA+29    ; P26: sevenths of an interrupt added to every display tick: 2 x speed
 SVC_DUE              equ STREAM_AREA+30    ; P26: bit 0 = tick6 engines due, bit 1 = display tick due
 SVC_ACTIVE           equ STREAM_AREA+31    ; P26: FF while tick6_service runs; it drains SVC_DUE, so it never nests
-PORT_SAMPLE          equ STREAM_AREA+32    ; P35: PORT_IN as the ISR read it this interrupt
-IR_QUIET             equ STREAM_AREA+33    ; P35: 1 = the IR decoder waits for the line to rise, PORT_IR|1 = to fall: its handler is skipped meanwhile
+IR_MASK              equ STREAM_AREA+32    ; PORT_IR; 0 from a start bit to the next frame end, which with IR_QUIET 0 skips the decoder
+IR_QUIET             equ STREAM_AREA+33    ; P35: the line level (0 or PORT_IR) the IR decoder sleeps through, its handler skipped; FF = awake
 KP_MODE              equ STREAM_AREA+34    ; P36: 0 = serial, else the wired keypad is scanned
 KP_SPACE             equ STREAM_AREA+35    ; P36: frames in a row the RX line read space (serial mode)
 KP_HELD              equ STREAM_AREA+36    ; P36: empty scans left before a key's release is reported
@@ -428,7 +428,8 @@ SPARKLE_RND          equ STREAM_AREA+60    ; P49: the holds' 16-bit xorshift sta
 STACK_INIT           equ STREAM_AREA+62    ; P51: ram_probe's choices: the stack's top and bottom,
 STACK_BOT            equ STREAM_AREA+64    ;   and the longest payload the buffer takes
 PKT_MAX              equ STREAM_AREA+66
-STREAM_AREA_SIZE     equ 67
+PORT_SAMPLE          equ STREAM_AREA+67    ; P35: PORT_IN as the ISR read it this interrupt
+STREAM_AREA_SIZE     equ 68
 STACK_TOP            equ STREAM_AREA       ; first PUSH lands two below; SP is STACK_INIT, set at boot
 STORE_TOP            equ STACK_TOP-STACK_SIZE-1 ; with a 32 K chip (16 K usable)
 STORE_TOP_8K         equ STORE_TOP-RAM_ALT ; with the stock 8 K chip
@@ -876,21 +877,25 @@ nmi_entry:                      ; clock_tick and baud_calibrate use A, BC and HL
 ;      mark SVC_DUE; tick6_service is pushed when it is not already running and
 ;      drains the marks itself, so the engines and the display never nest and
 ;      share the latch shadow and the RX FIFO as they did on one divider.
-int_timer:
-        EX AF,AF'
-        EXX
-        IN A,(PORT_IN)          ; P35: one sample for the IR gate at the end and
-        LD (PORT_SAMPLE),A
-        LD A,(RX_PHASE)         ; P30: the serial bit engines, every interrupt,
-        AND A                   ; so 1200 baud fits; idle they cost a line poll
-        JR nz,int_rx_active
-        LD A,(PORT_SAMPLE)      ; P52: the receiver, which then samples every bit at the same point
-        BIT 3,A
-        CALL nz,rx_start
+int_rx_start:                   ; out of line, so the idle path below falls straight through
+        CALL rx_start
         JR int_tx
 
 int_rx_active:
         CALL rx_phase_run
+        JR int_tx
+
+int_timer:
+        EX AF,AF'
+        EXX
+        IN A,(PORT_IN)          ; P35: one sample for the IR gate at the end and
+        LD (PORT_SAMPLE),A      ; P52: the receiver, which then samples every bit at the same point
+        LD E,A
+        LD A,(RX_PHASE)         ; P30: the serial bit engines, every interrupt,
+        AND A                   ; so 1200 baud fits; idle they cost a line poll
+        JR nz,int_rx_active
+        BIT 3,E
+        JR nz,int_rx_start
 
 int_tx:
         LD A,(TX_STATUS)
@@ -928,7 +933,49 @@ int_lit_count:
 int_lit_on:
         LD HL,DISP_COUNT
         DEC (HL)
-        JR nz,int_tick6
+        JR z,int_disp_due
+
+int_tick6:
+        LD HL,TICK6_COUNT       ; counted down: an interrupt that makes no mark
+        DEC (HL)                ; has no service to start
+        JR nz,int_vector
+
+int_tick6_mark:
+        LD (HL),TICK6_DIV
+        LD HL,TICK6_CAL         ; P35: counted here, where the mark is made, so a late
+        INC (HL)                ; service cannot shrink the calibration's second
+        LD HL,SVC_DUE
+        SET 0,(HL)
+
+int_svc:
+        LD HL,SVC_ACTIVE
+        BIT 7,(HL)
+        JR nz,int_vector        ; the running service picks the new mark up
+        LD (HL),0xff
+        LD HL,tick6_service     ; the address is pushed so the service runs as the ISR returns
+        PUSH HL
+
+int_vector:
+    IFNDEF LITE                 ; no receiver, and its timing wants 128 us interrupts
+        ASSERT IR_QUIET == IR_MASK+1
+        LD A,(PORT_SAMPLE)      ; P35: the decoder waiting on the line sleeps while it reads
+        LD HL,IR_MASK           ; the level in IR_QUIET: its handler, ~90 cycles an interrupt,
+        AND (HL)                ; is skipped. P52: rx_start zeroes both, so none runs while
+        INC HL                  ; serial bytes arrive (it costs the receiver late samples)
+        XOR (HL)
+        JR z,int_vector_done
+        LD (HL),0xff            ; awake: FF matches no level
+        LD HL,(TICK_VECTOR)
+        PUSH HL
+    ENDIF
+
+int_vector_done:
+        EX AF,AF'
+        EXX
+        EI
+        RET                     ; RETI only matters to Z80 peripherals; the board has none
+
+int_disp_due:
         LD A,(DISP_STRETCH)
         LD C,A
         LD A,(DISP_ACC)
@@ -954,57 +1001,10 @@ int_disp_reload:
 
 int_disp_mark:
         SET 1,(HL)
-
-int_tick6:
-        LD A,(TICK6_COUNT)
-        INC A
-        CP TICK6_DIV
-        JR nz,int_tick6_store
-        LD HL,TICK6_CAL         ; P35: counted here, where the mark is made, so a late
-        INC (HL)                ; service cannot shrink the calibration's second
-        LD HL,SVC_DUE
-        SET 0,(HL)
-        XOR A
-
-int_tick6_store:
-        LD (TICK6_COUNT),A
-        LD A,(SVC_DUE)
-        OR A
-        JR z,int_vector
-        LD HL,SVC_ACTIVE
-        OR (HL)
-        JP m,int_vector         ; the running service picks the new mark up
-        LD (HL),0xff
-        LD HL,tick6_service     ; the address is pushed so the service runs as the ISR returns
-        PUSH HL
-
-int_vector:
-    IFNDEF LITE                 ; no receiver, and its timing wants 128 us interrupts
-        LD A,(RX_IDLE)          ; P52: no remote decoding while serial bytes arrive:
-        AND A                   ; on the board it costs the receiver late samples
-        JR z,int_vector_done
-        LD A,(IR_QUIET)         ; P35: the decoder waiting on the line has nothing to
-        AND A                   ; do until it moves: its handler, ~90 cycles an interrupt
-        JR z,int_vector_push    ; (a reset every interrupt on a sign with no receiver), is skipped
-        LD C,A
-        LD A,(PORT_SAMPLE)
-        AND PORT_IR
-        OR 1
-        CP C
-        JR z,int_vector_done
-        XOR A
-        LD (IR_QUIET),A
-
-int_vector_push:
-        LD HL,(TICK_VECTOR)
-        PUSH HL
-    ENDIF
-
-int_vector_done:
-        EX AF,AF'
-        EXX
-        EI
-        RETI
+        LD HL,TICK6_COUNT
+        DEC (HL)
+        JR nz,int_svc
+        JR int_tick6_mark
 
 ; ---- main_loop: open the next channel, then render it a character at a time.
 ;      P21: pkt_poll runs here, at every render step and in every frame wait,
@@ -1116,24 +1116,22 @@ row_output:
         CALL latch_blank
         LD A,(DISP_ON)
         AND A
-        JP z,row_phase_step
+        JR z,row_phase_step
         LD A,(CFG_FLAGS)        ; P35: muted or brightness 0: the row stays dark
         AND 7
         CP 4
         JR nc,row_phase_step
         AND A
         JR z,row_phase_step
-        LD HL,(FB_OUT_PTR)
         LD A,(FB_OUT_LEN)
         LD B,A
-        LD A,(ROW_PORT)
+        LD HL,ROW_INDEX
+        LD A,6                  ; the rows' port addresses run backwards: 6 - index
+        SUB (HL)
+        LD HL,ROW_PORT
+        OR (HL)
         LD C,A
-        LD A,(ROW_INDEX)
-        CPL
-        AND 7
-        DEC A
-        OR C
-        LD C,A
+        LD HL,(FB_OUT_PTR)
         LD DE,(BEEP_TICKS)
         LD A,D
         OR E
@@ -1178,18 +1176,15 @@ row_strobe:
         LD (CTRL_LATCH),A
         EI
         OUT (PORT_STROBE),A
-        LD A,(ROW_INDEX)
-        CPL
-        AND 7
-        DEC A
+        LD HL,ROW_INDEX
+        LD A,6
+        SUB (HL)
         JR nz,row_select
         LD A,7
 
 row_select:
-        LD C,A
-        LD A,(LATCH_BIT7)
-        OR C
-        AND 0x8f
+        LD HL,LATCH_BIT7
+        OR (HL)
         LD C,A
         CALL latch_row_dim      ; P35: lit now at full brightness, else by the ISR
 
@@ -1212,6 +1207,10 @@ row_advance:
         CALL row_step
         JP c,tick6_arm_row
         LD (DISP_STRETCH),A     ; P26: full rate unless the plain crawl below asks
+    IFNDEF LITE
+        LD A,PORT_IR            ; the remote decoder runs again (rx_start)
+        LD (IR_MASK),A
+    ENDIF
         LD HL,RX_IDLE           ; P30: frames since the last start bit, held at 255
         INC (HL)
         JR nz,frame_idle_gap
@@ -1324,15 +1323,14 @@ frame_set_window:
         LD (ROW_COLOR),A
         LD HL,(FB_COL)
         LD (FB_OUT_PTR),HL
+        EX DE,HL
         LD HL,FRAMEBUF_END      ; the window runs to the ring's end, then wraps
-        LD BC,(FB_COL)
-        LD DE,FRAME_COLS
-        XOR A
-        SBC HL,BC
-        XOR A
+        OR A
+        SBC HL,DE
         LD (FB_OUT_LEN),HL
         EX DE,HL
-        SBC HL,DE
+        LD HL,FRAME_COLS
+        SBC HL,DE               ; no borrow came out of the first
         JR z,frame_window_wrap
         JR nc,frame_set_extra
 
@@ -1345,23 +1343,14 @@ frame_set_extra:
         LD (FB_EXTRA_LEN),HL
 
 frame_bit7_tick:
-        LD A,(FRAME_COUNT)
-        INC A
-        LD (FRAME_COUNT),A
-        LD HL,CFG_FLASH         ; P35
+        LD HL,FRAME_COUNT
+        INC (HL)
+        LD A,(CFG_FLASH)        ; P35
         CP (HL)
         JR nz,frame_done
-        XOR A
-        LD (FRAME_COUNT),A
+        LD (HL),0
         LD A,(LATCH_BIT7)
-        AND A
-        JR z,frame_bit7_set
-        XOR A
-        LD (LATCH_BIT7),A
-        JR frame_done
-
-frame_bit7_set:
-        LD A,LATCH_BLINK
+        XOR LATCH_BLINK
         LD (LATCH_BIT7),A
 
 frame_done:
@@ -1608,14 +1597,9 @@ seq_fill:
         INC HL
         INC A
         DJNZ seq_fill
-        LD (HL),0xff
-        INC HL
-        LD (HL),0xff
-        INC HL
-        LD (HL),0xff
-        INC HL
-        LD (HL),0xff
-        RET
+        DEC HL
+        LD B,4
+        JR seq_one_loop
 
 ; ---- seq_list_one: SEQ_LIST = A, then FF to the end (A kept)
 seq_list_one:
@@ -1650,7 +1634,6 @@ seq_pick:
 
 seq_from_list:
         LD A,(SEQ_ALL_EMPTY)
-        LD E,A
         CP 10
         LD A,CHAN_DEMO
         JR z,seq_open_channel
@@ -1671,7 +1654,6 @@ seq_clamp_entry:
         LD (HL),CHAN_DEMO
 
 seq_advance:
-        LD E,A
         INC HL
         LD (SEQ_PTR),HL
 
@@ -1881,7 +1863,7 @@ chan_ok:
         XOR A
         RET
 
-; ---- store_repair: every boot: bad bytes -> ?, stray 03 -> space, then re-sequence
+; ---- store_repair: every boot: bad bytes -> ?, stray 03 -> space (store_fix_bad_bytes), then re-sequence
 ;      the 100 channel markers and re-terminate (recovers a corrupted store)
 store_repair:
         ; P25: the three whole-store passes stop at the first DA, the store's
@@ -1902,7 +1884,6 @@ repair_full:
 repair_bound:
         LD (STORE_TMP),HL
         CALL store_fix_bad_bytes
-        CALL store_strip_ends
         LD HL,MSG_STORE
         LD DE,MARK_LO*0x100+MARK_LO
         LD BC,(STORE_TEXT_LIMIT)
@@ -1954,25 +1935,7 @@ repair_scan_next:
         JR nz,repair_scan
 
 repair_append_rest:
-        LD A,MARK_HI
-
-repair_append_loop:
-        LD (HL),E
-        CP E
-        JR z,repair_terminate
-        INC HL
-        LD (HL),D
-        INC HL
-        LD (HL),TEXT_END
-        INC HL
-        INC D
-        CP D
-        JR nz,repair_append_loop
-        LD D,MARK_LO
-        INC E
-        CP E
-        JR nz,repair_append_loop
-        LD (HL),A
+        CALL store_fill
 
 repair_terminate:
         PUSH HL
@@ -1988,9 +1951,15 @@ store_fix_bad_bytes:
 
 fixbad_loop:
         LD A,(HL)
+        LD E,' '
+        CP TEXT_END             ; a stray 03: store_add_ends puts the real ones back
+        JR z,fixbad_put
         CALL char_flags
         JR nc,fixbad_next
-        LD (HL),'?'
+        LD E,'?'
+
+fixbad_put:
+        LD (HL),E
 
 fixbad_next:
         INC HL
@@ -2000,43 +1969,27 @@ fixbad_next:
         JR nz,fixbad_loop
         RET
 
-store_strip_ends:
-        LD HL,MSG_STORE
-        LD BC,(STORE_TMP)
-
-strip_loop:
-        LD A,(HL)
-        CP TEXT_END
-        JR nz,strip_next
-        LD (HL),' '
-
-strip_next:
-        INC HL
-        DEC BC
-        LD A,C
-        OR B
-        JR nz,strip_loop
-        RET
-
 store_add_ends:
-        LD IX,MSG_STORE+2
+        LD HL,MSG_STORE+2
         LD BC,(STORE_TMP)
         DEC BC
         DEC BC
 
 addend_loop:
-        LD A,(IX+0)
+        LD A,(HL)
         CALL is_marker
         JR nc,addend_next
-        LD (IX-1),TEXT_END
-        INC IX
+        DEC HL
+        LD (HL),TEXT_END
+        INC HL
+        INC HL
         DEC BC
         LD A,C
         OR B
         RET z
 
 addend_next:
-        INC IX
+        INC HL
         DEC BC
         LD A,C
         OR B
@@ -2198,7 +2151,7 @@ INIT_DATA:
         db 0x0f                ; CUR_COLOR
         db 0x01                ; DISP_ON
         db 0x0f                ; COL_COUNT
-        db 0x0a                ; LATCH_BIT7
+        db 0x00                ; LATCH_BIT7: 00 or LATCH_BLINK, OR-ed into the row code as it is
         db 0x01                ; FLUSH_PENDING
         db BAUD_T_DEFAULT      ; BAUD_T
         db BAUD_STEP_300       ; BAUD_STEP
@@ -2264,7 +2217,7 @@ track_flash_space:
         LD (FLASH_BIT),A
         XOR A
         LD (FLASH_PENDING),A
-        JR track_done
+        RET
 
 space_seen:
         XOR A
@@ -2274,7 +2227,7 @@ space_seen:
         JR nz,double_space
         LD A,1
         LD (PREV_SPACE),A
-        JR track_done
+        RET
 
 double_space:
         LD A,(TEST_MODE)
@@ -2296,7 +2249,7 @@ render_cur_char:
         CALL track_flash_space
         CALL magic_preprocess
         CALL attr_rainbow
-        CALL attr_draw_check
+        CALL attr_draw_check    ; returns CUR_CHAR in A, and the four checks after it keep it
         CALL attr_thin_check
         CALL attr_wait_check
         CALL attr_remark_check
@@ -2322,8 +2275,7 @@ class_not_a0:
         LD A,(CUR_CHAR)
         CP ATTR_TIME
         JP z,render_clock
-        BIT 7,A
-        JR z,glyph_lookup
+        JR glyph_lookup         ; bit 7 is clear on this path
 
 class_high:
         CP 0x94
@@ -2358,11 +2310,10 @@ glyph_lookup:
         CALL glyph_big
         CALL glyph_italic
         LD A,(CLK_RENDER_STEP)
-        CP 0xff
+        INC A
         JR nz,glyph_graphic_check
-        XOR A
         LD (CLK_RENDER_STEP),A
-        LD A,0xff
+        DEC A
         LD (CLK_RENDERED),A
 
 glyph_graphic_check:
@@ -2370,7 +2321,7 @@ glyph_graphic_check:
         AND 0xf0
         JR nz,glyph_place
         LD A,(GLYPH_WIDTH)
-        SLA A
+        ADD A,A
         CP 0x20
         JR c,glyph_set_width
         LD A,0x1f
@@ -2396,8 +2347,8 @@ glyph_blit:
         LD A,(CUR_CHAR)
         CP ' '
         JR nz,blit_setup
-        LD DE,WIDE_SPACE_GLYPH
-        LD (GLYPH_PTR),DE
+        LD HL,WIDE_SPACE_GLYPH
+        LD (GLYPH_PTR),HL
         LD A,9
         LD (GLYPH_WIDTH),A
 
@@ -2432,17 +2383,13 @@ blit_set_c:
         LD C,A
 
 blit_color:
-        PUSH BC
         LD A,(CUR_CHAR)
         CP ' '
-        LD C,0xf0
-        JR z,blit_write_color
-        LD C,0xff
+        LD A,(CUR_COLOR)
+        JR nz,blit_write_color
+        AND 0xf0                ; a space shows only the background
 
 blit_write_color:
-        LD A,(CUR_COLOR)
-        AND C
-        POP BC
         OR C
         SET 7,A
         LD (HL),A
@@ -2460,12 +2407,8 @@ blit_columns:
         DJNZ blit_columns
         LD (FB_COLPTR),HL
         LD A,(MENU_ACTIVE)
-        AND A
-        LD A,0
-        JR nz,blit_set_scroll
-        LD A,0xff
-
-blit_set_scroll:
+        SUB 1
+        SBC A,A                 ; FF unless the editor is drawing
         LD (SCROLLING),A
         RET
 
@@ -2655,7 +2598,6 @@ fetch_store:
 
 ; ---- attr_hold_check: BB HOLD goes through fx_attr
 attr_hold_check:
-        LD A,(CUR_CHAR)
         CP ATTR_HOLD
         RET nz
         POP HL
@@ -2706,6 +2648,8 @@ rainbow_mod5:
         OR B
         LD (RAINBOW_IDX),A
         LD (MAGIC_COLOR_SET),A ; any non-zero value means "set"
+
+rainbow_next:
         POP HL
         JP render_next_char
 
@@ -2739,8 +2683,7 @@ rainbow_alt_sparkle:
         LD (SPARKLE),A
         INC HL
         LD (STORE_CURSOR),HL
-        POP HL
-        JP render_next_char
+        JR rainbow_next
 
 rainbow_step:
         LD A,(RAINBOW_IDX)
@@ -2777,10 +2720,6 @@ rainbow_lookup:
         LD HL,RAINBOW_COLORS
         ADD HL,DE
         LD A,(HL)
-        CP 0xff
-        JR nz,rainbow_apply
-        LD E,1
-        LD A,(RAINBOW_COLORS+1)
 
 rainbow_apply:
         AND 15
@@ -2840,10 +2779,9 @@ randbow_take:
 
 ; ---- RAINBOW_COLORS: per-character cycle red, orange, yellow, lime, green
 RAINBOW_COLORS:
-        db 0x00,0x8c,0x8d,0x8f,0x87,0x83,0xff,0xff
+        db 0x00,0x8c,0x8d,0x8f,0x87,0x83
 
 attr_remark_check:
-        LD A,(CUR_CHAR)
         CP ATTR_REM
         RET nz
 
@@ -2867,7 +2805,6 @@ render_next_char_jr4:
 
 ; ---- attr_wait_check: BA WAIT: flush, then spin until SPACE or a packet
 attr_wait_check:
-        LD A,(CUR_CHAR)
         CP ATTR_WAIT
         RET nz
         LD A,(COL_COUNT)
@@ -2901,7 +2838,6 @@ wait_check_pkt:
 
 ; ---- attr_thin_check: B9 THIN
 attr_thin_check:
-        LD A,(CUR_CHAR)
         CP ATTR_THIN
         RET nz
         LD (THIN_MODE),A
@@ -2945,14 +2881,12 @@ draw_hex_loop:
         CALL fetch_char
         LD A,(CUR_CHAR)
         CALL hex_digit_value
-        CP 0xff
-        JR z,draw_bad_hex
+        JR c,draw_bad_hex
         PUSH AF
         CALL fetch_char
         LD A,(CUR_CHAR)
         CALL hex_digit_value
-        CP 0xff
-        JR z,draw_pop_odd
+        JR c,draw_pop_odd
         RRD
         POP AF
         RRD
@@ -3000,7 +2934,7 @@ draw_abort:
         LD (CUR_CHAR),A
         JR draw_finish
 
-; ---- hex_digit_value: A = value of ASCII hex digit, FF if not one
+; ---- hex_digit_value: A = value of ASCII hex digit, CY if not one
 hex_digit_value:
         CP '0'
         JR c,hexval_bad
@@ -3019,7 +2953,7 @@ hexval_ok:
         RET
 
 hexval_bad:
-        LD A,0xff
+        SCF
         RET
 
 ; ---- magic_preprocess: MAGIC mode: random font per word, color change every
@@ -3049,21 +2983,13 @@ magic_char:
         LD A,2
         LD (FONT_MODE),A
         LD A,(MAGIC_LAST_CHAR)
-        CP 0x2e
-        JP z,magic_reseed
-        CP '!'
-        JP z,magic_reseed
-        CP '?'
-        JP z,magic_reseed
-        CP '9'+1
-        JP z,magic_reseed
-        CP 0x2c
+        LD HL,MAGIC_PUNCT
+        LD BC,5
+        CPIR
         JP z,magic_reseed
         LD A,' '
         LD (MAGIC_LAST_CHAR),A
-
-magic_ret_jr7:
-        JP magic_ret
+        RET
 
 magic_attr:
         CP ATTR_HOLD
@@ -3114,7 +3040,7 @@ magic_printable:
         JR z,magic_word_start
         LD A,(CUR_CHAR)
         LD (MAGIC_LAST_CHAR),A
-        JR magic_ret_jr7
+        RET
 
 magic_word_start:
         LD A,(CUR_CHAR)
@@ -3156,18 +3082,15 @@ magic_short_word:
         ADD A,(HL)
         LD (RND_SEED),A
         AND 3
-        JR z,magic_font_italic
-        LD HL,FONT_MODE
-        LD (HL),2
-        JR magic_count_words
-
-magic_font_italic:
-        LD HL,FONT_MODE
-        LD (HL),6
-        JR magic_count_words
+        LD A,2
+        JR nz,magic_font_set
+        LD A,6
+        JR magic_font_set
 
 magic_font_normal:
         XOR A
+
+magic_font_set:
         LD (FONT_MODE),A
 
 magic_count_words:
@@ -3183,14 +3106,10 @@ magic_count_words:
         LD A,(MAGIC_COLOR_SET)
         AND A
         JR z,magic_reset_words
-        XOR A
-        LD (MAGIC_COLOR_SET),A
-        LD (RND_VAL),A
-        JR magic_reset_words
+        JR magic_color_clear
 
 magic_reseed:
         LD A,(NMI_COUNT)
-        LD E,A
         AND 3
         ADD A,2
         LD (RND_VAL),A
@@ -3199,6 +3118,8 @@ magic_color_check:
         LD A,(MAGIC_COLOR_SET)
         AND A
         JR z,magic_next_color
+
+magic_color_clear:
         XOR A
         LD (MAGIC_COLOR_SET),A
         LD (RND_VAL),A
@@ -3262,6 +3183,9 @@ magic_ret:
 ;      other in MAGIC mode: yellow/lime, yellow/orange, red/orange
 MAGIC_CLASH_PAIRS:
         db 0xf7,0x7f,0xfd,0xdf,0xcd,0xdc
+; ---- MAGIC_PUNCT: a word ending in one of these changes the color in MAGIC mode
+MAGIC_PUNCT:
+        db ".!?:,"
 ; ---- MAGIC_COLOR_CYCLE: the 16 foregrounds MAGIC mode walks through
 MAGIC_COLOR_CYCLE:
         db 0x07,0x0c,0x0f,0x03,0x0c,0x03,0x0d,0x03,0x0f,0x03
@@ -3274,7 +3198,7 @@ unfetch_char:
         OR A
         SBC HL,DE
         RET z
-        LD HL,(STORE_CURSOR)
+        ADD HL,DE
         DEC HL
         LD (STORE_CURSOR),HL
 
@@ -3314,29 +3238,8 @@ bold_check_mode:
         RET z
 
 bold_expand:
-        LD A,(GLYPH_WIDTH)
-        LD B,A
-        LD HL,(GLYPH_PTR)
         LD DE,GLYPH_BUF
-        LD C,0
-
-bold_loop:
-        LD A,(HL)
-        LD (DE),A
-        INC HL
-        AND A
-        JR z,bold_next
-        OR (HL)
-        INC DE
-        INC C
-        LD (DE),A
-
-bold_next:
-        INC DE
-        INC C
-        DJNZ bold_loop
-        XOR A
-        LD (DE),A
+        CALL glyph_widen
         LD A,C
         CP 2
         JR z,bold_set_width
@@ -3348,39 +3251,63 @@ bold_next:
 bold_set_width:
         LD (GLYPH_WIDTH),A
         LD HL,GLYPH_BUF
-        LD (GLYPH_PTR),HL
-        LD IX,GLYPH_BUF
         LD B,4
+        LD A,0x7f
 
-bold_scan_7f:
-        LD A,(IX+0)
-        CP 0x7f
+bold_scan_7f:                   ; three 7F in a row from one of the first four columns
+        CP (HL)
+        INC HL
         JR nz,bold_scan_next
-        LD A,(IX+1)
-        CP 0x7f
+        CP (HL)
         JR nz,bold_scan_next
-        LD A,(IX+2)
-        CP 0x7f
+        INC HL
+        CP (HL)
+        DEC HL
         JR z,bold_collapse
 
 bold_scan_next:
-        INC IX
         DJNZ bold_scan_7f
         RET
 
-bold_collapse:
-        PUSH IX
-        POP HL
+bold_collapse:                  ; HL = the second of the three
         LD D,H
         LD E,L
-        INC HL
+        DEC DE
         LD BC,0x1c
         LDIR
-        LD A,(GLYPH_WIDTH)
-        DEC A
-        LD (GLYPH_WIDTH),A
+        LD HL,GLYPH_WIDTH
+        DEC (HL)
 
 bold_ret:
+        RET
+
+; ---- glyph_widen: the glyph into the buffer at DE, which becomes GLYPH_PTR, each
+;      lit column OR-ed into the next as well. C = the columns written, DE -> the
+;      zero written after them, A = 0.
+glyph_widen:
+        LD HL,(GLYPH_PTR)
+        LD (GLYPH_PTR),DE
+        LD A,(GLYPH_WIDTH)
+        LD B,A
+        LD C,0
+
+widen_loop:
+        LD A,(HL)
+        LD (DE),A
+        INC HL
+        AND A
+        JR z,widen_next
+        OR (HL)
+        INC DE
+        INC C
+        LD (DE),A
+
+widen_next:
+        INC DE
+        INC C
+        DJNZ widen_loop
+        XOR A
+        LD (DE),A
         RET
 
 ; ---- glyph_italic: shear the glyph into GLYPH_BUF_ITALIC (width + 2)
@@ -3395,27 +3322,27 @@ glyph_italic:
         LD B,0
         LDIR
         LD B,A
-        LD E,B
-        LD D,0
-        LD HL,GLYPH_BUF_ITALIC
-        ADD HL,DE
-        PUSH HL
-        POP IX
+        EX DE,HL                ; the column after the last
 
 italic_loop:
         LD A,(HL)
         AND 3
-        OR (IX+2)
-        LD (IX+2),A
+        INC HL
+        INC HL
+        OR (HL)                 ; rows 0-1 move two columns right
+        LD (HL),A
+        DEC HL
+        DEC HL
         LD A,(HL)
         AND 12
-        OR (IX+1)
-        LD (IX+1),A
+        INC HL
+        OR (HL)                 ; rows 2-3 one
+        LD (HL),A
+        DEC HL
         LD A,(HL)
         AND 0xf0
         LD (HL),A
         DEC HL
-        DEC IX
         DEC B
         JP p,italic_loop
         LD A,(GLYPH_WIDTH)
@@ -3433,29 +3360,8 @@ glyph_big:
         LD A,(FONT_MODE)
         BIT 3,A
         RET z
-        LD A,(GLYPH_WIDTH)
-        LD B,A
-        LD HL,(GLYPH_PTR)
         LD DE,GLYPH_BUF_BIG
-        LD C,0
-
-big_loop:
-        LD A,(HL)
-        LD (DE),A
-        INC HL
-        AND A
-        JR z,big_next
-        OR (HL)
-        INC DE
-        INC C
-        LD (DE),A
-
-big_next:
-        INC DE
-        INC C
-        DJNZ big_loop
-        XOR A
-        LD (DE),A
+        CALL glyph_widen
         DEC DE
         LD (DE),A
         DEC DE
@@ -3463,31 +3369,21 @@ big_next:
         LD A,C
         DEC A
         LD (GLYPH_WIDTH),A
-        LD HL,GLYPH_BUF_BIG
-        LD (GLYPH_PTR),HL
 
 big_ret:
         RET
 
 ; ---- fb_ptr_inc: HL++ inside the FRAMEBUF ring
+        ASSERT (FRAMEBUF >> 8) == (FRAMEBUF_END >> 8)   ; the ring lies in one page
 fb_ptr_inc:
         INC HL
         PUSH AF
-        PUSH DE
-        PUSH HL
-        LD DE,FRAMEBUF_END
-        XOR A
-        SBC HL,DE
-        JR c,fbinc_nowrap
-        LD HL,FRAMEBUF
-        POP DE
-        JR fbinc_ret
-
-fbinc_nowrap:
-        POP HL
+        LD A,L
+        CP FRAMEBUF_END & 0xff
+        JR nz,fbinc_ret
+        LD L,FRAMEBUF & 0xff
 
 fbinc_ret:
-        POP DE
         POP AF
         RET
 
@@ -3496,20 +3392,14 @@ fb_ptr_add:
         PUSH AF
         PUSH DE
         ADD HL,DE
-        PUSH HL
-        LD DE,FRAMEBUF_END
-        XOR A
-        SBC HL,DE
-        JR c,fbadd_nowrap
-        POP DE
+        LD DE,-FRAMEBUF_END & 0xffff
+        ADD HL,DE               ; CY: past the end, HL = how far; else add the end back
         LD DE,FRAMEBUF
-        ADD HL,DE
-        JR fbadd_ret
-
-fbadd_nowrap:
-        POP HL
+        JR c,fbadd_ret
+        LD E,FRAMEBUF_END & 0xff
 
 fbadd_ret:
+        ADD HL,DE
         POP DE
         POP AF
         RET
@@ -3521,6 +3411,13 @@ wait_frame_delay:
         AND A
         JR nz,wait_frame_delay
         RET
+
+; ---- fx_show: the rows on, then A frames of them
+fx_show:
+        LD (FRAME_DELAY),A
+        LD A,0xff
+        LD (DISP_ON),A
+        JR wait_frame_delay
 
 ; ---- wait_row6: spin until the display is on row 6
 wait_row6:
@@ -3629,14 +3526,13 @@ fx_done_effect:
         LD (CUR_COLOR),A
 
 fx_toggle_flush:
-        LD A,(FLUSH_PENDING)
-        CPL
-        AND A
-        LD (FLUSH_PENDING),A
+        LD HL,FLUSH_PENDING
+        LD A,(HL)
+        LD (HL),0
+        INC A                   ; FF: the flush has run, no staging until the next effect
         JR z,fx_reset_stage
-        XOR A
-        LD (FLUSH_PENDING),A
         LD A,FRAME_COLS
+        CP A                    ; Z on both paths: render_loop tests it when this returns
 
 fx_reset_stage:
         LD (COL_COUNT),A
@@ -3824,7 +3720,6 @@ fx_magic:
         LD A,1
         LD (MAGIC_WORD_COUNT),A
         LD A,(NMI_COUNT)
-        LD E,A
         AND 3
         ADD A,2
         LD (RND_VAL),A
@@ -3893,7 +3788,7 @@ halt_hold:
 ; ---- fb_colors_default: every color byte in FRAMEBUF -> 8F, keeping flash
 fb_colors_default:
         LD HL,FRAMEBUF
-        LD BC,FRAMEBUF_SIZE
+        LD B,FRAMEBUF_SIZE
 
 fbcol_loop:
         BIT 7,(HL)
@@ -3905,16 +3800,12 @@ fbcol_loop:
 
 fbcol_next:
         INC HL
-        DEC BC
-        LD A,C
-        OR B
-        JR nz,fbcol_loop
+        DJNZ fbcol_loop
         LD A,(WINDOW_COLOR)
         AND COLOR_FLASH
         OR COLOR_DEFAULT
         LD (WINDOW_COLOR),A
         LD (ROW_COLOR),A
-        LD E,A
         LD A,(MAGIC_MODE)
         AND A
         RET z
@@ -3974,22 +3865,15 @@ attr_back_color:
 back_set:
         XOR A
         LD (RAINBOW_IDX),A
-        LD HL,0
-        LD DE,0x20
         LD A,(CUR_CHAR)
         AND 3
-        JR z,back_apply
-
-back_mul:
-        ADD HL,DE
-        DEC A
-        JR nz,back_mul
-
-back_apply:
+        RRCA
+        RRCA
+        RRCA                    ; the background, bits 5-6
+        LD L,A
         LD A,(CUR_COLOR)
         AND 15
         OR L
-        AND 0x6f
         LD (CUR_COLOR),A
         LD A,0xff
         LD (MAGIC_COLOR_SET),A
@@ -4056,19 +3940,20 @@ tiny_get_glyph:
         LD HL,(STORE_CURSOR)
         LD A,(HL)
         LD (CUR_CHAR),A
+        LD C,A
         AND 0xf0
         CP GRAPH_BASE
         JR nz,tinyg_check
-        LD A,(CUR_CHAR)
+        LD A,C
         AND 15
         LD (CUR_CHAR),A
         JR tinyg_lookup
 
 tinyg_check:
-        LD A,(CUR_CHAR)
+        LD A,C
         AND 0x60
         JR z,tinyg_stop
-        LD A,(CUR_CHAR)
+        LD A,C
         CP ATTR_TIME
         JR z,tinyg_stop
         BIT 7,A
@@ -4180,32 +4065,26 @@ tiny_row_out:
 
 ; ---- disp_blank_row: Send 0x8F (all off) to the current row
 disp_blank_row:
+        LD HL,ROW_INDEX
+        LD A,6
+        SUB (HL)
+        OR 0x48
+        LD C,A
         LD HL,TXBUF             ; P7: see tiny_copy_frame
         LD B,FRAME_COLS
-        LD C,0x48
-        LD A,(ROW_INDEX)
-        CPL
-        AND 7
-        DEC A
-        OR C
-        LD C,A
-        RES 5,C
         LD A,COLOR_DEFAULT
         OUT (C),A
         OTIR
         OUT (PORT_STROBE),A
-        LD A,(ROW_INDEX)
-        CPL
-        AND 7
-        DEC A
+        LD HL,ROW_INDEX
+        LD A,6
+        SUB (HL)
         JR nz,tiny_row_select
         LD A,7
 
 tiny_row_select:
-        LD C,A
-        LD A,(LATCH_BIT7)
-        OR C
-        AND 0x8f
+        LD HL,LATCH_BIT7
+        OR (HL)
         LD C,A
         CALL latch_row_dim_tiny ; P35
 
@@ -4268,12 +4147,8 @@ right_wait_row:
         LD (DE),A
         INC HL
         INC DE
-        LD A,0xff
-        LD (DISP_ON),A
         LD A,1
-        LD (FRAME_DELAY),A
-
-        CALL wait_frame_delay
+        CALL fx_show
         DJNZ right_wait_row
         JR fx_hold_done
 
@@ -4287,26 +4162,16 @@ fx_done_jr9:
 ;      column per frame, right to left
 fxv_hold:
         LD HL,FRAMEBUF
-        LD BC,FRAMEBUF_SIZE
-
-hold_fill:
-        LD (HL),COLOR_DEFAULT
-        INC HL
-        DEC BC
-        LD A,C
-        OR B
-        JR nz,hold_fill
+        LD BC,FRAMEBUF_SIZE*0x100+COLOR_DEFAULT
+        CALL mem_fill
         CALL fxv_pointers
         LD A,(COL_COUNT)
-        PUSH HL
-        LD H,0
-        LD L,A
-        ADD HL,DE
-        POP DE
-        EX DE,HL
         LD C,A
         LD B,0
+        ADD HL,BC               ; both pointers to the last column
+        EX DE,HL
         ADD HL,BC
+        EX DE,HL
         LD B,A
         INC B
 
@@ -4316,22 +4181,15 @@ hold_wait_row:
         LD (DE),A
         DEC HL
         DEC DE
-        LD A,0xff
-        LD (DISP_ON),A
         LD A,1
-        LD (FRAME_DELAY),A
-
-        CALL wait_frame_delay
+        CALL fx_show
         DJNZ hold_wait_row
         JR fx_hold_done
 
 ; ---- fxv_pause: effect 1: copy the whole stage, then FRAME_DELAY 0x50
 fxv_pause:
         CALL fxv_prepare
-        LD B,0
-        LD A,(COL_COUNT)
-        LD C,A
-        LDIR
+        CALL copy_cols
 
 ; ---- fx_hold_done: an effect has its frame up: hold it, then end the effect
 fx_hold_done:
@@ -4383,7 +4241,7 @@ wipev_col:
 
 wipev_color_byte:
         LD A,C
-        CP 0xff
+        INC A
         LD A,COLOR_DEFAULT
         JR nz,wipev_store
         LD A,(HL)
@@ -4393,12 +4251,8 @@ wipev_store:
         INC HL
         INC DE
         DJNZ wipev_col
-        LD A,0xff
-        LD (DISP_ON),A
         LD A,3
-        LD (FRAME_DELAY),A
-
-        CALL wait_frame_delay
+        CALL fx_show
         POP BC
         POP DE
         POP HL
@@ -4438,9 +4292,7 @@ fxv_scroll:
         EX DE,HL
         ADD HL,BC
         EX DE,HL
-        LD A,(COL_COUNT)
-        LD C,A
-        LDIR
+        CALL copy_cols
         LD C,1                  ; step 1..6; 7 is the page itself
 
 scroll_step:
@@ -4489,11 +4341,8 @@ scroll_col_put:
         INC IX
         INC DE
         DJNZ scroll_col
-        LD A,0xff
-        LD (DISP_ON),A
         LD A,3
-        LD (FRAME_DELAY),A
-        CALL wait_frame_delay
+        CALL fx_show
         INC C
         LD A,C
         CP 7
@@ -4553,6 +4402,8 @@ twinkle_next:
         POP AF
         SUB TWINKLE_TICK
         JR nc,twinkle_tick
+
+sparkle_end:
         CALL twinkle_page
         JP fx_done
 
@@ -4618,8 +4469,7 @@ glimmer_roll:
         POP AF
         SUB GLIMMER_TICK
         JR nc,glimmer_tick
-        CALL twinkle_page
-        JP fx_done
+        JR sparkle_end
 
 ; ---- sparkle_init: the effect's last frame, up in the front half, into the back
 ;      too, so the columns around the text (HOLD's fill) match
@@ -4637,11 +4487,7 @@ page_back:
         ADD HL,DE
         EX DE,HL
         LD HL,TXBUF
-        LD B,0
-        LD A,(COL_COUNT)
-        LD C,A
-        LDIR
-        RET
+        JR copy_cols
 
 ; ---- fb_back: DE = the framebuffer half the panel is not showing
 fb_back:
@@ -4662,9 +4508,13 @@ fb_flip:
 ; ---- twinkle_page: the staged page up again
 twinkle_page:
         CALL fxv_pointers
-        LD B,0
+
+; ---- copy_cols: the COL_COUNT staged columns, HL to DE. Here, so the emulator's
+;      sparkle gates see the page copy between twinkle_page and twinkle_seed.
+copy_cols:
         LD A,(COL_COUNT)
         LD C,A
+        LD B,0
         LDIR
         RET
 
@@ -4736,33 +4586,35 @@ scroll_pixels:
 
 ; ---- store_clear_all: Reset MSG_STORE: 100 empty channels D0..? then DA
 store_clear_all:
-        LD A,MARK_LO
-        LD C,0xd0
         LD HL,MSG_STORE
-        LD B,CHANNELS
+        LD DE,MARK_LO*0x100+MARK_LO
+        CALL store_fill
+        LD A,MARK_HI            ; not a channel: init_sequence loads the default
+        JP seq_list_one
 
-clr_chan_loop:
-        LD (HL),A
+; ---- store_fill: from HL, the empty channels from marker E (tens), D (units)
+;      to the last, then the DA, which HL is left on
+store_fill:
+        LD (HL),E
+        LD A,E
+        CP MARK_LO+CHANNELS/10  ; the tens byte past the last channel
+        JR z,fill_end
         INC HL
-        LD (HL),C
+        LD (HL),D
         INC HL
         LD (HL),TEXT_END
         INC HL
-        INC C
-        LD D,A
-        LD A,C
-        CP 0xda
-        JR nz,clr_chan_next
-        LD C,0xd0
         INC D
-
-clr_chan_next:
         LD A,D
-        DJNZ clr_chan_loop
-        LD A,MARK_HI
-        LD (HL),A
-        LD A,MARK_HI            ; not a channel: init_sequence loads the default
-        JP seq_list_one
+        CP MARK_HI
+        JR nz,store_fill
+        LD D,MARK_LO
+        INC E
+        JR store_fill
+
+fill_end:
+        LD (HL),MARK_HI
+        RET
 
 ; ---- ram_probe (P13, P51): which chip, from where it mirrors FRAMEBUF ->
 ;      STORE_LIMIT, STACK_INIT, STACK_BOT and PKT_MAX. FRAMEBUF is scratch at
@@ -4822,18 +4674,15 @@ store_init:
         LD HL,(STORE_LIMIT)
         LD (STORE_END),HL
         PUSH HL
-        LD DE,100
-        OR A
-        SBC HL,DE
+        LD DE,-100 & 0xffff
+        ADD HL,DE
         LD (STORE_WARN_LIMIT),HL
         POP HL
-        LD DE,MSG_STORE-1
-        OR A
-        SBC HL,DE               ; size = top - MSG_STORE + 1
+        LD DE,-(MSG_STORE-1) & 0xffff
+        ADD HL,DE               ; size = top - MSG_STORE + 1
         LD (STORE_SIZE),HL
-        LD DE,CHANNELS*3+1      ; the empty channels' framing
-        OR A
-        SBC HL,DE
+        LD DE,-(CHANNELS*3+1) & 0xffff ; the empty channels' framing
+        ADD HL,DE
         LD (STORE_TEXT_LIMIT),HL
         LD HL,(STORE_LIMIT)
         LD (HL),MARK_HI
@@ -4860,7 +4709,8 @@ ir_init:
         LD (IR_KEY),A
         LD (GEN_COUNTDOWN),A
         LD (GEN_COUNTDOWN+1),A
-        LD (IR_QUIET),A         ; P36: a gate left set by the leader wait would keep the idle count asleep and cost the next frame
+        DEC A
+        LD (IR_QUIET),A         ; P36: awake; a gate left set by the leader wait would cost the next frame
 
 ; ---- ir_reset: IR decoder: reset state, wait for leader (port C0 IR_BIT)
 ir_reset:
@@ -4883,7 +4733,7 @@ ir_st_idle:
         IN A,(PORT_IN)
         BIT IR_BIT,A
         JR z,ir_idle_low
-        LD A,PORT_IR|1
+        LD A,PORT_IR
         LD (IR_QUIET),A         ; P35: a high line while idle: sleep until it falls
         JR ir_reset
 
@@ -4907,7 +4757,7 @@ ir_st_leader:
         IN A,(PORT_IN)
         BIT IR_BIT,A
         JR nz,ir_leader_seen
-        LD A,1
+        XOR A
         LD (IR_QUIET),A         ; P35: sleep until the ISR sees the line rise
         JR ir_leader_ret
 
@@ -4929,7 +4779,7 @@ ir_st_leader2:
         IN A,(PORT_IN)
         BIT IR_BIT,A
         JR z,ir_leader2_fell
-        LD A,PORT_IR|1
+        LD A,PORT_IR
         LD (IR_QUIET),A         ; P35: a line that stays high (a receiver unplugged) parks the decoder here
         JR ir_leader2_ret
 
@@ -5004,14 +4854,9 @@ ir_rej_bridge:
 
 ir_rej_count:
         INC (HL)
-
-ir_reject_hl:
+        LD HL,STAT_IR_BAD       ; P40: a frame dropped after its leader
+        INC (HL)
         POP HL
-
-ir_reject:                  ; P40: a frame dropped after its leader
-        LD A,(STAT_IR_BAD)
-        INC A
-        LD (STAT_IR_BAD),A
         JP ir_reset
 
 ir_pop_ret:
@@ -5084,7 +4929,7 @@ ir_cell_tick:
         INC A
         JR nz,ir_cell_known
         BIT 5,(HL)              ; no rise: a 1 merged with the 0 before it
-        JP nz,ir_rej_cell
+        JR nz,ir_rej_cell
         LD A,2
 
 ir_cell_known:
@@ -5102,12 +4947,11 @@ ir_cell_known:
         LD HL,IR_BITCNT
         DEC (HL)
         JP nz,ir_pop_ret
-        POP HL
 
 ir_frame_done:
-        LD A,(STAT_IR_OK)       ; P40
-        INC A
-        LD (STAT_IR_OK),A
+        LD HL,STAT_IR_OK        ; P40
+        INC (HL)
+        POP HL
         LD A,(CFG_LOCK)         ; P35: a locked sign drops the key here, before
         AND A                   ; either consumer sees it
         JR nz,ir_done
@@ -5196,10 +5040,7 @@ tx_latch_bit:
 
 tx_stop_bit:
         LD A,(CTRL_LATCH_SHADOW)
-        AND ~LATCH_TX&0xff
-        LD (CTRL_LATCH_SHADOW),A
-        LD (CTRL_LATCH),A
-        RET
+        JR tx_mark
 
 tx_idle:
         LD HL,TX_STATUS
@@ -5315,6 +5156,10 @@ rx_start:
         RET nz
         LD (RX_SHIFT),A
         LD (RX_WIDTH),A
+    IFNDEF LITE
+        LD (IR_MASK),A          ; P52: the remote decoder off until the next frame end
+        LD (IR_QUIET),A
+    ENDIF
         LD A,8
         LD (RX_BITS),A
         LD A,(RX_IDLE)
@@ -5473,17 +5318,10 @@ rx_sample_now:
         DEC A
         LD (RX_BITS),A
         LD A,(PORT_SAMPLE)
-        AND 8                   ; space is a 0 bit
-        LD A,(RX_SHIFT)
-        JR nz,rx_bit_zero
-        SCF
-        RR A                    ; bits arrive LSB first: in at the top
-        LD (RX_SHIFT),A
-        RET
-
-rx_bit_zero:
-        SRL A
-        LD (RX_SHIFT),A
+        AND 8                   ; space is a 0 bit:
+        SUB 1                   ; CY for mark
+        LD HL,RX_SHIFT
+        RR (HL)                 ; bits arrive LSB first: in at the top
         RET
 
 rx_stop_sample:
@@ -5646,21 +5484,18 @@ lit_set:
 ; ---- rx_fifo_get: Pop one byte from RX_FIFO into RX_BYTE. Returns NC with A=byte, or C if empty
 rx_fifo_get:
         DI                      ; P30: the ISR appends to the FIFO
-        LD A,(RX_COUNT)
+        LD HL,RX_COUNT
+        LD A,(HL)
         AND A
         JR z,rx_fifo_empty
-        LD HL,RX_FIFO
-        LD A,(HL)
-        LD (RX_BYTE),A
-        LD A,(RX_COUNT)
-        LD BC,8
+        DEC (HL)
         LD HL,RX_FIFO+1
         LD DE,RX_FIFO
+        LD A,(DE)
+        LD BC,7
         LDIR
-        DEC A
-        LD (RX_COUNT),A
         EI
-        LD A,(RX_BYTE)
+        LD (RX_BYTE),A
         OR A
         RET
 
@@ -5910,29 +5745,37 @@ txf_data_loop:
         LD A,E
         JP tx_send_byte
 
-; ---- bin_to_dec5: HL -> 5 ASCII digits at (IX) using table 10000,1000,100,10,1
+; ---- bin_to_dec5: HL -> 5 ASCII digits at DE, which advances (10000,1000,100,10,1)
 bin_to_dec5:
-        LD IY,DEC_TABLE
+        LD BC,DEC_TABLE
 
-; ---- bin_to_dec_iy: digits from the place-value table at IY
-bin_to_dec_iy:
-        LD B,0x2f
-        LD E,(IY+0)
-        LD D,(IY+1)
-        BIT 7,D
-        RET nz
+; ---- bin_to_dec_bc: digits from the place-value table at BC
+bin_to_dec_bc:
+        PUSH DE
+        LD A,(BC)
+        LD E,A
+        INC BC
+        LD A,(BC)
+        LD D,A
+        INC BC
+        RLA
+        JR c,dec_end            ; FFFF ends the table
+        LD A,'0'-1
 
 dec_digit_loop:
-        INC B
-        OR A
+        INC A
+        AND A
         SBC HL,DE
         JR nc,dec_digit_loop
         ADD HL,DE
-        LD (IX+0),B
-        INC IX
-        INC IY
-        INC IY
-        JR bin_to_dec_iy
+        POP DE
+        LD (DE),A
+        INC DE
+        JR bin_to_dec_bc
+
+dec_end:
+        POP DE
+        RET
 
 ; ---- data 18e8-18f3: 10000,1000,100,10,1,-1 for bin_to_dec5
 DEC_TABLE:
@@ -5948,14 +5791,12 @@ clock_tick:
         LD A,(CLK_RUN)
         AND A
         RET z
-        LD A,(NMI_COUNT)
-        INC A
-        LD (NMI_COUNT),A
-        LD HL,NMI_PER_SEC
+        LD HL,NMI_COUNT
+        INC (HL)
+        LD A,(NMI_PER_SEC)
         CP (HL)
         RET nz
-        XOR A
-        LD (NMI_COUNT),A
+        LD (HL),0
         LD HL,STAT_MERGE        ; P40: roll the merge count, keep the worst, count uptime
         LD A,(HL)
         LD (HL),0
@@ -6058,7 +5899,7 @@ clk_h1_wrap:
 ; ---- scroll_off_text: push the displayed text off by rendering 14 spaces
 scroll_off_text:
         LD B,14
-        LD A,0
+        XOR A
         LD (FONT_MODE),A
 
 scrolloff_loop:
@@ -6071,52 +5912,41 @@ scrolloff_loop:
         DJNZ scrolloff_loop
         RET
 
-; ---- clear_framebuf: FRAMEBUF (344 bytes) = 0x80
+; ---- clear_framebuf: the column ring = 0x80
+        ASSERT FRAMEBUF_SIZE < 256
 clear_framebuf:
         PUSH HL
         PUSH BC
         LD HL,FRAMEBUF
-        LD BC,FRAMEBUF_SIZE
-
-clrfb_loop:
-        LD (HL),0x80
-        INC HL
-        DEC BC
-        LD A,C
-        OR B
-        JR nz,clrfb_loop
-        POP BC
-        POP HL
-        RET
+        LD BC,FRAMEBUF_SIZE*0x100+0x80
+        JR fill_pop
 
 ; ---- clear_txbuf: zero the staging frame at TXBUF
 clear_txbuf:
         PUSH HL
         PUSH BC
         LD HL,TXBUF
-        LD B,FRAME_COLS
+        LD BC,FRAME_COLS*0x100
+        JR fill_pop
 
-clrtx_loop:
-        LD (HL),0
-        INC HL
-        DJNZ clrtx_loop
-        POP BC
-        POP HL
-        RET
-
-; ---- clear_glyph_tmp
+; ---- clear_glyph_tmp: zero the three glyph buffers
 clear_glyph_tmp:
         PUSH HL
         PUSH BC
         LD HL,GLYPH_BUF
-        LD B,0x60
+        LD BC,0x6000
 
-clrglyph_loop:
-        LD (HL),0
-        INC HL
-        DJNZ clrglyph_loop
+fill_pop:
+        CALL mem_fill
         POP BC
         POP HL
+        RET
+
+; ---- mem_fill: B bytes from HL = C
+mem_fill:
+        LD (HL),C
+        INC HL
+        DJNZ mem_fill
         RET
 
 ; ---- key_handler: Handle a key / IR code: menu navigation (ADDRESS?, TIME?, PROG MSG?, SEQ MSG? ...)
@@ -6434,11 +6264,16 @@ is_marker:
         RET
 
 editor_show_invalid:
+        LD HL,MENU_STR_INVALID
+        CALL menu_msg
+        JP editor_loop
+
+; ---- menu_msg: the editor's next redraw shows the message at HL
+menu_msg:
+        LD (MENU_MSG_PTR),HL
         LD A,0xff
         LD (MENU_MSG_FLAG),A
-        LD HL,MENU_STR_INVALID
-        LD (MENU_MSG_PTR),HL
-        JP editor_loop
+        RET
 
 ; ---- editor_exit: STOP/START in the editor: add the channel to SEQ_LIST
 ;      if absent and go back to displaying
@@ -6514,10 +6349,10 @@ exit_seq_loop:
 
 exit_seq_insert:
         LD A,E
-        LD HL,SEQ_LIST+102
+        LD HL,SEQ_END-2
         LD (HL),0xff
-        LD DE,SEQ_LIST+103
-        LD BC,0x67
+        LD DE,SEQ_END-1
+        LD BC,SEQ_LIST_LEN-1
         LDDR
 
 exit_seq_first:
@@ -6627,9 +6462,8 @@ clock_step:
         LD A,(CLK_PM)
         AND CLK_24H             ; P32: 24-hour keeps the leading zero
         OR (HL)
-        LD A,(CLK_RENDER_STEP)
+        LD A,0                  ; the step
         JR nz,clock_next_step
-        LD A,(CLK_RENDER_STEP)
         INC A
         LD (CLK_RENDER_STEP),A
         INC HL
@@ -6642,15 +6476,13 @@ clock_next_step:
         CP 3
         JR nz,clock_not_colon
         LD A,':'
-        LD (CUR_CHAR),A
-        JR clock_emit
+        JR clock_emit_a
 
 clock_not_colon:
         CP 6
         JR nz,clock_not_space
         LD A,' '
-        LD (CUR_CHAR),A
-        JR clock_emit
+        JR clock_emit_a
 
 clock_not_space:
         CP 7
@@ -6658,12 +6490,9 @@ clock_not_space:
         LD A,(CLK_PM)
         AND 1
         LD A,'A'
-        JR z,clock_ampm_char
+        JR z,clock_emit_a
         LD A,'P'
-
-clock_ampm_char:
-        LD (CUR_CHAR),A
-        JR clock_emit
+        JR clock_emit_a
 
 clock_not_ampm:
         CP 8
@@ -6684,20 +6513,21 @@ clock_digit:
         JR nz,clock_emit
         LD A,(CLK_PM)
         AND CLK_24H             ; P32: 24-hour ends at the last minute digit:
-        JR nz,clock_emit_last   ; no space, no AM or PM
-
-clock_emit:
-        CALL unfetch_char
-        LD A,(CUR_CHAR)
-
-glyph_lookup_jr15:
-        JP glyph_lookup
+        JR z,clock_emit         ; no space, no AM or PM
 
 clock_emit_last:
         LD A,0xff
         LD (CLK_RENDER_STEP),A
-        LD A,(CUR_CHAR)
         JR glyph_lookup_jr15
+
+clock_emit_a:
+        LD (CUR_CHAR),A
+
+clock_emit:
+        CALL unfetch_char
+
+glyph_lookup_jr15:
+        JP glyph_lookup
 
 ; ---- menu_ask_chan_cur: ask for a channel number, prefilled from INS_PTR
 menu_ask_chan_cur:
@@ -6713,30 +6543,10 @@ menu_ask_chan:                  ; the callers keep nothing in the registers
 askchan_prefill:
         LD HL,(INS_PTR)
         DEC HL
-        LD A,(HL)
-        CP 0xda
-        JR nz,askchan_units_digit
-        LD A,0x44
-        JR askchan_store_units
-
-askchan_units_digit:
-        AND 15
-        OR '0'
-
-askchan_store_units:
+        CALL mark_digit
         LD (CHAN_D1),A
         DEC HL
-        LD A,(HL)
-        CP 0xda
-        JR nz,askchan_tens_digit
-        LD A,0x44
-        JR askchan_store_tens
-
-askchan_tens_digit:
-        AND 15
-        OR '0'
-
-askchan_store_tens:
+        CALL mark_digit
         LD (CHAN_D10),A
 
 askchan_show:
@@ -6768,18 +6578,19 @@ askchan_key:
         db 0xff
         CALL is_digit           ; A is still the key
         JR nc,askchan_key
-        LD IX,CHAN_D10
-        LD A,(IX+1)
-        LD (IX+0),A
-        LD A,(CUR_CHAR)
-        LD (IX+1),A
+        LD HL,CHAN_D1
+        LD C,(HL)
+        LD (HL),A
+        DEC HL                  ; CHAN_D10
+        LD (HL),C
         JR askchan_show
 
 askchan_backspace:
-        LD IX,CHAN_D10
-        LD A,(IX+0)
-        LD (IX+1),A
-        LD (IX+0),0x30
+        LD HL,CHAN_D10
+        LD A,(HL)
+        LD (HL),'0'
+        INC HL
+        LD (HL),A
         JR askchan_show
 
 askchan_accept:
@@ -6804,7 +6615,7 @@ askchan_clear:
         LD A,' '
         LD (CHAN_D10),A
         LD (CHAN_D1),A
-        JP askchan_show
+        JR askchan_show
 
 askchan_enter:
         LD A,(CHAN_D1)
@@ -6845,9 +6656,9 @@ addr_default_1:
 
 addr_to_ascii:
         LD L,A
-        LD IX,MENU_ENTRY_BUF
-        LD IY,DEC_TABLE+4
-        CALL bin_to_dec_iy
+        LD DE,MENU_ENTRY_BUF
+        LD BC,DEC_TABLE+4
+        CALL bin_to_dec_bc
         LD HL,MENU_ENTRY_BUF
         LD B,3
 
@@ -6927,47 +6738,39 @@ addr_convert:
         CALL cfg_seal           ; P35
         JR editor_reshow
 
-; ---- ascii_dec_to_bin: Convert B ASCII digits at (HL) to binary in A (C set if invalid)
+; ---- ascii_dec_to_bin: B ASCII digits at HL to binary in A; CY if past 255 (C lost)
 ascii_dec_to_bin:
-        PUSH BC
-        LD IX,POW10_BYTES
-        DEC B
-        LD E,B
-        LD D,0
-        ADD IX,DE
         XOR A
-        POP BC
 
 a2b_digit_loop:
-        PUSH BC
-        LD E,A
+        LD C,A
+        ADD A,A
+        RET c
+        ADD A,A
+        RET c
+        ADD A,C
+        RET c
+        ADD A,A                 ; x 10
+        RET c
+        LD C,A
         LD A,(HL)
         AND 15
-        LD B,A
-        OR A
-        LD A,E
-        JR z,a2b_next
-
-a2b_add_loop:
-        ADD A,(IX+0)
-        JR c,a2b_overflow
-        DJNZ a2b_add_loop
-
-a2b_next:
+        ADD A,C
+        RET c
         INC HL
-        DEC IX
-        POP BC
         DJNZ a2b_digit_loop
-        OR A
         RET
 
-a2b_overflow:
-        POP BC
-        SCF
+; ---- mark_digit: A = the marker byte at HL as a digit, or D for the demo's DA
+mark_digit:
+        LD A,(HL)
+        CP MARK_HI
+        LD A,'D'
+        RET z
+        LD A,(HL)
+        AND 15
+        OR '0'
         RET
-; ---- POW10_BYTES: place values 1, 10, 100 for ascii_dec_to_bin
-POW10_BYTES:
-        db 0x01,0x0a,"d"
 
 ; ---- is_digit: C set if A is ASCII 0-9
 is_digit:
@@ -6985,10 +6788,8 @@ not_digit:
 
 ; ---- menu_addr_invalid
 menu_addr_invalid:
-        LD A,0xff
-        LD (MENU_MSG_FLAG),A
         LD HL,MENU_STR_INVALID
-        LD (MENU_MSG_PTR),HL
+        CALL menu_msg
         CALL editor_redraw
         JP menu_address
 
@@ -7030,15 +6831,9 @@ show_top_of_msg:
         LD HL,(STORE_CURSOR)
 
 top_digit_loop:
-        LD A,(HL)
-        CP 0xda
-        JR nz,top_digit
-        LD A,0x44
-        JR top_emit
-
-top_digit:
-        AND 15
-        OR '0'
+        CALL mark_digit
+        CP 'D'
+        JR z,top_emit
         CALL is_digit
         JR c,top_emit
         LD A,'0'
@@ -7056,7 +6851,7 @@ menu_clear_all:
         CALL menu_getchar
         AND 0x5f
         CP 'Y'
-        JP nz,editor_loop
+        JR nz,editor_loop_jr12
         CALL store_clear_all
         CALL store_finalize
         XOR A
@@ -7178,7 +6973,6 @@ editor_select_chan:
 menu_seq_msg:
         LD A,0xff
         LD (SEQ_SET),A
-        LD A,0xff
         CALL seq_list_one       ; empty: FF throughout
         LD (SEQ_MENU_ACTIVE),A
         LD HL,SEQ_LIST
@@ -7272,9 +7066,8 @@ getkey_ir:
         JR z,getkey_none
         AND 0x3f
         LD (IR_KEYNUM),A
-        XOR A
-        LD (IR_CODE),A
-        LD A,(IR_KEYNUM)
+        LD HL,IR_CODE
+        LD (HL),0
         CP 0x3e
         JR z,getkey_released
         OR 0x40                 ; a seen key carries bit 6: idle 0 is not key 0
@@ -7415,11 +7208,10 @@ getkey_history:
         LD (EURO_STATE),A
 
 getkey_return:
-        LD A,(IR_KEY_CHAR)
-        LD (EDIT_KEY),A
         XOR A
         LD (KEY_ECHO_TX),A
-        LD A,(EDIT_KEY)
+        LD A,(IR_KEY_CHAR)
+        LD (EDIT_KEY),A
         AND A
         RET
 
@@ -7557,7 +7349,6 @@ show_top_of_msg_jr24:
 
 ; ---- cursor_left_8: 0B
 cursor_left_8:
-        LD B,8
         LD HL,(STORE_CURSOR)
         LD A,(HL)
         CALL is_marker
@@ -7598,13 +7389,9 @@ insert_do:
         LD DE,(STORE_LIMIT)
         OR A
         SBC HL,DE
-        LD A,H
-        OR L
         JR nz,insert_shift
-        LD A,0xff
-        LD (MENU_MSG_FLAG),A
         LD HL,MENU_STR_MEM_FULL
-        LD (MENU_MSG_PTR),HL
+        CALL menu_msg
 
 editor_loop_jr13:
         JP editor_loop
@@ -7632,10 +7419,8 @@ insert_shift:
         OR A
         SBC HL,DE
         JR nz,insert_done
-        LD A,0xff
-        LD (MENU_MSG_FLAG),A
         LD HL,MENU_STR_100_KEYS
-        LD (MENU_MSG_PTR),HL
+        CALL menu_msg
 
 insert_done:
         JR editor_loop_jr13
@@ -7667,28 +7452,24 @@ editor_translate_key:
 
 ; ---- apply_graph_prefix: GRAPH n -> A0|n
 apply_graph_prefix:
-        LD A,(GRAPH_PENDING)
-        OR A
-        RET z
-        LD A,(EDIT_KEY)
-        AND 15
-        OR GRAPH_BASE
-        LD (EDIT_KEY),A
-        XOR A
-        LD (GRAPH_PENDING),A
-        RET
+        LD HL,GRAPH_PENDING
+        LD BC,0x0f00+GRAPH_BASE
+        JR prefix_apply
 
 ; ---- apply_speed_prefix: SPEED n -> F0|(n&7)
 apply_speed_prefix:
-        LD A,(SPEED_PENDING)
-        AND A
+        LD HL,SPEED_PENDING
+        LD BC,0x0700+SPEED_BASE
+
+prefix_apply:                   ; the flag at HL set: the key masked with B, OR C
+        LD A,(HL)
+        OR A
         RET z
+        LD (HL),0
         LD A,(EDIT_KEY)
-        AND 7
-        OR SPEED_BASE
+        AND B
+        OR C
         LD (EDIT_KEY),A
-        XOR A
-        LD (SPEED_PENDING),A
         RET
 
 ; ---- editor_key_to_attr: FUNC (B7) second functions: GRAPH->B8 DRAW, NORM->B9 THIN,
@@ -7776,51 +7557,37 @@ FUNC2_TABLE:
         db 0xff
 
 ; ---- apply_color_prefix: COLOR n -> FG_IDX_TABLE, BGRND n -> BG_IDX_TABLE
-apply_color_prefix:
+apply_color_prefix:             ; editor_have_key clears both flags: the key is no longer SHIFT
         LD A,(COLOR_PENDING)
         AND A
         JR nz,prefix_fore
         LD A,(BGRND_PENDING)
         AND A
-        JR nz,prefix_back
-        RET
+        RET z
+        LD A,(EDIT_KEY)
+        AND 7
+        DEC A
+        LD HL,BG_IDX_TABLE
+        CP 6
+        JR c,prefix_lookup
+        LD A,5
+        JR prefix_lookup
 
 prefix_fore:
         LD A,(EDIT_KEY)
         AND 15
         DEC A
+        LD HL,FG_IDX_TABLE
         CP 10
-        JR c,prefix_fore_lookup
+        JR c,prefix_lookup
         LD A,2
 
-prefix_fore_lookup:
-        LD HL,FG_IDX_TABLE
+prefix_lookup:
         LD C,A
         LD B,0
         ADD HL,BC
         LD A,(HL)
         LD (EDIT_KEY),A
-        XOR A
-        LD (COLOR_PENDING),A
-        RET
-
-prefix_back:
-        LD A,(EDIT_KEY)
-        AND 7
-        DEC A
-        CP 6
-        JR c,prefix_back_lookup
-        LD A,5
-
-prefix_back_lookup:
-        LD HL,BG_IDX_TABLE
-        LD C,A
-        LD B,0
-        ADD HL,BC
-        LD A,(HL)
-        LD (EDIT_KEY),A
-        XOR A
-        LD (BGRND_PENDING),A
         RET
 
 ; ---- data 2718-2721: cmd 15 n: foreground color codes (Red,Orange,Yellow,Lime,Green,84,8E,Black,8B,81)
@@ -7866,12 +7633,11 @@ redraw_start:
         LD (REDRAW_PTR),HL
 
 redraw_loop:
+        LD A,0xff
+        LD (TINY_MODE),A
         LD HL,(REDRAW_PTR)
         LD A,(HL)
         LD (CUR_CHAR),A
-        LD A,0xff
-        LD (TINY_MODE),A
-        LD A,(CUR_CHAR)
         CP ' '
         JR nz,redraw_classify
         LD A,(REDRAW_MAGIC)
@@ -7892,7 +7658,6 @@ redraw_classify:
         JR redraw_char_check_jr18
 
 redraw_high:
-        LD A,(CUR_CHAR)
         CP 0x94
         JR c,redraw_attr
         CP 0x9f
@@ -7947,21 +7712,21 @@ redraw_not_norm:
 redraw_not_flash:
         CP ATTR_ITALIC
         JR nz,redraw_not_italic
-        LD A,CHAN_DEMO
-        LD (FONT_MODE),A
-        JR redraw_label_check
+        LD A,0x64               ; bit 2 (the other bits are stock's and unread)
+        JR redraw_set_font
 
 redraw_not_italic:
         CP ATTR_BOLD
         JR nz,redraw_not_bold
         LD A,2
-        LD (FONT_MODE),A
-        JR redraw_label_check
+        JR redraw_set_font
 
 redraw_not_bold:
         CP ATTR_BIG
         JR nz,redraw_not_big
         LD A,10
+
+redraw_set_font:
         LD (FONT_MODE),A
         JR redraw_label_check
 
@@ -8071,57 +7836,27 @@ redraw_next:
         EX DE,HL
         OR A
         SBC HL,DE
-        EX DE,HL
         JP nc,redraw_loop
 
 redraw_status:
         LD A,0xff
         LD (TINY_MODE),A
-        LD A,(GRAPH_PENDING)
-        AND A
-        JR z,status_not_graph
-        LD HL,STR_GRAPH
-        JR status_show
+        LD HL,STATUS_FLAGS
+        LD B,6
 
-status_not_graph:
-        LD A,(COLOR_PENDING)
+status_scan:
+        LD E,(HL)
+        INC HL
+        LD D,(HL)
+        INC HL
+        LD A,(DE)               ; the flag
+        LD E,(HL)
+        INC HL
+        LD D,(HL)               ; its label
+        INC HL
         OR A
-        JR z,status_not_color
-        LD HL,STR_COLOR
-        JR status_show
-
-status_not_color:
-        LD A,(BGRND_PENDING)
-        OR A
-        JR z,status_not_bgrnd
-        LD HL,STR_BGRND
-        JR status_show
-
-status_not_bgrnd:
-        LD A,(FUNC_PENDING)
-        OR A
-        JR z,status_not_func
-        LD HL,STR_FUNC
-        CP 2
-        JR nz,status_show
-        LD HL,STR_FUNC2
-        JR status_show
-
-status_not_func:
-        LD A,(EURO_STATE)
-        OR A
-        JR z,status_not_euro
-        LD HL,STR_EURO
-        JR status_show
-
-status_not_euro:
-        LD A,(SPEED_PENDING)
-        OR A
-        JR z,status_not_speed
-        LD HL,STR_SPEED
-        JR status_show
-
-status_not_speed:
+        JR nz,status_found
+        DJNZ status_scan
         LD A,(MAGIC_MSG_CHAN)
         OR A
         JR z,status_shift_msg
@@ -8141,6 +7876,12 @@ magicmsg_digits:
         CALL glyph_put_next
         DJNZ magicmsg_digits
         JR status_shift_msg
+
+status_found:
+        EX DE,HL
+        CP 2                    ; only FUNC_PENDING is ever 2
+        JR nz,status_show
+        LD HL,STR_FUNC2
 
 status_show:
         CALL show_label
@@ -8182,6 +7923,15 @@ redraw_ret:
         LD (DISP_ON),A
         RET
 
+; ---- STATUS_FLAGS: the status line's flags and labels, the first one set is shown
+STATUS_FLAGS:
+        dw GRAPH_PENDING,STR_GRAPH
+        dw COLOR_PENDING,STR_COLOR
+        dw BGRND_PENDING,STR_BGRND
+        dw FUNC_PENDING,STR_FUNC
+        dw EURO_STATE,STR_EURO
+        dw SPEED_PENDING,STR_SPEED
+
 ; ---- redraw_in_window: CY if the byte at REDRAW_PTR lies before REDRAW_FROM (not shown)
 redraw_in_window:
         LD HL,(REDRAW_PTR)
@@ -8206,9 +7956,7 @@ hold_wait_row2:
         JR nz,hold_wait_row2
         LD A,(CFG_HOLD)         ; P35
         LD (FRAME_DELAY),A
-
-        CALL wait_frame_delay
-        RET
+        JP wait_frame_delay
 
 ; ---- menu_prompt: HL = string: start a fresh frame and show it
 menu_prompt:
@@ -8256,19 +8004,15 @@ show_label:
 ; ---- fb_rewind_window: FB_COL = FB_COLPTR - 86 (ring wrap)
 fb_rewind_window:
         LD HL,(FB_COLPTR)
-        LD DE,FRAME_COLS
-        XOR A
-        SBC HL,DE
-        LD (FB_COL),HL
+        LD DE,-(FRAMEBUF+FRAME_COLS) & 0xffff
+        ADD HL,DE               ; CY: no wrap, HL = the offset into the ring
         LD DE,FRAMEBUF
-        XOR A
-        SBC HL,DE
-        RET nc
-        LD DE,FRAMEBUF_END
+        JR c,rewind_set
+        LD E,FRAMEBUF_END & 0xff
+
+rewind_set:
         ADD HL,DE
         LD (FB_COL),HL
-
-rewind_ret:
         RET
 
 ; ---- dispatch: A against the table that follows the CALL (DISP key, target;
@@ -8325,8 +8069,8 @@ pkt_process:
         ; processed and its reply sent. Never for broadcast frames. Decided
         ; now: a frame parsed meanwhile overwrites PKT_FLAG and PKT_ADDR.
         LD A,(PKT_FLAG)
-        BIT 0,A
-        JR z,pkt_entry_nodone
+        RRCA
+        JR nc,pkt_entry_nodone
         LD A,(PKT_ADDR)
         CP ADDR_BROADCAST
         JR z,pkt_entry_nodone
@@ -8354,7 +8098,7 @@ pkt_entry_nodone:
         JR pkt_set_ins          ; channel 0, seated as 09 30 30 0E leaves it
 
 pkt_cursor_in_store:
-        LD HL,(STORE_CURSOR)
+        ADD HL,DE
         LD A,(HL)
         CALL is_marker
         JR nc,pkt_find_marker
@@ -8685,18 +8429,14 @@ cmd_B4_query:
         ; display keeps running. The query ends the packet: the frame is built
         ; over PKT_BUF.
         CALL pkt_next_byte
-        CP QUERY_ROMID
-        JR z,pq_romid
-        CP QUERY_MEMORY
-        JR z,pq_memory
-        CP QUERY_DUMP
-        JR z,pq_dump
-        CP QUERY_STATS
-        JP z,pq_stats
-        CP QUERY_CONFIG
-        JR z,pq_config
-        CP QUERY_SEQ
-        JR z,pq_seq
+        CALL dispatch
+        DKEY QUERY_ROMID, pq_romid
+        DKEY QUERY_MEMORY, pq_memory
+        DKEY QUERY_DUMP, pq_dump
+        DKEY QUERY_STATS, pq_stats
+        DKEY QUERY_CONFIG, pq_config
+        DKEY QUERY_SEQ, pq_seq
+        db 0xff
         JP pkt_done_pop
 
 pq_romid:
@@ -8706,13 +8446,13 @@ pq_romid:
 
 pq_memory:
         CALL store_finalize
-        LD IX,PKT_BUF+3
+        LD DE,PKT_BUF+3
         LD HL,(STORE_SIZE)
         CALL bin_to_dec5
         LD HL,(STORE_LIMIT)
-        LD DE,(STORE_END)
+        LD BC,(STORE_END)
         OR A
-        SBC HL,DE
+        SBC HL,BC
         CALL bin_to_dec5
         LD A,(PKT_MAX)          ; P51: the longest payload a frame may carry
         LD L,A
@@ -8744,7 +8484,7 @@ pq_dump:
         OR A
         SBC HL,DE               ; up to and including the DA
         PUSH HL
-        LD IX,PKT_BUF+2
+        LD DE,PKT_BUF+2
         CALL bin_to_dec5
         POP BC
         LD HL,MSG_STORE
@@ -8771,19 +8511,20 @@ pq_stream:
         JP pkt_done_pop
 
 pq_stats:
-        LD IX,PKT_BUF+3         ; P30: the serial timing state, for the bench
-        LD A,(BAUD_T)
-        LD (IX+0),A
-        LD A,(BAUD_STEP)
-        LD (IX+1),A
-        LD A,(BAUD_CAL_LAST)
-        LD (IX+2),A
+        ASSERT BAUD_STEP == BAUD_T+1 && BAUD_CAL_LAST == BAUD_T+2
+        LD DE,PKT_BUF+3         ; P30: the serial timing state, for the bench:
+        LD HL,BAUD_T            ; BAUD_T, BAUD_STEP, BAUD_CAL_LAST
+        LD BC,3
+        LDIR
         LD A,(NMI_SEEN)
-        LD (IX+3),A
+        LD (DE),A
+        INC DE
         LD A,(NMI_PER_SEC)      ; P40: 60 mains, 64 the add-in board's crystal
-        LD (IX+4),A
+        LD (DE),A
+        INC DE
         LD A,(BOOT_COUNT)
-        LD (IX+5),A
+        LD (DE),A
+        INC DE
         LD HL,(STACK_BOT)
         LD A,0x55
         LD B,STACK_CANARY
@@ -8797,9 +8538,9 @@ pq_canary:
 pq_canary_end:
         LD A,STACK_CANARY
         SUB B
-        LD (IX+6),A
+        LD (DE),A
+        INC DE
         LD HL,STATS
-        LD DE,PKT_BUF+3+7
         LD BC,STATS_LEN
         LDIR
         LD HL,IR_REJ            ; then the remote's drop reasons
@@ -8837,20 +8578,15 @@ cmd_B5_ota:
         CP CMD_OTA
         JR nz,ota_bad_args
         LD A,(PKT_BUF+1)
-        CP 'I'
-        JR z,ota_info
-        CP 'C'
-        JR z,ota_crc
-        CP 'B'
-        JP z,ota_begin
-        CP 'W'
-        JP z,ota_write
-        CP 'F'
-        JP z,ota_finish
-        CP 'K'
-        JP z,ota_confirm
-        CP 'R'
-        JP z,RESET
+        CALL dispatch
+        DKEY 'I', ota_info
+        DKEY 'C', ota_crc
+        DKEY 'B', ota_begin
+        DKEY 'W', ota_write
+        DKEY 'F', ota_finish
+        DKEY 'K', ota_confirm
+        DKEY 'R', RESET
+        db 0xff
 
 ota_bad_args:
         LD A,5
@@ -8996,18 +8732,8 @@ ota_confirm:
         LD (OTA_PAGE_BUF+5),A
         LD A,(PKT_BUF+3)
         LD (OTA_PAGE_BUF+4),A
-        LD HL,OTA_PAGE_BUF
-        LD BC,8
-        LD DE,0
-        CALL ROM_CRC16
-        LD (OTA_PAGE_BUF+8),DE
-        LD HL,OTA_PAGE_BUF
-        LD DE,TRAILER
         LD A,(ROM_BANK)
-        LD B,A
-        CALL clock_bank         ; P31: the writer's NMI sync needs the source on
-        CALL lib_page_writer
-        JR ota_status_jr21
+        JR ota_seal_write
 
 ; ---- ota_begin: 'B' -> the idle bank's trailer page becomes FF, and the panel
 ;      shows UPDATING (held, not scrolled) through every restart until the
@@ -9021,18 +8747,29 @@ ota_begin:
         LD A,0xff
         LD (TEST_MODE),A
         CALL ota_erase_buf
+        LD A,(OTA_IDLE)
+        JR ota_write_page
 
-; ---- ota_write_trailer: write OTA_PAGE_BUF over the idle bank's trailer, reply the status
-ota_write_trailer:
+; ---- ota_seal_write: the CRC of OTA_PAGE_BUF's first 8 bytes into its next two,
+;      then the page written as bank A's trailer and the status replied
+ota_seal_write:
+        PUSH AF
+        LD HL,OTA_PAGE_BUF
+        LD BC,8
+        LD DE,0
+        CALL ROM_CRC16
+        LD (OTA_PAGE_BUF+8),DE
+        POP AF
+
+ota_write_page:
+        LD B,A
         LD HL,OTA_PAGE_BUF
         LD DE,TRAILER
-        LD A,(OTA_IDLE)
-        LD B,A
-        CALL clock_bank         ; P31
+        CALL clock_bank         ; P31: the writer's NMI sync needs the source on
         CALL lib_page_writer
 
 ota_status_jr21:
-        JP ota_status
+        JR ota_status_jr22
 
 ; ---- ota_write: 'W' page crc data[64k] -> pages page..page+k-1 of the idle bank
 ota_write:
@@ -9092,23 +8829,14 @@ ota_write_loop:
         PUSH BC
         CALL clock_bank         ; P31
         CALL lib_page_writer    ; HL, DE preserved
+        LD BC,64                ; both on to the next page
+        ADD HL,BC
+        EX DE,HL
+        ADD HL,BC
+        EX DE,HL
         POP BC
         OR A
         JR nz,ota_status_jr21
-        LD A,L
-        ADD A,64
-        LD L,A
-        JR nc,ota_write_next
-        INC H
-
-ota_write_next:
-        LD A,E
-        ADD A,64
-        LD E,A
-        JR nc,ota_write_count
-        INC D
-
-ota_write_count:
         DEC C
         JR nz,ota_write_loop
         XOR A
@@ -9173,12 +8901,8 @@ ota_finish_done:
         INC HL
         LD A,(PKT_BUF+4)
         LD (HL),A
-        LD HL,OTA_PAGE_BUF
-        LD BC,8
-        LD DE,0
-        CALL ROM_CRC16
-        LD (OTA_PAGE_BUF+8),DE
-        JP ota_write_trailer
+        LD A,(OTA_IDLE)
+        JP ota_seal_write
 
 ; ---- cmd_1E_color_A0: 1E n -> insert 0xA0|(n&15)
 cmd_1E_color_A0:
@@ -9350,10 +9074,9 @@ cmd_09_channel:
         ADD A,C
         CP CHANNELS
         JR nc,cmd09_one
-        LD (CHAN_D1),A          ; pkt_next_byte returns the loop's count in DE
+        LD C,A                  ; pkt_next_byte returns the loop's count in DE
         CALL pkt_next_byte
-        LD A,(CHAN_D1)
-        LD E,A
+        LD E,C
 
 cmd09_one:
         LD A,E                  ; chan_open takes the channel in A and E
@@ -9378,35 +9101,28 @@ seq_pair_loop:
         JR z,seq_pair_demo
         CP 'd'
         JR z,seq_pair_demo
-        LD (CUR_CHAR),A
-        CP '9'+1
+        CALL is_digit
         JR nc,pkt_next_jr19
-        CP '0'
-        JR c,pkt_next_jr19
         AND 15
     IF CHANNELS <= 10
         JR seq_pair_store
     ENDIF
-        LD (CHAN_D10),A
+        LD C,A                  ; the tens
         CALL pkt_next_byte
         CP 'D'
         JR z,seq_pair_demo
         CP 'd'
         JR z,seq_pair_demo
-        LD (CUR_CHAR),A
-        CP '9'+1
+        CALL is_digit
         JR nc,pkt_next_jr19
-        CP '0'
-        JR c,pkt_next_jr19
         AND 15
-        LD (CHAN_D1),A
-        PUSH BC
-        PUSH HL
-        LD B,2
-        LD HL,CHAN_D10
-        CALL ascii_dec_to_bin
-        POP HL
-        POP BC
+        LD E,A
+        LD A,C
+        ADD A,A
+        ADD A,A
+        ADD A,C
+        ADD A,A
+        ADD A,E
         JR seq_pair_store
 
 seq_pair_demo:
@@ -9418,7 +9134,7 @@ seq_pair_store:
         LD A,0xff
         LD (HL),A
         DJNZ seq_pair_loop
-        JP pkt_next
+        JR pkt_next_jr19
 
 ; ---- is_ignored_byte: Z (A=0) if A is in IGNORE_TABLE: 00 01 05 08 0A 0B 0C 1C 1D 7F
 is_ignored_byte:
@@ -9464,8 +9180,7 @@ plain_lookup:
         RET
 
 plain_no:
-        LD A,1
-        OR A
+        OR 1
         RET
 
 ; ============================================================================
