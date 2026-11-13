@@ -86,8 +86,9 @@ HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import cc784_ir  # noqa: E402
 
-CPU_HZ = 8_000_000
-TICK_T = CPU_HZ // 7812      # INT period in T-states
+LITE = os.environ.get('CC784_LITE') == '1'   # an unmodified 3A board: 4 MHz, 1302 Hz INT, 2 K RAM
+CPU_HZ = 4_000_000 if LITE else 8_000_000
+TICK_T = 3072 if LITE else CPU_HZ // 7812     # INT period in T-states
 NMI_T = CPU_HZ // 60
 US = CPU_HZ / 1_000_000
 SLICE = 128                  # run granularity
@@ -195,7 +196,7 @@ def assemble(src_dir):
         text = asm.read_text()
         # assemble a copy so the source tree is untouched
         (pathlib.Path(tmp) / 'cc784nir.asm').write_text(text)
-        r = subprocess.run(['sjasmplus', '--sym=%s' % sym, 'cc784nir.asm'], cwd=tmp,
+        r = subprocess.run(['sjasmplus', '--sym=%s' % sym] + (['-DLITE'] if LITE else []) + ['cc784nir.asm'], cwd=tmp,
                            capture_output=True, text=True)
         if r.returncode:
             sys.exit(r.stdout + r.stderr)
@@ -212,9 +213,10 @@ def assemble(src_dir):
 
 
 class Sign:
-    def __init__(self, rom, syms, fresh_ram=True, seed=1, sdp=True, ram8k=False, mains=True, baud=300, crystal=False, strict_int=False):
+    def __init__(self, rom, syms, fresh_ram=True, seed=1, sdp=True, ram8k=False, ram2k=None, mains=True, baud=300, crystal=False, strict_int=False):
         # rom: one 16 K bank (the rest of the chip erased) or the whole chip image
         # ram8k: the stock 6264, which mirrors 4000-5FFF at 6000-7FFF
+        # ram2k: the 3A's 6116, mirrored through 7FFF (the LITE build's default)
         # mains=False: a DC supply, no NMI from the zero-cross detector
         # crystal=True: the IR+clock add-in board is fitted: 64 Hz on the NMI while BANK_REG bit 7 selects it
         self.mains, self.crystal = mains, crystal
@@ -230,12 +232,17 @@ class Sign:
         rng = random.Random(seed)
         ram = bytes(rng.randrange(256) for _ in range(0x4000)) if fresh_ram else bytes(0x4000)
         self.ram8k = ram8k
-        if ram8k:
-            ram = ram[:0x2000] * 2
+        if ram2k is None:
+            ram2k = LITE and not ram8k
+        self.ram_size = 0x800 if ram2k else 0x2000 if ram8k else 0x4000
+        if self.ram_size < 0x4000:
+            ram = ram[:self.ram_size] * (0x4000 // self.ram_size)
             m.mark_addrs(0x4000, 0x4000, m.WRITE_MARK)      # every RAM write is mirrored
         m.set_memory_block(0x4000, ram)
-        self.stack_top = syms.get('STACK_TOP', 0x4040)
+        self.stack_top = syms['STACK_TOP_2K'] if ram2k else syms.get('STACK_TOP', 0x4040)
         self.stack_lo = 0x3E00 if self.stack_top == 0x4040 else self.stack_top - 0x300
+        if ram2k:                           # the boot stub's stack (PKT_READY) is below; watch the overrun only
+            self.stack_lo = self.stack_top - syms['STACK_SIZE'] - 0x20
         m.mark_addrs(self.stack_lo, self.stack_top - self.stack_lo, m.WRITE_MARK)
         m.mark_addrs(0x8000, 1, m.WRITE_MARK)
         m.mark_addrs(0x0000, 0x4000, m.WRITE_MARK)
@@ -271,7 +278,7 @@ class Sign:
         self._di_run, self.max_di, self.max_di_pc = 0, 0, 0
         self.set_baud(baud)
         self.burst, self.frames = [], []
-        self.row_starts, self.last_out_t = [], 0   # (t, port low nibble) at each row burst
+        self.row_starts, self.last_out_t, self.last_port = [], 0, None   # (t, port low nibble) at each row burst
 
     # ---- memory and port hooks
     def _set_latch(self, value):
@@ -329,10 +336,11 @@ class Sign:
             self._ee_sync()
         else:
             self.m.memory[addr] = value
-            if self.ram8k:
-                self.m.memory[addr ^ 0x2000] = value
+            if self.ram_size < 0x4000 and addr < 0x8000:
+                for a in range(0x4000 + (addr & (self.ram_size - 1)), 0x8000, self.ram_size):
+                    self.m.memory[a] = value
         sp = self.m.sp
-        if sp - 2 <= addr <= sp + 1 and addr < self.min_stack:
+        if sp - 2 <= addr <= sp + 1 and self.stack_lo <= addr < self.min_stack:
             self.min_stack, self.min_stack_pc = addr, self.m.pc
 
     def _on_read(self, addr):
@@ -368,9 +376,9 @@ class Sign:
 
     def _on_output(self, port, value):
         if port & 0xf0 == 0x40:           # a row burst: note where each one starts
-            if self.t - self.last_out_t > 3000:    # a burst pauses for the engines, bursts are a tick apart
-                self.row_starts.append((self.t, port & 0x0f))
-            self.last_out_t = self.t
+            if self.t - self.last_out_t > 3000 or port & 0x0f != self.last_port:   # bursts are a tick apart
+                self.row_starts.append((self.t, port & 0x0f))                        # (closer at 4 MHz) and change port
+            self.last_out_t, self.last_port = self.t, port & 0x0f
         if port & 0xff == 0x4e:           # ROW_INDEX 0, second pass: color byte + 86 columns
             self.burst.append(value)
             if len(self.burst) == 87:
@@ -956,7 +964,8 @@ def cmd_fuzz(runs=100, seed=1):
 
 
 def cmd_ram():
-    """the same build on the stock 8 K RAM and on a 62256: store size, fill to the top, dump"""
+    """the same build on the stock 8 K RAM and on a 62256 (LITE: and the 3A's 2 K): store size,
+    frame limit, fill to the top, an over-long frame dropped, dump, the store kept across a reset"""
     rom, syms = assemble(HERE.parent / 'src' / 'patched')
     checks = []
     def check(name, cond):
@@ -977,43 +986,61 @@ def cmd_ram():
             if s.tx_bytes().endswith(b'\x04'): break
         s.tx_edges.clear(); s.run_ms(200)
 
-    for ram8k, want_total in ((True, store_total(syms, True)), (False, store_total(syms, False))):
-        name = '8 K' if ram8k else '16 K'
-        s = Sign(rom, syms, fresh_ram=True, ram8k=ram8k)
+    sizes = [('8 K', True, False, 'STORE_TOP_8K'), ('16 K', False, False, 'STORE_TOP')]
+    if LITE:
+        sizes.insert(0, ('2 K', False, True, 'STORE_TOP_2K'))
+    for name, ram8k, ram2k, top in sizes:
+        want_total = syms[top] - syms['MSG_STORE'] + 1
+        want_max = syms['PKT_MAX_2K'] if ram2k else syms['PKT_MAX_FULL']
+        s = Sign(rom, syms, fresh_ram=True, ram8k=ram8k, ram2k=ram2k)
         s.run_ms(2500)
         r = reply(s, b'\xb4\x31')
-        total, free = int(r[3:8]), int(r[8:13])
-        check('%s: B4 1 total %d free %d' % (name, total, free), total == want_total and free == total - 301)
-        text = bytes(0x41 + i % 26 for i in range(250))
-        sent = chan = 0                     # one 250-byte chunk per channel (B3 append drops bytes: B11)
-        while free >= 250:
-            load(s, b'\x09' + b'%02d' % chan + b'\x0e' + text)
-            sent += 250; free -= 250; chan += 1
+        total, free, pmax = int(r[3:8]), int(r[8:13]), int(r[13:18])
+        framing = syms['CHANNELS'] * 3 + 1
+        check('%s: B4 1 total %d free %d, frames up to %d bytes' % (name, total, free, pmax),
+              total == want_total and free == total - framing and pmax == want_max)
+        ln = min(250, pmax - 4)
+        text = bytes(0x41 + i % 26 for i in range(ln))
+        sent = chan = 0                     # a chunk a channel, then appends once every channel has one
+        def chunk():
+            c = chan % syms['CHANNELS']
+            return b'\x09' + b'%02d' % c + (b'\x0e' if chan == c else b'\xb3') + text
+        while free >= ln:
+            load(s, chunk())
+            sent += ln; free -= ln; chan += 1
         r = reply(s, b'\xb4\x31')
-        check('%s: %d bytes in %d channels, free now %d' % (name, sent, chan, int(r[8:13])), int(r[8:13]) == free)
-        load(s, b'\x09' + b'%02d' % chan + b'\x0e' + text)   # overfills: the tail is dropped
+        check('%s: %d bytes in %d frames, free now %d' % (name, sent, chan, int(r[8:13])), int(r[8:13]) == free)
+        load(s, chunk())                    # overfills: the tail is dropped
         r = reply(s, b'\xb4\x31')
         check('%s: overfill leaves free %d (the byte under the terminator is never used)' % (name, int(r[8:13])), int(r[8:13]) <= 1)
+        before = bytes(s.m.memory[syms['MSG_STORE']:syms[top] + 1])
+        s.tx_edges.clear()
+        s.send_frame(b'\x09\x30\x30\x0e' + bytes(pmax - 3), addr=1); s.rx_wait(); s.run_ms(500)
+        check('%s: a %d-byte frame is dropped unanswered, the store kept' % (name, pmax + 1),
+              not s.tx_bytes() and bytes(s.m.memory[syms['MSG_STORE']:syms[top] + 1]) == before)
         r = reply(s, b'\xb4\x33', wait_ms=int((total + 20) * 12 / 300 * 1000) + 3000)   # ~2.3 stop bits per byte
         n = int(r[2:7]); data = r[7:7 + n]
-        got = b''.join(data[i:i + 250] for i in range(len(data)) if data[i:i + 250] == text)   # every full chunk found verbatim
-        check('%s: dump says %d bytes, got %d, checksum %s, %d chunks intact' % (name, n, len(data), 'ok' if len(r) > 7 + n and sum(data) & 0xFF == r[7 + n] else 'BAD', len(got) // 250),
-              n == total - 1 and len(data) == n and sum(data) & 0xFF == r[7 + n] and len(got) // 250 == chan)
+        got = b''.join(data[i:i + ln] for i in range(len(data)) if data[i:i + ln] == text)   # every full chunk found verbatim
+        check('%s: dump says %d bytes, got %d, checksum %s, %d chunks intact' % (name, n, len(data), 'ok' if len(r) > 7 + n and sum(data) & 0xFF == r[7 + n] else 'BAD', len(got) // ln),
+              n == total - 1 and len(data) == n and sum(data) & 0xFF == r[7 + n] and len(got) // ln == chan)
         check('%s: no faults, stack ok (depth %d)' % (name, s.depth()), not s.faults and s.depth() < 100)
         # P20: the clock survives a reset with RAM kept (the stub's library copy lands on RAM_VARS)
         reply(s, b'\x17' + b'1045' + b'P', wait_ms=1500)
         s.run_ms(2500)
         before = s.ram('CLK_H10', 6)
-        s2 = Sign(rom, syms, fresh_ram=True, ram8k=ram8k)
+        kept = bytes(s.m.memory[syms['MSG_STORE']:syms[top] + 1])
+        s2 = Sign(rom, syms, fresh_ram=True, ram8k=ram8k, ram2k=ram2k)
         s2.m.set_memory_block(0x4000, bytes(s.m.memory[0x4000:0x8000]))
         s2.run_ms(2500)
         after = s2.ram('CLK_H10', 6)
         check('%s: clock %s kept across a reset (%s), running' % (name, before.hex(), after.hex()),
               before[:2] == bytes([1, 0]) and after[:4] == before[:4] and after[5] == before[5] and s2.ram('CLK_RUN')[0])
+        check('%s: the store kept byte for byte across the reset (the RAM probe puts its byte back)' % name,
+              bytes(s2.m.memory[syms['MSG_STORE']:syms[top] + 1]) == kept)
         # P25: the repair passes stop at the DA; a store that lost it still gets repaired
         end = int.from_bytes(s2.ram('STORE_END', 2), 'little')
         s2.m.memory[end] = 0x58
-        s3 = Sign(rom, syms, fresh_ram=True, ram8k=ram8k)
+        s3 = Sign(rom, syms, fresh_ram=True, ram8k=ram8k, ram2k=ram2k)
         s3.m.set_memory_block(0x4000, bytes(s2.m.memory[0x4000:0x8000]))
         s3.run_ms(3000)
         r = reply(s3, b'\xb4\x31')
@@ -1068,7 +1095,7 @@ def cmd_quiet():
           % (tx.hex(), s.ram('PKT_RESTART')[0], s.wdog_clears, before, after),
           tx == b'\x06\x04' and s.ram('PKT_RESTART')[0] == 0 and s.wdog_clears == 0 and after != before)
     tx = send(s, b'\xb4\x31')
-    check("B4 '1' mid-scroll: reply %s, no restart" % tx[4:14], tx[:4] == b'\x06\xb1\x01\x0a' and tx[4:9] == b'%05d' % store_total(syms, False) and s.ram('PKT_RESTART')[0] == 0)
+    check("B4 '1' mid-scroll: reply %s, no restart" % tx[4:14], tx[:4] == b'\x06\xb1\x01\x0f' and tx[4:9] == b'%05d' % store_total(syms, False) and s.ram('PKT_RESTART')[0] == 0)
     tx = send(s, b'\x17' + b'1045' + b'P', wait_ms=300)
     check('set time mid-scroll: clock %s, seconds %d and ticks %d zeroed (P23), no restart, no watchdog clear'
           % (s.ram('CLK_H10', 4).hex(), s.ram('CLK_SEC')[0], s.ram('NMI_COUNT')[0]),
@@ -1082,7 +1109,7 @@ def cmd_quiet():
     check('a second frame during processing gets no ACK and its 01 bytes do not open the editor (tx %s, MENU_ACTIVE %02x)'
           % (tx.hex(), s.ram('MENU_ACTIVE')[0]), tx == b'\x06\x04' and s.ram('MENU_ACTIVE')[0] == 0)
     tx = send(s, b'\xb4\x31')
-    check('the frame after DONE is accepted (%s)' % tx[:4].hex(), tx[:4] == b'\x06\xb1\x01\x0a')
+    check('the frame after DONE is accepted (%s)' % tx[:4].hex(), tx[:4] == b'\x06\xb1\x01\x0f')
     d = dump(s)
     check('dump has the loaded channels (%d bytes)' % len(d), text1 in d and b'THIRD ' * 40 in d)
     # the playing channel is edited: that restarts, and the new text is what plays
@@ -1249,7 +1276,7 @@ def cmd_baud():
         s = Sign(rom, syms, fresh_ram=True, baud=baud); s.run_ms(2500)
         tx = send(s, b'\xb4\x31', wait_ms=int(16 * 10000 / baud) + 500)
         rate = s.ram('BAUD_STEP')[0]
-        check('%4d baud from cold: query reply %s, BAUD_STEP %d, BAUD_T %d' % (baud, tx[:9], rate, s.ram('BAUD_T')[0]), tx[:4] == b'\x06\xb1\x01\x0a' and tx[4:9] == b'%05d' % store_total(syms, False) and rate == baud // 60)
+        check('%4d baud from cold: query reply %s, BAUD_STEP %d, BAUD_T %d' % (baud, tx[:9], rate, s.ram('BAUD_T')[0]), tx[:4] == b'\x06\xb1\x01\x0f' and tx[4:9] == b'%05d' % store_total(syms, False) and rate == baud // 60)
         tx = send(s, b'\x09\x30\x31\x0e' + text, wait_ms=500)
         d = bytes(s.m.memory[syms['MSG_STORE']:int.from_bytes(s.ram('STORE_END', 2), 'little')])
         check('%4d baud: 220-byte load intact, ACK+DONE %s' % (baud, tx.hex()), text in d and tx == b'\x06\x04')
@@ -1263,13 +1290,13 @@ def cmd_baud():
         tx = send(s, b'\xb4\x31', wait_ms=600)
         tx2 = send(s, b'\x09\x30\x31\x0e' + text, wait_ms=500)
         d = bytes(s.m.memory[syms['MSG_STORE']:int.from_bytes(s.ram('STORE_END', 2), 'little')])
-        check('%d baud with a %.1f us interrupt (%s): BAUD_T %d, query %s, load %s' % (rate, tick_us, label, s.ram('BAUD_T')[0], tx[:4].hex(), tx2.hex()), tx[:4] == b'\x06\xb1\x01\x0a' and tx2 == b'\x06\x04' and text in d)
+        check('%d baud with a %.1f us interrupt (%s): BAUD_T %d, query %s, load %s' % (rate, tick_us, label, s.ram('BAUD_T')[0], tx[:4].hex(), tx2.hex()), tx[:4] == b'\x06\xb1\x01\x0f' and tx2 == b'\x06\x04' and text in d)
     # 2400 is not offered: its start bit is refused, and a DC supply (no NMI, no calibration) still takes 1200
     s = Sign(rom, syms, fresh_ram=True, baud=2400, mains=False); s.run_ms(3500)
     tx = send(s, b'\xb4\x31', wait_ms=600)
     s.run_ms(1500); s.set_baud(1200)
     tx2 = send(s, b'\xb4\x31', wait_ms=600)
-    check('2400 refused (reply %s); DC supply, 1200 answered with the default bit time (%s, BAUD_T %d)' % (tx.hex(), tx2[:4].hex(), s.ram('BAUD_T')[0]), tx == b'' and s.ram('BAUD_T')[0] == 128 and tx2[:4] == b'\x06\xb1\x01\x0a')
+    check('2400 refused (reply %s); DC supply, 1200 answered with the default bit time (%s, BAUD_T %d)' % (tx.hex(), tx2[:4].hex(), s.ram('BAUD_T')[0]), tx == b'' and s.ram('BAUD_T')[0] == 128 and tx2[:4] == b'\x06\xb1\x01\x0f')
     # a session that changes rate after a pause, and one that comes back to 300
     s = Sign(rom, syms, fresh_ram=True, baud=1200); s.run_ms(2500)
     send(s, b'\x09\x30\x30\x0e' + b'FAST', wait_ms=500)
@@ -1513,7 +1540,7 @@ def cmd_term():
     check("B7 '0' halfway through TIME? (clock stopped: %02x): closed, clock running (%02x, menu %02x)"
           % (stopped, s.ram('CLK_RUN')[0], s.ram('MENU_ACTIVE')[0]), stopped == 0 and s.ram('CLK_RUN')[0] == 0xFF and s.ram('MENU_ACTIVE')[0] == 0)
     tx = send(s, frame(b'\xb4\x31'), 2500)
-    check('then a query is answered as usual (%s)' % tx[:4].hex(), tx[:4] == b'\x06\xb1\x01\x0a')
+    check('then a query is answered as usual (%s)' % tx[:4].hex(), tx[:4] == b'\x06\xb1\x01\x0f')
     check('no faults', not s.faults)
 
     # keys typed seconds apart at 1200: no re-timing as if each were a B1
@@ -1804,7 +1831,8 @@ def cmd_twinkle():
         reach.append(sum(bin(ever[c]).count('1') for c in range(n) if not page[c] & 0x80) / max(lit, 1))
     check('%s different patterns per hold (~20 ticks)' % sorted(set(pats)), pats and min(pats) >= 15)
     check('at most %d pixels dark at once (most %d)' % (syms['TWINKLE_DOTS'], most), 0 < most <= syms['TWINKLE_DOTS'])
-    check('the dots reach %.0f%%+ of each page\'s lit pixels over a hold' % (100 * min(reach or [0])), reach and min(reach) >= 0.85)
+    check('the dots reach %.0f%%+ of each page\'s lit pixels over a hold' % (100 * min(reach or [0])),
+          reach and min(reach) >= (0.85 if syms['TWINKLE_DOTS'] >= 80 else 0.6))   # LITE: 24 dots
     _sparkle_common(check, s, syms, runs, 1, b'\xb2\x19', 'TWINKLE')
     _sparkle_editor(check, s, syms, ('SHIFT', 'STOP', 'SHIFT', 'JUMP'), b'\xb2\x19', 'FUNC2 PAUSE')
     print('twinkle: %d/%d checks pass' % (sum(checks), len(checks)))
@@ -1854,6 +1882,69 @@ def cmd_glimmer():
     return all(checks)
 
 
+def cmd_lite():
+    """LITE (an unmodified 3A board: 4 MHz, 2 K RAM, no IR, 300 baud): a 16 K image; the
+    store fills the 2 K; channels by one digit or two; one-digit sequences; B5 refused;
+    status reports at 300 baud; TWINKLE and GLIMMER from the wired keypad's editor.
+    Run without CC784_LITE it re-runs itself under it."""
+    if not LITE:
+        return subprocess.run([sys.executable, __file__, 'lite'], env=dict(os.environ, CC784_LITE='1')).returncode == 0
+    rom, syms = assemble(HERE.parent / 'src' / 'patched')
+    checks = []
+    def check(name, cond):
+        checks.append(bool(cond)); print('  %s %s' % ('ok  ' if cond else 'FAIL', name))
+    check('a 16 K image for a 27128 (%d bytes)' % len(rom), len(rom) == BANK_SIZE)
+    s = Sign(rom, syms, fresh_ram=True); s.run_ms(2500)
+    w = lambda n: int.from_bytes(s.ram(n, 2), 'little')
+    size, text = w('STORE_SIZE'), w('STORE_TEXT_LIMIT')
+    check('the store runs to the 2 K\'s stream area, the stack above it: %d bytes, %d for text, SP at %04x' % (size, text, w('STACK_INIT')),
+          size == syms['STORE_TOP_2K'] - syms['MSG_STORE'] + 1 and text == size - 31 and w('STACK_INIT') == syms['STACK_TOP_2K']
+          and s.ram('PKT_MAX')[0] == syms['PKT_MAX_2K'])
+    store = lambda: bytes(s.m.memory[syms['MSG_STORE']:w('STORE_END') + 1])
+    s.send_frame(b'\x09\x33\x0eHELLO\x09\x30\x35\x0eFIVE', addr=1); s.rx_wait(); s.run_ms(800)
+    check('09 3 and 09 05 both select their channel: %s' % store()[:40].hex(),
+          b'\xd0\xd3HELLO\x03' in store() and b'\xd0\xd5FIVE\x03' in store())
+    s.send_frame(b'\x04\x35\x33D', addr=1); s.rx_wait(); s.run_ms(300)
+    check('04 5 3 D: a digit a channel, D the demo (%s)' % s.ram('SEQ_LIST', 4).hex(), s.ram('SEQ_LIST', 4) == b'\x05\x03\x0a\xff')
+    before = store()
+    s.send_frame(b'\xb5I', addr=1); s.rx_wait(); s.run_ms(500)
+    check('B5 is refused: nothing written, the sign plays on', store() == before and not s.faults)
+    def reports(tx):
+        out, i = [], 0
+        while i + 7 <= len(tx):
+            f = tx[i:i + 7]
+            if f[0] == 0xB1 and f[2] == 3 and f[3] == ord('S') and sum(f[3:6]) & 0xFF == f[6]:
+                out.append(f[4]); i += 7
+            else:
+                i += 1
+        return out
+    s.send_frame(b'\x04\x35\x33', addr=1); s.rx_wait(); s.run_ms(300)
+    s.send_frame(bytes([0xB6, 12, 1]), addr=1); s.rx_wait(); s.run_ms(500)
+    s.tx_edges.clear(); s.run_ms(12000)
+    r = reports(s.tx_bytes())
+    check('status reports at 300 baud: %s' % r, len(r) >= 4 and set(r) == {3, 5})
+    s.send_frame(bytes([0xB6, 12, 0]), addr=1); s.rx_wait(); s.run_ms(500)
+    table = rom[syms['IR_KEY_TABLE']:syms['IR_KEY_TABLE'] + 62]
+    code = lambda k: table[cc784_ir.key_index(k)]
+    s.keypad = True
+    for _ in range(150):
+        if s.ram('KP_MODE')[0]: break
+        s.run_ms(100)
+    check('the keypad takes over', s.ram('KP_MODE')[0])
+    keys = ('STOP', 'SHIFT', 'STOP', 'SHIFT', 'JUMP', 'SHIFT', 'STOP', 'SHIFT', 'SHIFT', 'SEQ', 'STOP')
+    for k in keys:
+        s.kp_key(code(k)); s.kp_wait(); s.run_ms(400)
+    for _ in range(50):
+        if not s.ram('MENU_ACTIVE')[0]: break
+        s.run_ms(100)
+    check('keypad editor: FUNC2 PAUSE and FUNC2 SHIFT SEQ insert B2 19 and B2 BB (%s)' % store()[:12].hex(),
+          b'\xb2\x19' in store() and b'\xb2\xbb' in store())
+    check('no faults, stack high-water %d of %d' % (s.stack_top - s.min_stack, syms['STACK_SIZE']),
+          not s.faults and s.stack_top - s.min_stack < syms['STACK_SIZE'])
+    print('lite: %d/%d checks pass' % (sum(checks), len(checks)))
+    return all(checks)
+
+
 def cmd_config():
     """P35: the configuration block: defaults after a RAM loss, kept across a reset,
     rejected when its sum is wrong; B6 writes with the protected bytes refused and the
@@ -1886,7 +1977,7 @@ def cmd_config():
         for _ in range(ms * 1000 // 64):
             s.run(512); n += 1; lit += (s.latch & 0x0F) != 0x0F
         return lit / n
-    defaults = bytes([0xA5, 1, 3, 0, 0, 0, 0, 99, 80, 13, 1, 0, 0, 0, 0])
+    defaults = bytes([0xA5, 1, 3, 0, 0, 0, 0, syms['CHANNELS'] - 1, 80, 13, 1, 0, 0, 0, 0])
 
     s = Sign(rom, syms, fresh_ram=True)
     s.run_ms(2500)
@@ -1895,7 +1986,8 @@ def cmd_config():
     r = reply(s, b'\xb4\x35')
     check("B4 '5' returns the block (%s)" % r[3:19].hex(), r[:3] == b'\xb1\x01\x10' and r[3:19] == b and r[19] == sum(b) & 0xFF)
     r = reply(s, b'\xb4\x36', wait_ms=5000)
-    check("B4 '6' returns SEQ_LIST (%d bytes, first %s)" % (r[2], r[3:7].hex()), r[:3] == b'\xb1\x01\x68' and r[3:107] == s.ram('SEQ_LIST', 104))
+    check("B4 '6' returns SEQ_LIST (%d bytes, first %s)" % (r[2], r[3:7].hex()), r[:3] == b'\xb1\x01' + bytes([syms['SEQ_LIST_LEN']])
+          and r[3:3 + syms['SEQ_LIST_LEN']] == s.ram('SEQ_LIST', syms['SEQ_LIST_LEN']))
     # a plain message from here on: the demo's TINY segment has its own output path
     s.send_frame(b'\x09\x30\x30\x0eHELLO THERE \x04\x30\x30', addr=1, flag=0x80); s.rx_wait(); s.run_ms(3000)
 
@@ -1919,7 +2011,8 @@ def cmd_config():
     setb(s, 2, 0x01); d1 = duty(s); f1, s1 = passes(s)
     setb(s, 2, 0x00); d0 = duty(s); f0, s0 = passes(s)
     check('brightness 3: duty %.2f (%d+%d passes/s), 2: %.2f (%d+%d), 1: %.2f (%d+%d), 0: %.2f (%d+%d)' % (d3, f3, s3, d2, f2, s2, d1, f1, s1, d0, f0, s0),
-          d3 > 0.5 and abs(d2 / d3 - 2 / 3) < 0.08 and abs(d1 / d3 - 1 / 3) < 0.08 and d0 == 0
+          (d3 > 0.4 and abs(d2 / d3 - 0.6) < 0.12 and abs(d1 / d3 - 0.2) < 0.1 if LITE else   # LITE: a pass's tail, the advance tick
+           d3 > 0.5 and abs(d2 / d3 - 2 / 3) < 0.08 and abs(d1 / d3 - 1 / 3) < 0.08) and d0 == 0
           and min(f3, s3, f2, s2, f1, s1) > 300 and f0 == 0 and s0 == 0)
     # the lit time must be the same every pass: lit from the latch it carried a
     # drifting 0-128 us remainder that pulsed at a few hertz on the sign
@@ -1932,8 +2025,12 @@ def cmd_config():
     from collections import Counter
     hist = Counter(runs); top = hist.most_common(2)
     near = lambda want: sum(1 for l in runs if abs(l - want) <= 1)       # 32 us samples: a run lands on 4 or 5, 12 or 13
-    check('level 1: lit runs are two exact lengths, 1 and 3 interrupts: %d near 128 us, %d near 384 us (of %d)' % (near(4), near(12), len(runs)),
-          len(runs) > 300 and near(4) + near(12) > 0.95 * len(runs) and near(4) > 100 and near(12) > 100)
+    if LITE:
+        check('level 1: lit runs are one length: %d of %d near %s samples' % (sum(near(top[0][0]) for _ in [0]), len(runs), top[0][0]),
+              len(runs) > 300 and near(top[0][0]) > 0.95 * len(runs))
+    else:
+        check('level 1: lit runs are two exact lengths, 1 and 3 interrupts: %d near 128 us, %d near 384 us (of %d)' % (near(4), near(12), len(runs)),
+              len(runs) > 300 and near(4) + near(12) > 0.95 * len(runs) and near(4) > 100 and near(12) > 100)
 
     # mute now, then unmute; mute after the current message waits for the boundary
     setb(s, 2, 0x07); fm, sm = passes(s)
@@ -2025,7 +2122,8 @@ def cmd_config():
     s2.m.set_memory_block(0x4000, bytes(s.m.memory[0x4000:0x8000]))
     s2.run_ms(2500)
     b2 = cfg(s2)
-    check('reset with RAM kept: block unchanged (%s), clock running' % b2.hex(), b2 == kept and kept[1] == 2 and kept[2] & 3 == 1 and s2.ram('CLK_RUN')[0])
+    check('reset with RAM kept: block unchanged (%s, was %s), clock running (%02x)' % (b2.hex(), kept.hex(), s2.ram('CLK_RUN')[0]),
+          b2[:2] + bytes([b2[2] & ~0x40]) + b2[3:] == kept[:2] + bytes([kept[2] & ~0x40]) + kept[3:] and kept[1] == 2 and kept[2] & 3 == 1 and s2.ram('CLK_RUN')[0])
     s2.m.memory[syms['CFG_HOLD']] ^= 0xFF
     s3 = Sign(rom, syms, fresh_ram=True)
     s3.m.set_memory_block(0x4000, bytes(s2.m.memory[0x4000:0x8000]))
@@ -2117,7 +2215,7 @@ def _keypad():
     s.tx_edges.clear()
     s.send_frame(b'\xb4\x31', flag=0x80); s.rx_wait(); s.run_ms(2500)
     tx = s.tx_bytes()
-    check("then answers B4 '1': %s" % tx[:12].hex(), tx[:4] == b'\x06\xb1\x01\x0a')
+    check("then answers B4 '1': %s" % tx[:12].hex(), tx[:4] == b'\x06\xb1\x01\x0f')
     check('no faults, stack depth %d' % s.depth(), not s.faults and not ref.faults and s.depth() < 160)
     print('keypad: %d/%d checks pass' % (sum(1 for c in checks if c), len(checks)))
     return all(checks)
@@ -2271,7 +2369,7 @@ def cmd_compare(dir_a, dir_b):
 
 if __name__ == '__main__':
     args = sys.argv[1:]
-    if not args or args[0] not in ('stack', 'compare', 'eeprom', 'ota', 'update', 'push', 'fuzz', 'ram', 'quiet', 'speed', 'baud', 'clock', 'config', 'keypad', 'seq', 'stats', 'status', 'term', 'randbow', 'scroll', 'twinkle', 'glimmer'):
+    if not args or args[0] not in ('stack', 'compare', 'eeprom', 'ota', 'update', 'push', 'fuzz', 'ram', 'quiet', 'speed', 'baud', 'clock', 'config', 'keypad', 'seq', 'stats', 'status', 'term', 'randbow', 'scroll', 'twinkle', 'glimmer', 'lite'):
         sys.exit(__doc__)
     if args[0] == 'ram':
         sys.exit(0 if cmd_ram() else 1)
@@ -2301,6 +2399,8 @@ if __name__ == '__main__':
         sys.exit(0 if cmd_twinkle() else 1)
     if args[0] == 'glimmer':
         sys.exit(0 if cmd_glimmer() else 1)
+    if args[0] == 'lite':
+        sys.exit(0 if cmd_lite() else 1)
     if args[0] == 'quiet':
         sys.exit(0 if cmd_quiet() else 1)
     if args[0] == 'push':

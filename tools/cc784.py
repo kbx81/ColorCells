@@ -21,6 +21,7 @@ Examples
     cc784.py clearall
     cc784.py seq 0 1 2                  # display sequence; 'seq a' = all channels
     cc784.py --channels 10 msg 1 "HI"   # ten-channel firmware (CC710): channels 0-9, one digit
+    cc784.py --lite seq 1 3             # patched LITE build (stock 3A board): one-digit channels, else as patched
     cc784.py time                       # set clock from the PC (12-hour)
     cc784.py time24                     # patched firmware: 24-hour clock, no AM/PM
     cc784.py raw 09 30 30 0e 48 49      # send an arbitrary payload
@@ -404,15 +405,17 @@ def parse_reply(raw: bytes, kind: str, ten: bool = False):
         ok = ck is not None and sum(data) & 0xFF == ck
         print("  from addr %d, len %d, checksum %s: %s" %
               (raw[1], ln, "OK" if ok else "BAD/short", printable(data)))
-        if kind == 'mem' and len(data) == 10:
-            print("  total %s bytes, free %s bytes" % (data[:5].decode(), data[5:].decode()))
+        if kind == 'mem' and len(data) in (10, 15):
+            print("  total %s bytes, free %s bytes" % (data[:5].decode(), data[5:10].decode()))
+        if kind == 'mem' and len(data) == 15:                       # patch 51
+            print("  frames up to %d payload bytes" % int(data[10:15]))
         if kind in ('stats', 'timing') and len(data) >= 4:
             t300, step, last, nmi = data[:4]
             print("  300-baud bit %d fifths of an interrupt (a %.2f us interrupt), step %d (%d baud), last second's count low byte %d, NMI %s"
                   % (t300, 3333.3 / (t300 / 5.0), step, step * 60, last, 'seen' if nmi else 'none (DC supply without the add-in board: no calibration)'))
         if kind in ('stats', 'timing') and len(data) in (18, 22):     # patch 40, 44
             d = data
-            print("  clock %s (%d NMIs a second); boot %d; up %d s; stack headroom %d of 128"
+            print("  clock %s (%d NMIs a second); boot %d; up %d s; stack headroom %d of 128 (LITE: 96)"
                   % ({60: 'mains', 64: 'crystal'}.get(d[4], '?'), d[4], d[5], d[9] | d[10] << 8 | d[11] << 16, d[6]))
             print("  display ticks merged: last second %d, worst second %d; renderer stalls %d, longest %d frames"
                   % (d[7], d[8], d[12], d[13]))
@@ -431,6 +434,9 @@ def add_common_args(ap):
     ap.add_argument('-v', '--verbose', action='store_true')
     ap.add_argument('--channels', type=int, default=100, choices=(10, 100),
                     help='10 for ten-channel firmware (CC710): one-digit channel numbers and one-byte store markers')
+    ap.add_argument('--lite', action='store_true',
+                    help='the patched LITE build: channels 0-9 sent as one digit, long messages split to '
+                         'the frame limit B4 \'1\' reports; markers and time as patched')
     ap.add_argument('--done', action='store_true',
                     help='patched firmware (patch 16+): wait for its DONE byte after each frame instead of pausing')
     ap.add_argument('--unsafe', action='store_true',
@@ -447,6 +453,7 @@ def run(link, a, ap):
     s.done = a.done
     c, args = a.cmd, a.args
     ten = a.channels == 10
+    digit1 = ten or a.lite          # one-digit channel numbers
 
     if c == 'sniff':
         print("listening (%d 8N2)... ctrl-C to stop" % a.baud)
@@ -507,25 +514,29 @@ def run(link, a, ap):
 
     elif c == 'msg':
         ch = int(args[0]); text = encode_text(' '.join(args[1:]))
-        body = b'\x09' + chan(ch, ten) + b'\x0E' + text
-        if len(body) + 3 <= 254:
-            s.send_frame(body + b'\x04' + chan(ch, ten))    # load and display
+        body = b'\x09' + chan(ch, digit1) + b'\x0E' + text
+        limit = 254
+        if a.lite:                                          # patch 51: a 2 K sign takes 128
+            m = reply_data(s.query('1'))
+            if len(m) == 15: limit = int(m[10:15])
+        if len(body) + 3 <= limit:
+            s.send_frame(body + b'\x04' + chan(ch, digit1))    # load and display
         else:                                               # long: split like NETCC does
             rest = text
             first = True
             while rest:
-                part, rest = rest[:250], rest[250:]
+                part, rest = rest[:limit - 4], rest[limit - 4:]
                 typ = b'\x0E' if first else b'\xB3'
-                s.send_frame(b'\x09' + chan(ch, ten) + typ + part); first = False
-            s.send_frame(b'\x04' + chan(ch, ten))
+                s.send_frame(b'\x09' + chan(ch, digit1) + typ + part); first = False
+            s.send_frame(b'\x04' + chan(ch, digit1))
 
     elif c == 'clear':
-        s.send_frame(b''.join(b'\x09' + chan(int(x), ten) + b'\x0E' for x in args))
+        s.send_frame(b''.join(b'\x09' + chan(int(x), digit1) + b'\x0E' for x in args))
     elif c == 'clearall':
         s.send_frame(b'\x03')
     elif c == 'seq':
         # the firmware lays 0..99 first and stops at the first non-digit, so a bare 04 (or 'A') is all
-        s.send_frame(b'\x04' + (b'' if [x.lower() for x in args] in (['a'], ['all']) else b''.join(chan(int(x), ten) for x in args)))
+        s.send_frame(b'\x04' + (b'' if [x.lower() for x in args] in (['a'], ['all']) else b''.join(chan(int(x), digit1) for x in args)))
     elif c in ('time', 'time24'):
         # the protocol carries no seconds, and the sign starts the new minute at
         # :00 (patch 23), so the frame is timed to be processed on the minute:

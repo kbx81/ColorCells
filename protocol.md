@@ -104,7 +104,7 @@ Control bytes used by the CC784 build (the NC900 build uses different ones):
 | remark | `0xB0` | `0x13` | hidden comment delimiter |
 | clear-all | `0x03` | – | clear all channels |
 
-Channels are `00`–`99`, always written as **two ASCII digits**; the sign stores them as a two-byte marker `D0+tens D0+units`. Channel 100 is the read-only built-in demo. All channels share one 6625-byte pool (no per-channel limit). **A channel header (CHANNEL, `09 d d`) must be followed by DELETE_TEXT (`0E`, replace) or APPEND (`B3`) before any text** — on its own it leaves the insertion point on the channel marker and the text would corrupt it. The names are the firmware source's `CMD_*` constants; §7.3 lists them all.
+Channels are `00`–`99`, always written as **two ASCII digits** (the patched firmware also takes one digit after `09` when the next byte is not a digit, or when the pair is past the last channel; its LITE build has channels `0`–`9` and wants one digit each in a sequence, [patched.md](patched.md#2-patches) patch 51); the sign stores them as a two-byte marker `D0+tens D0+units`. Channel 100 is the read-only built-in demo. All channels share one 6625-byte pool (no per-channel limit). **A channel header (CHANNEL, `09 d d`) must be followed by DELETE_TEXT (`0E`, replace) or APPEND (`B3`) before any text** — on its own it leaves the insertion point on the channel marker and the text would corrupt it. The names are the firmware source's `CMD_*` constants; §7.3 lists them all.
 
 ### 4.1 Load a message into a channel
 
@@ -319,6 +319,7 @@ The sign's side of this protocol is read from the firmware itself, and lives in 
 | The patched firmware's 300 to 1200 baud, set by the first frame after a second of silence | [patched.md](patched.md#2-patches), patch 30 |
 | The patched firmware's configuration block: `B6 index value` writes a byte, `B4 '5'` reads the block, `B4 '6'` the sequence list; `cc784.py config` | [patched.md](patched.md#2-patches), patch 35 |
 | The patched firmware's health counters in the `B4 '4'` reply; `cc784.py stats` | [patched.md](patched.md#2-patches), patches 40 and 44 |
+| The patched firmware's `B4 '1'` reply adds a third five-digit figure, the longest payload a frame may carry: 254, or 128 on a LITE build with 2 K of RAM. A longer frame is dropped unanswered. `cc784.py mem` | [patched.md](patched.md#2-patches), patches 13 and 51 |
 | The patched firmware's unsolicited status reports, `B1 addr 03 'S' channel flags sum`; `cc784.py watch` | [patched.md](patched.md#2-patches), patch 41 |
 | The patched firmware's serial line carries frames only: a flag byte of `80` or `81` and no gap of a second inside a frame; `18` (BUSY) while the editor is open; `B7 '1'` opens the editor as a serial terminal, `B7 '0'` closes it; `cc784.py stop` and `start` | [patched.md](patched.md#2-patches), patch 45 |
 | The frame parser state by state, ACK, NAK and the silent discard of other addresses | [firmware notes §5](firmware.md#5-packet-parser-pkt_st_-16ef178c-h) |

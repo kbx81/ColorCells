@@ -2,6 +2,8 @@
 ;  Color Cells CC784NIR LED sign - PATCHED firmware source
 ;  Assemble:  sjasmplus cc784nir.asm   (produces cc784nir_patched.bin, 32768 B)
 ;             sjasmplus -DCC710 cc784nir.asm   (cc710_patched.bin: the 59-column panel)
+;             -DLITE, alone or with -DCC710: an unmodified CC784-3A board (4 MHz,
+;             2 K RAM, no IR): cc784lite.bin / cc710lite.bin, 16 K for a 27128
 ;  NOT byte-identical to the dump. The untouched reconstruction is
 ;  ../stock/cc784nir.asm; diff the two to see the patches.
 ;
@@ -16,10 +18,18 @@
 ; identical to stock; after it the code is restructured freely and the git
 ; history is the changelog. Addresses differ from stock throughout.
 
+    IFDEF LITE
+    IFDEF CC710
+        OUTPUT "cc710lite.bin"
+    ELSE
+        OUTPUT "cc784lite.bin"
+    ENDIF
+    ELSE
     IFDEF CC710
         OUTPUT "cc710_patched.bin"
     ELSE
         OUTPUT "cc784nir_patched.bin"
+    ENDIF
     ENDIF
 
 FRAMEBUF             equ 0x4000
@@ -177,31 +187,32 @@ TEST_MSG_BUF         equ RAM_VARS+0x157   ; the message shown in TEST_MODE, 28 b
 DRAW_BUF             equ RAM_VARS+0x173   ; 16 packed hex columns of a DRAW graphic
 ; ---- SEQ_LIST survives a reset: it must stay above the stub's library copy (RAM_VARS+00..81)
 SEQ_LIST             equ RAM_VARS+0x183
-IR_LEVEL             equ RAM_VARS+0x1eb   ; the IR line as the decoder last saw it, for edge detection
-IR_CELL              equ RAM_VARS+0x1ec   ; the current cell's verdict: FF none yet, 0 or 1
-IR_REJ               equ RAM_VARS+0x1ed   ; remote frames dropped, by reason: four counters the stats query appends
-IR_REJ_LEADER        equ RAM_VARS+0x1ed   ; no start burst 10-23 ticks after the leader
-IR_REJ_POS           equ RAM_VARS+0x1ee   ; stray rises between the two positions or past the middle (ignored, not drops)
-IR_REJ_CELL          equ RAM_VARS+0x1ef   ; no rise in a cell after a 1
-IR_REJ_BRIDGE        equ RAM_VARS+0x1f0   ; a burst where a gap belongs: high through a cell's first two ticks after a 1, or a rise opening a cell after a 0
-TERM_MODE            equ RAM_VARS+0x1f1   ; FF: the editor was opened by B7 '1' and takes serial bytes as keys
-EDIT_CLOSE           equ RAM_VARS+0x1f2   ; FF: B7 '0' asks the open editor to close
+SEQ_END              equ SEQ_LIST+SEQ_LIST_LEN
+IR_LEVEL             equ SEQ_END+0x00     ; the IR line as the decoder last saw it, for edge detection
+IR_CELL              equ SEQ_END+0x01     ; the current cell's verdict: FF none yet, 0 or 1
+IR_REJ               equ SEQ_END+0x02     ; remote frames dropped, by reason: four counters the stats query appends
+IR_REJ_LEADER        equ SEQ_END+0x02     ; no start burst 10-23 ticks after the leader
+IR_REJ_POS           equ SEQ_END+0x03     ; stray rises between the two positions or past the middle (ignored, not drops)
+IR_REJ_CELL          equ SEQ_END+0x04     ; no rise in a cell after a 1
+IR_REJ_BRIDGE        equ SEQ_END+0x05     ; a burst where a gap belongs: high through a cell's first two ticks after a 1, or a rise opening a cell after a 0
+TERM_MODE            equ SEQ_END+0x06     ; FF: the editor was opened by B7 '1' and takes serial bytes as keys
+EDIT_CLOSE           equ SEQ_END+0x07     ; FF: B7 '0' asks the open editor to close
 ; P20: the clock digits must survive a power cycle, so they live up here next
 ; to the store, out of reach of the stub's library copy (RAM_VARS+00..81).
-CLK_H10              equ RAM_VARS+0x1f3
-CLK_H1               equ RAM_VARS+0x1f4
-CLK_M10              equ RAM_VARS+0x1f5
-CLK_M1               equ RAM_VARS+0x1f6
-CLK_SEC              equ RAM_VARS+0x1f7
-CLK_PM               equ RAM_VARS+0x1f8
-BOOT_COUNT           equ RAM_VARS+0x1f9   ; boots since RAM was last fresh
-STORE_LIMIT          equ RAM_VARS+0x1fa
-STORE_SIZE           equ RAM_VARS+0x1fc
-STORE_TEXT_LIMIT     equ RAM_VARS+0x1fe   ; free text bytes; scan bound for store_repair
-STORE_WARN_LIMIT     equ RAM_VARS+0x200   ; STORE_END here trips the 100 KEYS LEFT warning
+CLK_H10              equ SEQ_END+0x08
+CLK_H1               equ SEQ_END+0x09
+CLK_M10              equ SEQ_END+0x0a
+CLK_M1               equ SEQ_END+0x0b
+CLK_SEC              equ SEQ_END+0x0c
+CLK_PM               equ SEQ_END+0x0d
+BOOT_COUNT           equ SEQ_END+0x0e     ; boots since RAM was last fresh
+STORE_LIMIT          equ SEQ_END+0x0f
+STORE_SIZE           equ SEQ_END+0x11
+STORE_TEXT_LIMIT     equ SEQ_END+0x13     ; free text bytes; scan bound for store_repair
+STORE_WARN_LIMIT     equ SEQ_END+0x15     ; STORE_END here trips the 100 KEYS LEFT warning
 ; P35: the configuration block. Battery-backed like the clock; its signature
 ; and sum are the RAM-validity test (was MY_ADDRESS against its complement).
-CFG                  equ RAM_VARS+0x202
+CFG                  equ SEQ_END+0x17
 CFG_SIG              equ CFG+0            ; CFG_MAGIC while the block is valid
 MY_ADDRESS           equ CFG+1            ; written only by the editor's ADDRESS? dialog
 CFG_FLAGS            equ CFG+2            ; bits 0-1 brightness, 2 muted, 3 mute pending, 4 alert, 5 editor, 6 wrapped
@@ -224,7 +235,6 @@ MSG_STORE            equ STORE_GUARD+1
 ; ---- Top of RAM (patch 13). Everything at a fixed address sits in the last
 ;      272 bytes below RAM_TOP: on the stock 8 K chip 7Fxx aliases 5Fxx, so the
 ;      same build runs on either; only the store's ceiling is decided at boot.
-RAM_TOP              equ 0x8000
 PKT_READY            equ RAM_TOP-0x110   ; 7EF0 (5EF0 stock)
 PKT_BUF              equ PKT_READY+1
 PKT_STATE            equ RAM_TOP-0x0f
@@ -255,7 +265,9 @@ PORT_IN              equ 0xc0
 ; demand is ~120 bytes (B4 query chain ~40 + tick6_service with rx_consume ~40
 ; + int/NMI frames), hence bug B1.  Patched: 256-byte stack at 0x5DF0..0x5EEF,
 ; carved off the top of the message store so nothing else has to move.
-STACK_TOP            equ PKT_READY   ; first PUSH lands two below
+STACK_TOP_2K         equ RAM_TOP-0x10 ; P51: LITE on a 2 K chip: the stack in the buffer's top half
+PKT_MAX_FULL         equ 254         ; longest payload: PKT_BUF+255 is NMI_SEEN
+PKT_MAX_2K           equ 128
 ; FLASH blink: frames per half period of CTRL_LATCH bit 7. Stock 13 = 2.4 Hz;
 ; 7 gave a visible ~5 Hz on the sign (2026-09-19), which is what proved bit 7
 ; is the blink clock. Change here to retune, nothing else references it.
@@ -265,11 +277,33 @@ FRAME_COLS           equ 60          ; columns sent per row: the CC710 panel's 5
     ELSE
 FRAME_COLS           equ 86          ; columns sent per row: the panel's 84 plus two that fall off the chain
     ENDIF
+    IFDEF LITE
+CHANNELS             equ 10          ; message channels 0-9
+TICK6_DIV            equ 1           ; 4 MHz: 1302 interrupts a second, the tick service on each
+DISP_FRAC            equ 42          ; DISP_STRETCH counts sevenths of six interrupts: 42nds of one
+BAUD_STEP_300        equ 30          ; BAUD_T fifths of a 1/6 interrupt, so 30 an interrupt;
+BAUD_STEP_600        equ 30          ; 300 baud only
+BAUD_STEP_1200       equ 30
+TWINKLE_DOTS         equ 24          ; what a 4-frame tick has time for at 4 MHz
+STACK_SIZE           equ 126         ; a 2 K chip's stack fits above PKT_MAX_2K; peak use about 50
+STACK_CANARY         equ 96
+    ELSE
+CHANNELS             equ 100         ; message channels 0-99
+TICK6_DIV            equ 6           ; 8 MHz: 7812 interrupts a second
+DISP_FRAC            equ 7           ; DISP_STRETCH counts sevenths of an interrupt
+BAUD_STEP_300        equ 5
+BAUD_STEP_600        equ 10
+BAUD_STEP_1200       equ 20
+TWINKLE_DOTS         equ 80          ; P49: random spots darkened each tick; about 30 land on lit pixels in plain text
+STACK_SIZE           equ 160         ; P35: a boot-time canary measured 130 bytes at most (a 57-channel store fill)
+STACK_CANARY         equ 128         ; bytes of 0x55 laid at the stack's bottom at boot; the stats query counts those left
+    ENDIF
+RAM_TOP              equ 0x8000
+RAM_ALT              equ 0x2000      ; the stock 8 K chip mirrors 6000 onto 4000
 HOLD_FRAMES          equ 80          ; frames a PAUSE, HOLD, wipe or clock holds the panel (~1.3 s); P35: the default of CFG_HOLD
 TWINKLE_TICK         equ 4           ; P49: frames a TWINKLE's dark pixels stay dark
 GLIMMER_TICK         equ 3           ; P50: frames between a GLIMMER's row steps
 GLIMMER_BAND         equ 0x07        ; P50: a stripe's dark rows; it rolls through 8 (7 rows and the unused bit 7)
-TWINKLE_DOTS         equ 80          ; P49: random spots darkened each tick; about 30 land on lit pixels in plain text
 BEEP_LEN             equ 150         ; beeper on for this many tick6 periods (~115 ms)
 IR_REPEAT_DELAY      equ 1300        ; tick6 periods a held remote key waits before repeating (~1 s)
 IR_REPEAT_TICKS      equ 300         ; ... and between repeats (~0.23 s)
@@ -279,9 +313,8 @@ IR_DEBOUNCE_WINDOW   equ 400         ; tick6 periods a lone first frame waits fo
 MARK_LO              equ 0xd0        ; channel markers are two bytes D0+tens, D0+units
 MARK_HI              equ 0xda        ; the last marker byte value; alone, DA ends the store
 TEXT_END             equ 0x03        ; ends a channel's text
-CHANNELS             equ 100         ; message channels 0-99
-CHAN_DEMO            equ 100         ; the pseudo-channel that plays DEMO_MESSAGE
-SEQ_LIST_LEN         equ 104         ; SEQ_LIST: up to 100 entries plus FF terminators
+CHAN_DEMO            equ CHANNELS    ; the pseudo-channel that plays DEMO_MESSAGE
+SEQ_LIST_LEN         equ CHANNELS+4  ; SEQ_LIST: an entry per channel plus FF terminators
 
 ; ---- Message attribute bytes (the sign's own names, firmware.md §8) --------
 ATTR_BIG             equ 0x10
@@ -313,9 +346,6 @@ KEY_DEL              equ 0x7f
 ; baud_calibrate sets BAUD_T from the tick6 count per NMI second (1280 + s ticks
 ; -> (1280 + s) / 10); until then, or on a DC supply, it is the default.
 BAUD_T_DEFAULT       equ 128
-BAUD_STEP_300        equ 5
-BAUD_STEP_600        equ 10
-BAUD_STEP_1200       equ 20
 BAUD_CAL_LIMIT       equ 60          ; |s| beyond this (4.7 %) is a partial second or a stall: ignored
 ; P31: the NMI is the mains zero-cross on AC, or the add-in board's HC4060 Q9
 ; when BANK_REG bit 7 selects it through the board's '151 (hardware.md)
@@ -343,14 +373,12 @@ LATCH_TX             equ 0x10        ; CTRL_LATCH bit 4: serial TX
 IR_BIT               equ 4           ; P36: PORT_IN bit of the IR receiver, on a '244 piggybacked on U12; bit 1 is the keypad's
 PORT_IR              equ 1<<IR_BIT
 LATCH_BLINK          equ 0x80        ; CTRL_LATCH bit 7: the FLASH blink clock
-STACK_SIZE           equ 160         ; P35: a boot-time canary measured 130 bytes at most (a 57-channel store fill); 128 overran into the TX segments
-STACK_CANARY         equ 128         ; bytes of 0x55 laid at the stack's bottom at boot; the stats query counts those left
 STALL_FRAMES         equ 3           ; frames without a pkt_poll that count as a renderer stall
 CRAWL_LEAD           equ 8           ; P42: columns the plain crawl keeps in hand (~130 ms at full speed)
 ; P21: packet processing runs in the render loop and replies go out in the
-; background, so their state cannot share renderer scratch. 56 bytes below the
-; stack, carved off the store.
-STREAM_AREA          equ STACK_TOP-STACK_SIZE-STREAM_AREA_SIZE
+; background, so their state cannot share renderer scratch. Just below the
+; packet buffer, with the stack under it (P51).
+STREAM_AREA          equ PKT_READY-STREAM_AREA_SIZE
 TX_SEG0              equ STREAM_AREA+0     ; segment being sent: ptr, count, flags (bit 0 = append the sum)
 TX_SEG1              equ STREAM_AREA+5     ; next segment, same layout
 TX_SUM               equ STREAM_AREA+10    ; running 8-bit sum of TX_SEG0's bytes
@@ -394,9 +422,14 @@ ALT_NEXT             equ STREAM_AREA+57    ; P46: the editor inserts this after 
 ALT_FX               equ STREAM_AREA+58    ; P48: FF = the UP or DOWN that follows scrolls instead of wiping
 SPARKLE              equ STREAM_AREA+59    ; P49/P50: the page's hold twinkles (1) or glimmers (2); 0 = a plain hold
 SPARKLE_RND          equ STREAM_AREA+60    ; P49: the holds' 16-bit xorshift state, never 0
-STREAM_AREA_SIZE     equ 62
-STORE_TOP            equ STREAM_AREA-1     ; with a 32 K chip (16 K usable)
-STORE_TOP_8K         equ STORE_TOP-0x2000  ; with the stock 8 K chip
+STACK_INIT           equ STREAM_AREA+62    ; P51: ram_probe's choices: the stack's top and bottom,
+STACK_BOT            equ STREAM_AREA+64    ;   and the longest payload the buffer takes
+PKT_MAX              equ STREAM_AREA+66
+STREAM_AREA_SIZE     equ 67
+STACK_TOP            equ STREAM_AREA       ; first PUSH lands two below; SP is STACK_INIT, set at boot
+STORE_TOP            equ STACK_TOP-STACK_SIZE-1 ; with a 32 K chip (16 K usable)
+STORE_TOP_8K         equ STORE_TOP-RAM_ALT ; with the stock 8 K chip
+STORE_TOP_2K         equ STREAM_AREA-1-0x3800 ; P51: LITE on a 2 K chip, the stack moved up
 ; store_init derives the warning level, the text allowance (301 = framing) and
 ; the B4 '1' size from whichever ceiling the RAM test picks.
 
@@ -804,8 +837,9 @@ ROM_ID:
 
 ; ---- app_start: cold start: set SP, run init routines, EI, jump to main loop
 app_start:
-        LD SP,STACK_TOP
+        LD SP,STACK_TOP_2K      ; the buffer's top half: idle until init_vars picks the stack
         CALL init_vars
+        LD SP,(STACK_INIT)
         LD HL,0
         LD (IR_REJ),HL
         LD (IR_REJ+2),HL
@@ -896,12 +930,12 @@ int_lit_on:
         LD C,A
         LD A,(DISP_ACC)
         ADD A,C
-        LD B,6
+        LD B,TICK6_DIV
 
 int_disp_carry:
-        CP 7
+        CP DISP_FRAC
         JR c,int_disp_reload
-        SUB 7
+        SUB DISP_FRAC
         INC B
         JR int_disp_carry
 
@@ -921,7 +955,7 @@ int_disp_mark:
 int_tick6:
         LD A,(TICK6_COUNT)
         INC A
-        CP 6
+        CP TICK6_DIV
         JR nz,int_tick6_store
         LD HL,TICK6_CAL         ; P35: counted here, where the mark is made, so a late
         INC (HL)                ; service cannot shrink the calibration's second
@@ -942,6 +976,7 @@ int_tick6_store:
         PUSH HL
 
 int_vector:
+    IFNDEF LITE                 ; no receiver, and its timing wants 128 us interrupts
         LD A,(IR_QUIET)         ; P35: the decoder waiting on the line has nothing to
         AND A                   ; do until it moves: its handler, ~90 cycles an interrupt
         JR z,int_vector_push    ; (a reset every interrupt on a sign with no receiver), is skipped
@@ -957,6 +992,7 @@ int_vector:
 int_vector_push:
         LD HL,(TICK_VECTOR)
         PUSH HL
+    ENDIF
 
 int_vector_done:
         EX AF,AF'
@@ -1878,6 +1914,7 @@ repair_marker:
         JR repair_fix_pair
 
 repair_check_units:
+        LD A,MARK_LO+CHANNELS/10 ; the tens byte past the last channel
         CP E
         JR nz,repair_fix_pair
         DEC HL
@@ -2043,7 +2080,9 @@ init_clear_stream:
         LD (HL),A
         INC HL
         DJNZ init_clear_stream
-        LD A,0x55               ; P40: HL is at the stack's bottom: lay the canary
+        CALL ram_probe
+        LD HL,(STACK_BOT)       ; P40: lay the canary at the stack's bottom
+        LD A,0x55
         LD B,STACK_CANARY
 
 init_canary:
@@ -2137,7 +2176,7 @@ CFG_DEFAULTS:
         db CFG_MAGIC, 1         ; signature, address 1 (NETCC's default)
         db 0x03                 ; full brightness, not muted
         db 0, 0, 0, 0           ; spare line roles: none
-        db 99                   ; alert channel
+        db CHANNELS-1           ; alert channel
         db HOLD_FRAMES, FLASH_HALF_PERIOD
         db 1, 0                 ; beeper on, remote unlocked
         db 0, 0, 0              ; status reports off, clock source auto, reserved
@@ -3702,7 +3741,7 @@ beep_start:
 fx_end_of_channel:
         CALL effect_none
         CALL scroll_off_text
-        LD SP,STACK_TOP
+        LD SP,(STACK_INIT)
         JP main_loop
 
 ; ---- the movement attributes: 0F RIGHT (effect 4), 18 LEFT (plain crawl, no
@@ -4719,28 +4758,62 @@ clr_chan_next:
         LD A,MARK_HI            ; not a channel: init_sequence loads the default
         JP seq_list_one
 
-; ---- store_init: message-store init. Sets the store
-;      ceiling and its three derived constants, writes the 0xDA store
-;      terminator at the ceiling, then zeroes 0x5EF0..0x5FFF (PKT_READY,
-;      PKT_BUF and the parser state, i.e. the whole top page of RAM).
-;      0x43DE = ceiling-100, the "100 KEYS LEFT" trip point (used at 0x2601).
-;      0x43DC = free text bytes, the scan bound used by store_repair at 0x0481.
-store_init:
-        LD A,0xff
-        ; P13: which chip? An 8 K RAM mirrors 6000 onto 4000. FRAMEBUF is
-        ; scratch at this point (the stub's library copy, cleared by init_render).
+; ---- ram_probe (P13, P51): which chip, from where it mirrors FRAMEBUF ->
+;      STORE_LIMIT, STACK_INIT, STACK_BOT and PKT_MAX. FRAMEBUF is scratch at
+;      boot (the stub's library copy, cleared by init_render).
+ram_probe:
+        LD HL,STACK_TOP
+        LD (STACK_INIT),HL
+        LD A,PKT_MAX_FULL
+        LD (PKT_MAX),A
+        LD HL,FRAMEBUF+RAM_ALT
+        CALL ram_mirrors
+        LD HL,STORE_TOP
+        JR nz,ram_probe_done    ; 16 K
+    IFDEF LITE
+        LD HL,FRAMEBUF+0x0800
+        CALL ram_mirrors
+        LD HL,STORE_TOP_8K
+        JR nz,ram_probe_done
+        ASSERT PKT_BUF+PKT_MAX_2K <= STACK_TOP_2K-STACK_SIZE
+        LD HL,STACK_TOP_2K      ; 2 K: the stack moves into the buffer's top half
+        LD (STACK_INIT),HL
+        LD A,PKT_MAX_2K
+        LD (PKT_MAX),A
+        LD HL,STORE_TOP_2K
+    ELSE
+        LD HL,STORE_TOP_8K
+    ENDIF
+
+ram_probe_done:
+        LD (STORE_LIMIT),HL
+        LD HL,(STACK_INIT)
+        LD DE,-STACK_SIZE
+        ADD HL,DE
+        LD (STACK_BOT),HL
+        RET
+
+; ---- ram_mirrors: HL = an address -> Z if it mirrors FRAMEBUF. The byte at
+;      HL is put back: on a larger chip it is in the store.
+ram_mirrors:
+        LD C,(HL)
         LD A,0x55
         LD (FRAMEBUF),A
         CPL
-        LD (FRAMEBUF+0x2000),A
-        LD HL,STORE_TOP
+        LD (HL),A
         LD A,(FRAMEBUF)
-        CP 0x55
-        JR z,store_init_limits
-        LD HL,STORE_TOP_8K
+        LD (HL),C
+        CP 0xaa
+        RET
 
-store_init_limits:
-        LD (STORE_LIMIT),HL
+; ---- store_init: message-store init. From ram_probe's ceiling, sets its
+;      three derived constants, writes the 0xDA store terminator at the
+;      ceiling, then clears PKT_READY and the parser state (the buffer may
+;      hold the stack, P51).
+;      0x43DE = ceiling-100, the "100 KEYS LEFT" trip point (used at 0x2601).
+;      0x43DC = free text bytes, the scan bound used by store_repair at 0x0481.
+store_init:
+        LD HL,(STORE_LIMIT)
         LD (STORE_END),HL
         PUSH HL
         LD DE,100
@@ -4752,25 +4825,21 @@ store_init_limits:
         OR A
         SBC HL,DE               ; size = top - MSG_STORE + 1
         LD (STORE_SIZE),HL
-        LD DE,301
+        LD DE,CHANNELS*3+1      ; the empty channels' framing
         OR A
         SBC HL,DE
         LD (STORE_TEXT_LIMIT),HL
-        ; P1: the store terminator no longer sits one byte below the page to
-        ; be cleared, so write it first, then set HL/BC for the clear.
         LD HL,(STORE_LIMIT)
         LD (HL),MARK_HI
-        LD BC,NMI_VEC-PKT_READY ; stop short of the boot stub's bytes
-        LD HL,PKT_READY
+        XOR A
+        LD (PKT_READY),A
+        LD HL,NMI_SEEN
+        LD B,NMI_VEC-NMI_SEEN   ; stop short of the boot stub's bytes
 
 store_init_zero_page:
-        LD (HL),0
+        LD (HL),A
         INC HL
-        DEC BC
-        LD A,C
-        OR B
-        JR nz,store_init_zero_page
-        XOR A
+        DJNZ store_init_zero_page
         LD (RX_PHASE),A
         LD (RX_ACC),A
         RET
@@ -5237,6 +5306,7 @@ rx_start:
         LD A,0
         LD (RX_IDLE),A
         JR c,rx_start_timed
+    IFNDEF LITE                 ; 300 baud only: nothing to time
         LD A,(MENU_ACTIVE)      ; P45: a terminal's keys come seconds apart and need
         LD B,A                  ; not start like B1: the rate stays as B7 '1' set it
         LD A,(TERM_MODE)
@@ -5245,6 +5315,7 @@ rx_start:
         LD A,1
         LD (RX_PHASE),A
         RET
+    ENDIF
 
 rx_start_timed:
         LD A,(BAUD_T)
@@ -5524,11 +5595,22 @@ latch_dim:
         AND 3
         CP 3
         JR z,latch_row          ; full: LIT_LIMIT is 0 (cmd_B6_config clears it)
+    IFDEF LITE                  ; a tick per interrupt: the single pass dark, the double lit
+        BIT 3,B                 ; strobe to interrupt (level 2) or interrupt to blank (1)
+        RET z
+        CP 2
+        LD A,1
+        JR nz,lit_set
+        LD (LIT_COUNT),A
+        LD (LIT_LIMIT),A
+        JR latch_row
+    ELSE
         BIT 3,B
         JR z,lit_set
         LD B,A
         ADD A,A
         ADD A,B
+    ENDIF
 
 lit_set:
         LD (LIT_LIMIT),A
@@ -5624,6 +5706,15 @@ pkt_flag_restart:
 ; ---- pkt_st_len: store length; reset checksum & PKT_PTR=PKT_BUF; len 0 goes straight to checksum state
 pkt_st_len:
         LD (PKT_LEN),A
+        LD HL,PKT_LEN
+        LD A,(PKT_MAX)
+        CP (HL)
+        JR nc,pkt_len_fits
+        LD A,0xff               ; P51: longer than the buffer: parse it, keep nothing
+        LD (PKT_DISCARD),A
+
+pkt_len_fits:
+        LD A,(HL)
         AND A
         LD HL,pkt_st_data
         JR nz,pkt_len_setup
@@ -6011,7 +6102,7 @@ key_handler:
         LD (KEY_ECHO_TX),A
 
 editor_start:
-        LD SP,STACK_TOP
+        LD SP,(STACK_INIT)
         XOR A
         LD (SVC_ACTIVE),A       ; P26: entered from rx_consume inside the service
         LD (EDIT_CLOSE),A
@@ -6414,7 +6505,7 @@ exit_seq_found:
         LD (NEXT_CHAN),A
 
 exit_to_display:
-        LD SP,STACK_TOP
+        LD SP,(STACK_INIT)
         XOR A
         LD (MENU_ACTIVE),A
         LD (FORCE_BOLD),A
@@ -6678,6 +6769,8 @@ askchan_accept:
         LD B,2
         LD HL,CHAN_D10
         CALL ascii_dec_to_bin
+        CP CHANNELS
+        JR nc,askchan_clear     ; no such channel: ask again
 
 askchan_return:
         RET
@@ -8299,7 +8392,11 @@ pkt_byte_loop:
         DKEY CMD_COLOR_A0, cmd_1E_color_A0
         DKEY CMD_APPEND, cmd_B3_append
         DKEY CMD_QUERY, cmd_B4_query
+    IFDEF LITE
+        DKEY CMD_OTA, pkt_done_pop      ; an EPROM: nothing to write
+    ELSE
         DKEY CMD_OTA, cmd_B5_ota
+    ENDIF
         DKEY CMD_CONFIG, cmd_B6_config
         db 0xff
 
@@ -8513,7 +8610,7 @@ pkt_done_resized:
         JP init_sequence        ; else just recount the empty channels
 
 pkt_done_restart:
-        LD SP,STACK_TOP
+        LD SP,(STACK_INIT)
         LD A,0xff
         LD (PKT_RESTART),A      ; left set: the emulator reads which exit was taken
         LD HL,SEQ_LIST
@@ -8592,8 +8689,12 @@ pq_memory:
         OR A
         SBC HL,DE
         CALL bin_to_dec5
+        LD A,(PKT_MAX)          ; P51: the longest payload a frame may carry
+        LD L,A
+        LD H,0
+        CALL bin_to_dec5
         LD HL,PKT_BUF+3
-        LD BC,10
+        LD BC,15
 
 pq_reply:
         LD A,C
@@ -8658,7 +8759,7 @@ pq_stats:
         LD (IX+4),A
         LD A,(BOOT_COUNT)
         LD (IX+5),A
-        LD HL,STACK_TOP-STACK_SIZE
+        LD HL,(STACK_BOT)
         LD A,0x55
         LD B,STACK_CANARY
 
@@ -9202,24 +9303,42 @@ append_seat:
 pkt_next_jr19:
         JP pkt_next
 
-; ---- cmd_09_channel: 09 d d: select channel (2 ASCII digits, 0-99) ; channel 100 sets CHAN_LOCK
+; ---- cmd_09_channel: 09 d [d]: select a channel by one ASCII digit or two;
+;      the second is taken only if it is a digit and the pair is a channel
 cmd_09_channel:
         CALL pkt_next_byte
         AND 15
-        LD (CHAN_D10),A
-        CALL pkt_next_byte
-        AND 15
-        LD (CHAN_D1),A
-        LD B,2
-        LD HL,CHAN_D10
-        CALL ascii_dec_to_bin
         LD E,A
+        LD A,D                  ; D = bytes left, the one at IY included
+        DEC A
+        JR z,cmd09_one
+        LD A,(IY+1)
+        SUB '0'
+        CP 10
+        JR nc,cmd09_one
+        LD C,A
+        LD A,E
+        ADD A,A
+        ADD A,A
+        ADD A,E
+        ADD A,A
+        ADD A,C
+        CP CHANNELS
+        JR nc,cmd09_one
+        LD (CHAN_D1),A          ; pkt_next_byte returns the loop's count in DE
+        CALL pkt_next_byte
+        LD A,(CHAN_D1)
+        LD E,A
+
+cmd09_one:
+        LD A,E                  ; chan_open takes the channel in A and E
 
 select_chan_common:
         CALL chan_open
         JR pkt_next_jr19
 
-; ---- cmd_04_sequence: 04 dd dd ... [D|d]: rebuild SEQ_LIST from 2-digit channel numbers
+; ---- cmd_04_sequence: 04 dd dd ... [D|d]: rebuild SEQ_LIST from 2-digit channel
+;      numbers, or 1-digit ones with ten channels
 cmd_04_sequence:
         LD A,0xff
         LD (PKT_SEQ_CHANGED),A  ; P27: pkt_done_continue recounts the empty channels
@@ -9240,6 +9359,9 @@ seq_pair_loop:
         CP '0'
         JR c,pkt_next_jr19
         AND 15
+    IF CHANNELS <= 10
+        JR seq_pair_store
+    ENDIF
         LD (CHAN_D10),A
         CALL pkt_next_byte
         CP 'D'
@@ -9792,5 +9914,6 @@ ota_updating_msg:
         ds 0x3fc0-$,0xff
 TRAILER:
         ds 0x4000-$,0xff
-
+    IFNDEF LITE                 ; LITE: one 16 K image for a 27128
         ds 0x8000-$,0xff        ; bank B: the packer fills it, the T48 image carries both
+    ENDIF
