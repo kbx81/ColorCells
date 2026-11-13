@@ -284,6 +284,7 @@ DISP_FRAC            equ 42          ; DISP_STRETCH counts sevenths of six inter
 BAUD_STEP_300        equ 30          ; BAUD_T fifths of a 1/6 interrupt, so 30 an interrupt;
 BAUD_STEP_600        equ 30          ; 300 baud only
 BAUD_STEP_1200       equ 30
+BAUD_STEP_1920       equ 0           ; never matches BAUD_STEP
 TWINKLE_DOTS         equ 24          ; what a 4-frame tick has time for at 4 MHz
 STACK_SIZE           equ 126         ; a 2 K chip's stack fits above PKT_MAX_2K; peak use about 50
 STACK_CANARY         equ 96
@@ -294,6 +295,7 @@ DISP_FRAC            equ 7           ; DISP_STRETCH counts sevenths of an interr
 BAUD_STEP_300        equ 5
 BAUD_STEP_600        equ 10
 BAUD_STEP_1200       equ 20
+BAUD_STEP_1920       equ 40          ; P52: the bit is exactly 4 interrupts (baud_bit)
 TWINKLE_DOTS         equ 80          ; P49: random spots darkened each tick; about 30 land on lit pixels in plain text
 STACK_SIZE           equ 160         ; P35: a boot-time canary measured 130 bytes at most (a 57-channel store fill)
 STACK_CANARY         equ 128         ; bytes of 0x55 laid at the stack's bottom at boot; the stats query counts those left
@@ -342,7 +344,8 @@ KEY_DEL              equ 0x7f
 ; 130 us; the 300-baud bit is 25.6 of them, kept in fifths as BAUD_T, and the
 ; faster rates step the same accumulator 10 or 20 fifths per interrupt. 2400
 ; is not offered: sampled once per interrupt, its bits are read within a third
-; of a bit of their middles and long frames fail on the board.
+; of a bit of their middles and long frames fail on the board. P52: 1920 is
+; exactly 4 interrupts a bit, so every sample sits at the same point of its bit.
 ; baud_calibrate sets BAUD_T from the tick6 count per NMI second (1280 + s ticks
 ; -> (1280 + s) / 10); until then, or on a DC supply, it is the default.
 BAUD_T_DEFAULT       equ 128
@@ -876,12 +879,12 @@ nmi_entry:                      ; clock_tick and baud_calibrate use A, BC and HL
 int_timer:
         EX AF,AF'
         EXX
-        IN A,(PORT_IN)          ; P35: one sample for the IR gate at the end
+        IN A,(PORT_IN)          ; P35: one sample for the IR gate at the end and
         LD (PORT_SAMPLE),A
         LD A,(RX_PHASE)         ; P30: the serial bit engines, every interrupt,
         AND A                   ; so 1200 baud fits; idle they cost a line poll
         JR nz,int_rx_active
-        IN A,(PORT_IN)
+        LD A,(PORT_SAMPLE)      ; P52: the receiver, which then samples every bit at the same point
         BIT 3,A
         CALL nz,rx_start
         JR int_tx
@@ -977,6 +980,9 @@ int_tick6_store:
 
 int_vector:
     IFNDEF LITE                 ; no receiver, and its timing wants 128 us interrupts
+        LD A,(RX_IDLE)          ; P52: no remote decoding while serial bytes arrive:
+        AND A                   ; on the board it costs the receiver late samples
+        JR z,int_vector_done
         LD A,(IR_QUIET)         ; P35: the decoder waiting on the line has nothing to
         AND A                   ; do until it moves: its handler, ~90 cycles an interrupt
         JR z,int_vector_push    ; (a reset every interrupt on a sign with no receiver), is skipped
@@ -5161,7 +5167,7 @@ tx_tick:
 
 tx_edge:
         LD C,A
-        LD A,(BAUD_T)
+        CALL baud_bit
         ADD A,C
         LD (TX_ACC),A
         LD HL,TX_BITIDX
@@ -5209,7 +5215,7 @@ tx_start_byte:
         LD (TX_SHIFT),A
         XOR A
         LD (TX_BITIDX),A
-        LD A,(BAUD_T)
+        CALL baud_bit
         LD (TX_ACC),A
         LD A,(CTRL_LATCH_SHADOW)
         OR LATCH_TX
@@ -5287,6 +5293,16 @@ tx_stream_idle:
         LD (PKT_BUSY),A
         RET
 
+; ---- baud_bit (P52): A = the bit time in BAUD_STEP units: 4 interrupts at
+;      1920, else BAUD_T. Flags and A only.
+baud_bit:
+        LD A,(BAUD_STEP)
+        CP BAUD_STEP_1920
+        LD A,4*BAUD_STEP_1920
+        RET z
+        LD A,(BAUD_T)
+        RET
+
 ; ---- rx_start (P30, ISR): a start bit has just been seen on PORT_IN bit 3
 ;      (1 = space). After BAUD_IDLE_FRAMES of silence the pulse is timed to set
 ;      the rate (a frame's B1 has a one-bit start pulse: 26 interrupts at 300
@@ -5318,7 +5334,7 @@ rx_start:
     ENDIF
 
 rx_start_timed:
-        LD A,(BAUD_T)
+        CALL baud_bit
         LD C,A
         SRL A
         ADD A,C                 ; 1.5 bits: the middle of bit 0, less the half
@@ -5336,8 +5352,8 @@ rx_start_timed:
 ; ---- rx_phase_run (P30, ISR): A = RX_PHASE, 1 or 2
 rx_phase_run:
         DEC A
-        JR nz,rx_sample_tick
-        IN A,(PORT_IN)          ; phase 1: how long is the start pulse
+        JP nz,rx_sample_tick
+        LD A,(PORT_SAMPLE)      ; phase 1: how long is the start pulse
         BIT 3,A
         JR z,rx_measured
         LD HL,RX_WIDTH
@@ -5348,8 +5364,11 @@ rx_phase_run:
 
 rx_measured:
         LD A,(RX_WIDTH)
+        AND A
+        JR z,rx_abort           ; noise
+        LD C,BAUD_STEP_1920     ; P52: 1-4 interrupts
         CP 5
-        JR c,rx_abort           ; a 2400-baud start bit, or noise: not taken
+        JR c,rx_rate
         LD C,BAUD_STEP_1200
         CP 10
         JR c,rx_rate
@@ -5361,11 +5380,11 @@ rx_measured:
 rx_rate:
         LD A,C
         LD (BAUD_STEP),A        ; the transmitter follows: replies at the host's rate
-        LD A,(RX_WIDTH)         ; the pulse ran width + 1.5 interrupts: the edge
-        LD H,0                  ; was seen up to one late and the count began
-        LD L,A                  ; an interrupt after that. HL = that in BAUD_STEP
-        LD D,H                  ; units + T/2: whole bits the pulse covered (the
-        LD E,L                  ; start bit and leading 0 bits), remainder to the next middle
+        LD A,(RX_WIDTH)         ; now is width + 1.5 interrupts after the edge on
+        LD H,0                  ; average, the pulse's end half an interrupt before
+        LD L,A                  ; (P52). HL = width + 1 in BAUD_STEP units + T/2:
+        LD D,H                  ; whole bits the pulse covered (the start bit and
+        LD E,L                  ; leading 0 bits), remainder to the next middle
         ADD HL,HL
         ADD HL,HL
         ADD HL,DE               ; 5 x width
@@ -5380,11 +5399,8 @@ rx_rate_scale:
 
 rx_rate_scaled:
         LD A,(BAUD_STEP)
-        LD E,A
-        SRL A
-        ADD A,E                 ; 1.5 interrupts
-        LD E,A
-        LD A,(BAUD_T)
+        LD E,A                  ; 1 interrupt
+        CALL baud_bit
         LD C,A
         SRL A
         ADD A,E                 ; + T/2
@@ -5406,8 +5422,16 @@ rx_bits_done:
         LD A,B
         OR A
         JR z,rx_abort           ; shorter than half a bit: noise
+        LD A,(BAUD_STEP)
+        SRL A
+        LD E,A
         LD A,C
-        SUB L                   ; to the next bit's middle
+        SUB L                   ; to the next bit's middle from the pulse's end,
+        SUB E                   ; less the half interrupt since; if past, the next interrupt
+        JR nc,rx_acc_set
+        XOR A
+
+rx_acc_set:
         LD (RX_ACC),A
         LD A,9
         SUB B                   ; data bits left after the ones the pulse covered
@@ -5428,7 +5452,8 @@ rx_sample_tick:
         LD C,A
         INC A
         SRL A
-        LD B,A                  ; half an interrupt
+        INC A                   ; P52: a middle exactly half an interrupt away is taken
+        LD B,A                  ; now: the board's interrupts run late, never early
         LD A,(RX_ACC)
         SUB C
         JR c,rx_sample_now
@@ -5439,7 +5464,7 @@ rx_sample_tick:
 
 rx_sample_now:
         LD C,A
-        LD A,(BAUD_T)
+        CALL baud_bit
         ADD A,C
         LD (RX_ACC),A
         LD A,(RX_BITS)
@@ -5447,7 +5472,7 @@ rx_sample_now:
         JR z,rx_stop_sample
         DEC A
         LD (RX_BITS),A
-        IN A,(PORT_IN)
+        LD A,(PORT_SAMPLE)
         AND 8                   ; space is a 0 bit
         LD A,(RX_SHIFT)
         JR nz,rx_bit_zero
@@ -5462,7 +5487,7 @@ rx_bit_zero:
         RET
 
 rx_stop_sample:
-        IN A,(PORT_IN)
+        LD A,(PORT_SAMPLE)
         BIT 3,A
         JR nz,rx_byte_end       ; no stop bit: dropped
         LD A,(RX_COUNT)

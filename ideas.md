@@ -92,3 +92,16 @@ The block itself exists since patch 35 ([patched notes](patched.md#2-patches)): 
 The live bits of the flags byte (alert playing, editor open, wrapped) sit outside the sum so they can change without a reseal; the clock and the sequence beside the block are outside it for the same reason, and the sequence is read with `B4 '6'`.
 
 **Status reports** are built as patch 41 ([patched notes](patched.md#2-patches)): byte 12, `B1 addr 03 'S' channel flags sum` at each channel start and with channel `FF` when the editor opens, the flags being `CFG_FLAGS` as is. Not built from the design: a report on every flag change, since with the spare lines dropped (§1) nothing else changes behind the host's back.
+
+## 12. Serial rates on whole interrupts
+
+Built for 1920 baud: patch 52 ([patched notes](patched.md#2-patches)). A bit of a whole number of interrupts puts every sample at the same point of its bit; what remains is where the start edge falls between two interrupts:
+
+| Interrupts a bit | Baud | Sample error, bits | Notes |
+|---|---|---|---|
+| 6.4 | 1200 | ±0.16 | standard; snapped samples |
+| 4 | 1920 | −0.25 to 0 | patch 52: the middle falls between two interrupts, and the earlier one is taken |
+| 3 | 2560 | ±0.17 | built and tested: about 6 percent of long frames lost to the board's late interrupts, which cost a third of a bit each |
+| 2 | 3840 | ±0.25 | the ceiling: a two-interrupt start pulse is hard to tell from noise |
+
+Open: what delays the board's interrupts by one to three periods in the middle of a byte. The emulator shows no stretch with interrupts off longer than about 60 µs, and the remote decoder accounts for part of it on the signs. If it is found, 2560 could come back as the fast rate. The other route to faster serial is a faster CPU clock (§8).
