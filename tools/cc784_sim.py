@@ -1724,6 +1724,18 @@ def cmd_scroll():
     check('plain UP still wipes (effect 2 seen)', any(e == 2 for e, w in seq))
     check('no faults', not s.faults)
 
+    # the moving frames show only the row color: yellow even right after a colored crawl
+    s = Sign(rom, syms, fresh_ram=True); s.run_ms(2500)
+    s.send_frame(b'\x09\x30\x30\x0e\x83GREEN CRAWL \xb2\x1aUP\xb2\x1bDOWN\x18', addr=1); s.rx_wait()
+    rc = set()
+    for _ in range(16000):
+        s.run_ms(0.5)
+        win = bytes(s.m.memory[fb:fb + n])
+        if s.ram('EFFECT_ID')[0] in (6, 7) and s.ram('DISP_ON')[0] and any(win) and not any(c & 0x80 for c in win):
+            rc.add(s.ram('ROW_COLOR')[0])          # a moving frame: pixels only
+    check('SCROLL UP/DOWN after a green crawl: the row color while moving is yellow (%s)' % sorted('%02x' % c for c in rc),
+          rc and all(c & 0xef == 0x8f for c in rc))
+
     # P53: SCROLL RIGHT after a colored crawl, sampled every frame: step k is the new page's
     # last k columns, then the panel's page (unrolled from the ring) pushed right; the margin
     # byte where they meet carries the old page's start color, and ROW_COLOR is the color in

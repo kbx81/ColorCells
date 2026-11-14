@@ -4314,6 +4314,10 @@ fxv_scroll:
         LD A,(EFFECT_ID)
         CP 8
         JR z,scroll_right
+        LD A,(ROW_COLOR)        ; P53: the moving frames have no color bytes, so the
+        AND COLOR_FLASH         ; row color is all they show: yellow, not what the last
+        OR COLOR_DEFAULT        ; crawl left there
+        LD (ROW_COLOR),A
         LD BC,96
         EX DE,HL
         ADD HL,BC
