@@ -8,6 +8,7 @@
     uv run tools/cc784_lint.py -f tools/messages/tour.txt
     uv run tools/cc784_lint.py --hex 1a48454c4c4f18         # raw bytes
     uv run tools/cc784_lint.py --static "..."               # the rules only, no emulator
+    uv run tools/cc784_lint.py --field 3=72F "IT IS @{field 3}"  # a field's value for the widths
 
 The rules read the bytes; the page widths come from the patched firmware itself, run
 in the emulator at both panel widths (86 columns, and the CC710's 60). Each finding is
@@ -45,6 +46,7 @@ def tokenize(data):
             n = data[i + 1]
             if n in SCROLLS: toks.append(Tok(i, data[i:i + 2], 'effect', SCROLLS[n]))
             elif n in MODIFIERS: toks.append(Tok(i, data[i:i + 2], 'modifier', MODIFIERS[n]))
+            elif 0x30 <= n <= 0x39: toks.append(Tok(i, data[i:i + 2], 'field', '{field %c}' % n))
             else: toks.append(Tok(i, data[i:i + 2], 'attr', NAMES.get((b, n), 'B2 %02X' % n)))
             i += 2; continue
         if b in WIPES: toks.append(Tok(i, data[i:i + 1], 'effect', WIPES[b]))
@@ -61,7 +63,7 @@ class Page:
     def __init__(self, effect):
         self.effect, self.head, self.body, self.end = effect, [effect], [], None
     @property
-    def text(self): return ''.join(t.name for t in self.body if t.kind == 'text')
+    def text(self): return ''.join(t.name for t in self.body if t.kind in ('text', 'field'))
 
 def pages(toks):
     out, cur = [], None
@@ -71,7 +73,7 @@ def pages(toks):
             cur = Page(t); out.append(cur)
         elif cur and t.kind == 'left':
             cur.end = t; cur = None
-        elif cur and not any(u.kind == 'text' for u in cur.body) and (t.kind == 'modifier' or t.name == 'THIN'):
+        elif cur and not any(u.kind in ('text', 'field') for u in cur.body) and (t.kind == 'modifier' or t.name == 'THIN'):
             cur.head.append(t)                   # a color may come first: the firmware still takes it
         elif cur:
             cur.body.append(t)
@@ -114,7 +116,7 @@ def rule_left_terminator(m):
 def rule_page_trailing_space(m):
     """spaces at the end of a wipe or scroll page push it past the panel and force a left scroll"""
     for p in m.pages:
-        txt = [t for t in p.body if t.kind == 'text']
+        txt = [t for t in p.body if t.kind in ('text', 'field')]
         if txt and txt[-1].name == ' ':
             n = len(txt) - len(''.join(t.name for t in txt).rstrip(' '))
             yield 'error', txt[-1].pos, '%s page "%s" ends with %d space%s' % (p.effect.name, p.text.rstrip(), n, '' if n == 1 else 's')
@@ -126,6 +128,18 @@ def rule_thin(m):
         if t.name == 'THIN' and id(t) not in heads:
             yield 'warn', t.pos, 'THIN away from the start of a wipe or scroll does nothing (a wasted byte)'
 
+def rule_field(m):
+    """a field (B2 '0'-'9', channel 90-99) holds text and colors only; a page holding one
+    is measured with the value given by --field, or with the field empty"""
+    for n, v in sorted(m.fields.items()):
+        for t in tokenize(v):
+            if t.kind not in ('text', 'color'):
+                yield 'error', 0, 'field %d holds %s: a field is text and colors only' % (n, t.name)
+    for p in m.pages:
+        for t in p.body:
+            if t.kind == 'field' and t.data[1] - 0x30 not in m.fields:
+                yield 'warn', t.pos, '%s page "%s" holds field %d with no --field value: measured empty' % (p.effect.name, p.text, t.data[1] - 0x30)
+
 def rule_redundant_default(m):
     """unattributed text is already NORM and yellow"""
     for t in m.toks:
@@ -134,10 +148,10 @@ def rule_redundant_default(m):
             yield 'info', t.pos, '%s before the first text is the default (a wasted byte)' % t.name
 
 RULES = [rule_trailing_space, rule_bg_space, rule_stationary_color, rule_left_terminator,
-         rule_page_trailing_space, rule_thin, rule_redundant_default]
+         rule_page_trailing_space, rule_thin, rule_field, rule_redundant_default]
 
 # ---- page widths, measured by the firmware in the emulator
-def measure(data, cc710):
+def measure(data, cc710, fields={}):
     """[(columns used, overflowed, char it stopped at)] per staged page, in order, one pass of the channel"""
     import cc784_sim as S
     src = S.HERE.parent / 'src' / 'patched'
@@ -147,6 +161,8 @@ def measure(data, cc710):
         rom, syms = S.assemble(tmp)
     s = S.Sign(rom, syms, fresh_ram=True); s.run_ms(2500)
     s.send_frame(bytes([0xB6, 8, 1]), addr=1); s.rx_wait(); s.run_ms(300)    # holds of one frame: a quick pass
+    for n, v in fields.items():
+        s.send_frame(b'\x09\x39%c\x0e' % (0x30 + n) + v, addr=1); s.rx_wait(); s.run_ms(300)
     col, ptr, txbuf = syms['COL_COUNT'], syms['STAGE_PTR'], syms['TXBUF']
     flush = (syms['fx_flush_stage'], syms['fx_dispatch'])
     res = []
@@ -168,8 +184,8 @@ def measure(data, cc710):
     return res[:want], syms['FRAME_COLS']
 
 class Msg:
-    def __init__(self, data):
-        self.data, self.toks = data, tokenize(data)
+    def __init__(self, data, fields={}):
+        self.data, self.toks, self.fields = data, tokenize(data), fields
         self.pages = pages(self.toks)
 
 def main():
@@ -178,12 +194,14 @@ def main():
     ap.add_argument('-f', '--file')
     ap.add_argument('--hex')
     ap.add_argument('--static', action='store_true', help='the rules only, no emulator')
+    ap.add_argument('--field', action='append', default=[], metavar='N=TEXT', help="a field's value (channel 90+N), for the page widths")
     a = ap.parse_args()
     if a.hex: data = bytes.fromhex(a.hex)
     elif a.file: data = cc784.encode_text(pathlib.Path(a.file).read_text().rstrip('\n'))
     elif a.message is not None: data = cc784.encode_text(a.message)
     else: ap.error('a message, -f FILE or --hex')
-    m = Msg(data)
+    fields = {int(f.split('=', 1)[0]): cc784.encode_text(f.split('=', 1)[1]) for f in a.field}
+    m = Msg(data, fields)
     found = []
     for rule in RULES:
         for sev, pos, text in rule(m):
@@ -191,7 +209,7 @@ def main():
     widths = {}
     if not a.static:
         for cc710 in (False, True):
-            res, cols = measure(data, cc710)
+            res, cols = measure(data, cc710, fields)
             widths[cols] = res
             for p, (used, over, c) in zip([p for p in m.pages], res):
                 if over:

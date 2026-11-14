@@ -59,6 +59,10 @@ cc784_sim.py - run the CC784NIR ROM under emulation (kosarev's z80 core) with a 
         SCROLL UP and DOWN (patch 48): every step against the two pages, yellow while
         moving and colors at rest, the plain wipe unchanged, FUNC2 in the editor.
 
+    uv run tools/cc784_sim.py field
+        Fields (patch 54): channels 90-99 inside a message in a crawl, a wipe and a
+        scroll, loads while a field is drawn, seq M.
+
     uv run tools/cc784_sim.py fuzz [RUNS]
         Cut the power at a random instant of an update, RUNS times (default 100);
         every reboot must land in a bank whose trailer and image CRC check out.
@@ -1974,6 +1978,153 @@ def cmd_glimmer():
     return all(checks)
 
 
+def cmd_field():
+    """P54: B2 '0'-'9' shows channel 90-99 inside a message: in a crawl, a wipe and a
+    scroll, with colors, empty and nested; a field's end is not a channel's end; loads
+    while a field is drawn (into the field, below, between and above) keep the display
+    running; seq 'M' plays 00-89 only."""
+    rom, syms = assemble(HERE.parent / 'src' / 'patched')
+    checks = []
+    def check(name, cond):
+        checks.append(bool(cond)); print('  %s %s' % ('ok  ' if cond else 'FAIL', name))
+    s = Sign(rom, syms, fresh_ram=True, baud=1200); s.run_ms(2500)
+    cur, cur_ptr = syms['CUR_CHAR'], syms['STORE_CURSOR']
+    fetch = (syms['fetch_char'], syms['attr_hold_check'])
+    clock = (syms['render_clock'], syms['menu_ask_chan_cur'])
+    seat = (syms['seq_set_cursor'], syms['seq_ret'])
+    s.watch = {cur, cur_ptr}
+    s.m.mark_addrs(cur, 1, s.m.WRITE_MARK); s.m.mark_addrs(cur_ptr, 1, s.m.WRITE_MARK)
+    def send(payload, ms=600):
+        s.send_frame(payload, addr=1, flag=0x81); s.rx_wait(); s.run_ms(ms)
+    def events():
+        """the bytes fetched (clock digits included) and 'S' at each channel start"""
+        out = bytearray()
+        for t, pc, a, v in s.watch_log:
+            if a == cur_ptr:
+                if seat[0] <= pc <= seat[1]: out += b'\x00'
+            elif fetch[0] <= pc < fetch[1] or clock[0] <= pc < clock[1]:
+                if 0x20 <= v <= 0x7e and v != 0x5f: out.append(v)
+        s.watch_log.clear()
+        return bytes(out)
+    def passes(ms):
+        s.watch_log.clear(); s.run_ms(ms)
+        return events().split(b'\x00')[1:-1]
+    def play(chan, text, ms=20000):
+        send(b'\x09' + chan + b'\x0e' + text + b'\x04' + chan)
+        return passes(ms)
+    send(b'\x09\x39\x33\x0e72F\x09\x39\x34\x0e\x8cHOT\x09\x39\x35\x0e\x09\x39\x36\x0eX\xb2\x33Y')
+    p = play(b'00', b'TEMP \xb2\x33 NOW')
+    check('crawl: %r' % p[:2], len(p) >= 2 and set(p) == {b'TEMP 72F NOW'})
+    p = play(b'01', b'\x1aIN \xb2\x33\x18 OUT')
+    check('wipe: %r' % p[:2], len(p) >= 2 and all(b'IN 72F' in x and x.endswith(b'OUT') for x in p))
+    p = play(b'02', b'\xb2\x1bIS \xb2\x33\x18 OK')
+    check('scroll: %r' % p[:2], len(p) >= 2 and all(b'IS 72F' in x and x.endswith(b'OK') for x in p))
+    p = play(b'03', b'IT IS \xb2\x34 TODAY')
+    check('a field with a color: %r' % p[:2], len(p) >= 2 and set(p) == {b'IT IS HOT TODAY'})
+    p = play(b'04', b'A\xb2\x35B <\xb2\x36>')
+    check('an empty field shows nothing, a nested reference nothing: %r' % p[:2], len(p) >= 2 and set(p) == {b'AB <XY>'})
+    p = play(b'05', b'\x5f \xb2\x33 \x5f')
+    check('the clock before and after a field: %r' % p[:2], len(p) >= 2 and all(x.count(b':') == 2 and b' 72F ' in x for x in p))
+    # status reports: one per channel start, none at a field's end
+    send(bytes([0xB6, 12, 1]))
+    s.tx_edges.clear()
+    n = len(play(b'00', b'TEMP \xb2\x33 NOW', 15000)) + 1
+    tx = s.tx_bytes()
+    r = [i for i in range(len(tx) - 6) if tx[i] == 0xB1 and tx[i + 3] == ord('S')]
+    check('one status report per pass (%d reports, %d passes)' % (len(r), n), abs(len(r) - n) <= 1)
+    send(bytes([0xB6, 12, 0]))
+    # loads while a field is drawn
+    field = bytes(range(0x41, 0x5b)) * 2
+    send(b'\x09\x39\x33\x0e' + field)
+    want = b'<' + field + b'>'
+    def mid_field(payload):
+        s.watch_log.clear()
+        for _ in range(4000):
+            s.run_ms(5)
+            fr = int.from_bytes(s.ram('FIELD_RET', 2), 'little')
+            if fr and int.from_bytes(s.ram('STORE_CURSOR', 2), 'little') - int.from_bytes(s.ram('FIELD_MARK', 2), 'little') > 10:
+                break
+        s.send_frame(payload, addr=1, flag=0x81); s.rx_wait(); s.run_ms(50)
+        restart = s.ram('PKT_RESTART')[0]
+        s.run_ms(25000)
+        p = events().split(b'\x00')
+        return restart, p[1] if len(p) > 2 else p
+    send(b'\x09\x30\x36\x0e<\xb2\x33>\x04\x30\x36', 3000)
+    s.watch_log.clear(); s.run_ms(25000)
+    base = events().split(b'\x00')[1:-1]
+    check('a 52-byte field in channel 6: %r' % base[:1], base and base[0] == want)
+    for name, payload in (('below the parent (2)', b'\x09\x30\x32\x0eTWO'),
+                          ('between the parent and the field (50)', b'\x09\x35\x30\x0eFIFTY'),
+                          ('above the field (99)', b'\x09\x39\x39\x0eNINETY NINE')):
+        restart, got = mid_field(payload)
+        check('a load %s while the field is drawn: no restart (%02x), the pass whole: %r' % (name, restart, got),
+              restart == 0 and got == want)
+    restart, got = mid_field(b'\x09\x39\x33\x0eNEW')
+    head = got[1:-1] if isinstance(got, bytes) else b''
+    check('a load into the field while it is drawn: no restart (%02x), the parent goes on: %r' % (restart, got),
+          restart == 0 and isinstance(got, bytes) and got[:1] == b'<' and got[-1:] == b'>' and field.startswith(head) and len(head) >= 8)
+    p = passes(15000)
+    check('the next pass shows the new value: %r' % p[:1], p and p[0] == b'<NEW>')
+    # seq M
+    send(b'\x04M')
+    sl = s.ram('SEQ_LIST', syms['SEQ_LIST_LEN'])
+    check('seq M: 00-89 then FF (%s ... %s)' % (sl[86:90].hex(), sl[90:].hex()), list(sl[:90]) == list(range(90)) and set(sl[90:]) == {0xff})
+    s.watch_log.clear(); s.run_ms(60000)
+    starts = [(t, pc, a, v) for t, pc, a, v in s.watch_log if a == cur_ptr and seat[0] <= pc <= seat[1]]
+    ev = events()
+    check('seq M: field channels 93-96 never play on their own (%d channel starts, %r)' % (len(starts), ev[:60]),
+          starts and b'\x0072F\x00' not in ev and b'\x00XY\x00' not in ev)
+    send(b'\x04A')
+    sl = s.ram('SEQ_LIST', syms['SEQ_LIST_LEN'])
+    check('seq A: 00-99 again', list(sl[:100]) == list(range(100)))
+    s.send_frame(b'\xb7\x31', addr=1); s.rx_wait(); s.run_ms(800)         # the editor as a terminal
+    for k in (b'\x04', b'M'):                                              # SEQ MSG? then M
+        s.send_bytes(k); s.rx_wait(); s.run_ms(1500)
+    sl = s.ram('SEQ_LIST', syms['SEQ_LIST_LEN'])
+    check('the editor: SEQ, M sets 00-89 (%s ... %s) and leaves the editor (%s)' % (sl[86:90].hex(), sl[90:].hex(), s.ram('MENU_ACTIVE').hex()),
+          list(sl[:90]) == list(range(90)) and set(sl[90:]) == {0xff} and s.ram('MENU_ACTIVE')[0] == 0)
+    send(b'\x04A')
+    check('no faults, stack high-water %d' % s.depth(), not s.faults and s.depth() < 110)
+    # the editor: FUNC PROG n inserts a field, shown as <Fn>; any other key cancels
+    e = Sign(rom, syms, fresh_ram=True); e.run_ms(2500)
+    e.send_frame(b'\x09\x30\x30\x0eAB CD', addr=1); e.rx_wait(); e.run_ms(3000)
+    def store():
+        return bytes(e.m.memory[syms['MSG_STORE']:int.from_bytes(e.ram('STORE_END', 2), 'little')])
+    def keys(*ks, ms=400):
+        for k in ks:
+            e.ir_key(k, stretch_us=100); e.ir_wait(); e.run_ms(ms)
+    strf, label = syms['STR_F'], []
+    rd0 = e._on_read
+    def rd(addr):
+        if addr == strf:
+            label.append(e.t); return e.m.memory[addr]
+        return rd0(addr)
+    e.m.set_read_callback(rd); e.m.mark_addrs(strf, 1, e.m.READ_MARK)
+    keys('STOP', ms=1500)
+    def idle_sp():
+        sps = set()
+        for _ in range(40):
+            e.run_ms(5); sps.add(e.m.sp)
+        return max(sps)
+    sp0, before, shown0 = idle_sp(), store(), len(label)
+    keys('SHIFT', 'STOP', 'PROG')
+    pend = e.ram('FIELD_PENDING')[0]
+    keys('X', ms=1500)
+    check('FUNC PROG (pending %02x) then X cancels: nothing inserted, stack where it was (%04x -> %04x)'
+          % (pend, sp0, idle_sp()), pend == 0xFF and store() == before and e.ram('FIELD_PENDING')[0] == 0 and idle_sp() == sp0)
+    keys('SHIFT', 'STOP', 'PROG')
+    keys('3', ms=2000)
+    after = store()
+    check('FUNC PROG 3 inserts B2 33 (%s), shown as <F3> (%d label reads, %d before)'
+          % (after[-10:].hex(), len(label), shown0), after.count(b'\xb2\x33') == 1 and len(after) == len(before) + 2 and len(label) > shown0 and shown0 == 0)
+    keys('DEL', ms=1500)
+    check('DEL takes the B2 along (%s)' % store()[-8:].hex(), store() == before)
+    e.send_frame(b'\xb7\x30', addr=1); e.rx_wait(); e.run_ms(3000)
+    check('editor closed, no faults', e.ram('MENU_ACTIVE')[0] == 0 and not e.faults)
+    print('field: %d/%d checks pass' % (sum(checks), len(checks)))
+    return all(checks)
+
+
 def cmd_lite():
     """LITE (an unmodified 3A board: 4 MHz, 2 K RAM, no IR, 300 baud): a 16 K image; the
     store fills the 2 K; channels by one digit or two; one-digit sequences; B5 refused;
@@ -2461,7 +2612,7 @@ def cmd_compare(dir_a, dir_b):
 
 if __name__ == '__main__':
     args = sys.argv[1:]
-    if not args or args[0] not in ('stack', 'compare', 'eeprom', 'ota', 'update', 'push', 'fuzz', 'ram', 'quiet', 'speed', 'baud', 'clock', 'config', 'keypad', 'seq', 'stats', 'status', 'term', 'randbow', 'scroll', 'twinkle', 'glimmer', 'lite'):
+    if not args or args[0] not in ('stack', 'compare', 'eeprom', 'ota', 'update', 'push', 'fuzz', 'ram', 'quiet', 'speed', 'baud', 'clock', 'config', 'keypad', 'seq', 'stats', 'status', 'term', 'randbow', 'scroll', 'twinkle', 'glimmer', 'lite', 'field'):
         sys.exit(__doc__)
     if args[0] == 'ram':
         sys.exit(0 if cmd_ram() else 1)
@@ -2493,6 +2644,8 @@ if __name__ == '__main__':
         sys.exit(0 if cmd_glimmer() else 1)
     if args[0] == 'lite':
         sys.exit(0 if cmd_lite() else 1)
+    if args[0] == 'field':
+        sys.exit(0 if cmd_field() else 1)
     if args[0] == 'quiet':
         sys.exit(0 if cmd_quiet() else 1)
     if args[0] == 'push':

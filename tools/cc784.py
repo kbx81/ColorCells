@@ -20,6 +20,8 @@ Examples
     cc784.py clear 0 1 2                # clear channels
     cc784.py clearall
     cc784.py seq 0 1 2                  # display sequence; 'seq a' = all channels
+    cc784.py seq m                      # patched firmware: messages only, 00-89
+    cc784.py field 3 "72F"              # patched firmware: load channel 93, shown by @{field 3} in a message
     cc784.py --channels 10 msg 1 "HI"   # ten-channel firmware (CC710): channels 0-9, one digit
     cc784.py --lite seq 1 3             # patched LITE build (stock 3A board): one-digit channels, else as patched
     cc784.py time                       # set clock from the PC (12-hour)
@@ -89,6 +91,7 @@ NAMED.update({'normal': 0x11, 'bold': 0x12, 'italic': 0x13, 'flash': 0x14, 'larg
               'scroll up': (0xB2, 0x1A), 'scroll down': (0xB2, 0x1B), 'scroll right': (0xB2, 0x0F),
               # hold modifiers: after PAUSE, a wipe, HOLD or a scroll, e.g. @{up}@{twinkle}
               'twinkle': (0xB2, 0x19), 'glimmer': (0xB2, 0xBB)})
+NAMED.update({'field %d' % i: (0xB2, 0x30 + i) for i in range(10)})   # patch 54: channel 90+i shown here
 
 def encode_text(s: str) -> bytes:
     out = bytearray(); i = 0
@@ -536,7 +539,14 @@ def run(link, a, ap):
         s.send_frame(b'\x03')
     elif c == 'seq':
         # the firmware lays 0..99 first and stops at the first non-digit, so a bare 04 (or 'A') is all
-        s.send_frame(b'\x04' + (b'' if [x.lower() for x in args] in (['a'], ['all']) else b''.join(chan(int(x), digit1) for x in args)))
+        if [x.lower() for x in args] in (['m'], ['messages']):
+            s.send_frame(b'\x04M')                    # patch 54: 00-89, the fields left out
+        else:
+            s.send_frame(b'\x04' + (b'' if [x.lower() for x in args] in (['a'], ['all']) else b''.join(chan(int(x), digit1) for x in args)))
+    elif c == 'field':
+        if digit1:
+            sys.exit("fields need the full patched firmware (channels 90-99)")
+        s.send_frame(b'\x09' + chan(90 + int(args[0])) + b'\x0E' + encode_text(' '.join(args[1:])))
     elif c in ('time', 'time24'):
         # the protocol carries no seconds, and the sign starts the new minute at
         # :00 (patch 23), so the frame is timed to be processed on the minute:

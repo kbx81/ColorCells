@@ -340,6 +340,7 @@ ATTR_ALT             equ 0xb2        ; P46: the variant of the attribute after i
 KEY_EURO             equ 0xb6
 KEY_FUNC             equ 0xb7
 KEY_DEL              equ 0x7f
+KEY_FIELD            equ 0xd1        ; P54: FUNC + PROG; a marker byte, which no key produces
 ; P30: serial timing. An interrupt is 128 us plus the acknowledge latency, about
 ; 130 us; the 300-baud bit is 25.6 of them, kept in fifths as BAUD_T, and the
 ; faster rates step the same accumulator 10 or 20 fifths per interrupt. 2400
@@ -429,7 +430,14 @@ STACK_INIT           equ STREAM_AREA+62    ; P51: ram_probe's choices: the stack
 STACK_BOT            equ STREAM_AREA+64    ;   and the longest payload the buffer takes
 PKT_MAX              equ STREAM_AREA+66
 PORT_SAMPLE          equ STREAM_AREA+67    ; P35: PORT_IN as the ISR read it this interrupt
+    IFDEF LITE
 STREAM_AREA_SIZE     equ 68
+    ELSE
+FIELD_RET            equ STREAM_AREA+68    ; P54: where the parent resumes after a field; 0 = no field open
+FIELD_MARK           equ STREAM_AREA+70    ; P54: the open field's channel marker
+FIELD_PENDING        equ STREAM_AREA+72    ; P54: editor: FUNC + PROG pressed, next key is the field's digit
+STREAM_AREA_SIZE     equ 73
+    ENDIF
 STACK_TOP            equ STREAM_AREA       ; first PUSH lands two below; SP is STACK_INIT, set at boot
 STORE_TOP            equ STACK_TOP-STACK_SIZE-1 ; with a 32 K chip (16 K usable)
 STORE_TOP_8K         equ STORE_TOP-RAM_ALT ; with the stock 8 K chip
@@ -1597,6 +1605,15 @@ seq_fill:
         LD B,4
         JR seq_one_loop
 
+    IFNDEF LITE
+; ---- seq_list_messages (P54): SEQ_LIST = channels 0..89, then FF
+seq_list_messages:
+        CALL seq_list_default
+        LD HL,SEQ_LIST+CHANNELS-11
+        LD B,10
+        JR seq_one_loop
+    ENDIF
+
 ; ---- seq_list_one: SEQ_LIST = A, then FF to the end (A kept)
 seq_list_one:
         LD HL,SEQ_LIST
@@ -2143,6 +2160,9 @@ init_render_zero:
         LD (FB_COL),HL
         LD HL,0
         LD (FB_EXTRA_LEN),HL
+    IFNDEF LITE
+        LD (FIELD_RET),HL       ; P54
+    ENDIF
         LD HL,FRAME_COLS
         LD (FB_OUT_LEN),HL
         LD A,COLOR_DEFAULT
@@ -2625,6 +2645,12 @@ rainbow_next:
 rainbow_alt:                    ; P46: B2 BC is RANDBOW; a B2 before anything else is skipped
         LD HL,(STORE_CURSOR)
         LD A,(HL)
+    IFNDEF LITE
+        SUB '0'                 ; P54: B2 '0'-'9' shows channel 90-99 here
+        CP 10
+        JP c,field_open
+        LD A,(HL)
+    ENDIF
         LD C,1
         CP ATTR_PAUSE           ; P49: B2 19: TWINKLE; P50: B2 BB: GLIMMER;
         JR z,rainbow_alt_sparkle ; modifiers for the page's hold, not effects
@@ -3568,7 +3594,11 @@ fx_dispatch:
         CALL dispatch
         DKEY 6, fx_halt
         DKEY 7, fx_beep
+    IFDEF LITE
         DKEY 3, fx_end_of_channel
+    ELSE
+        DKEY 3, field_close
+    ENDIF
         DKEY ATTR_LEFT, fx_left
         DKEY ATTR_PAUSE, fx_pause
         DKEY ATTR_UP, fx_up
@@ -6214,6 +6244,9 @@ editor_dispatch:
         DKEY 2, editor_key_speed
         DKEY 0xb3, editor_goto_end
         DKEY KEY_FUNC, editor_key_func
+    IFNDEF LITE
+        DKEY KEY_FIELD, editor_key_field
+    ENDIF
         DKEY 9, menu_prog_msg
         DKEY 4, menu_seq_msg
         DKEY 13, editor_exit
@@ -6631,7 +6664,7 @@ menu_ask_chan_cur:
         JR askchan_prefill
 
 ; ---- menu_ask_chan: ask for a channel number; returns 0-99, 64 demo,
-;      97 SEQ key, 98 MAGIC key, 99 A(ll), 9A blank + enter
+;      97 SEQ key, 98 MAGIC key, 99 A(ll), 9A blank + enter, 9B M(essages, P54)
 menu_ask_chan:                  ; the callers keep nothing in the registers
         LD (ASK_CHAN_PROMPT),HL
         JP askchan_clear
@@ -6669,6 +6702,10 @@ askchan_key:
         DKEY KEY_DEL, askchan_backspace
         DKEY 'A', askchan_all
         DKEY 'a', askchan_all
+    IFNDEF LITE
+        DKEY 'M', askchan_msgs
+        DKEY 'm', askchan_msgs
+    ENDIF
         DKEY 'D', askchan_demo
         DKEY 'd', askchan_demo
         db 0xff
@@ -6711,7 +6748,7 @@ askchan_clear:
         LD A,' '
         LD (CHAN_D10),A
         LD (CHAN_D1),A
-        JR askchan_show
+        JP askchan_show
 
 askchan_enter:
         LD A,(CHAN_D1)
@@ -6735,6 +6772,12 @@ askchan_seq_key:
 askchan_magic_key:
         LD A,0x98
         RET
+
+    IFNDEF LITE
+askchan_msgs:
+        LD A,0x9b
+        RET
+    ENDIF
 
 ; ---- menu_address: 5E (FUNC+MAGIC): ADDRESS? 1-255, never 0 or 2A
 menu_address:
@@ -7030,6 +7073,12 @@ editor_key_color:
         LD DE,COLOR_PENDING
         JR editor_set_pending
 
+    IFNDEF LITE
+editor_key_field:
+        LD DE,FIELD_PENDING
+        JR editor_set_pending
+    ENDIF
+
 editor_key_func:
         LD A,0xff
         LD (FUNC_PENDING),A
@@ -7095,6 +7144,10 @@ seqmenu_result:
         JR z,seqmenu_done
         CP 0x99
         JR z,seqmenu_all
+    IFNDEF LITE
+        CP 0x9b
+        JR z,seqmenu_msgs
+    ENDIF
         CP 0x9a
         JR z,editor_exit_jr17
         LD HL,(SEQ_PTR)
@@ -7110,6 +7163,12 @@ seqmenu_done:
         XOR A
         LD (SEQ_MENU_ACTIVE),A
         JP editor_reshow
+
+    IFNDEF LITE
+seqmenu_msgs:
+        CALL seq_list_messages
+        JR editor_exit_jr17
+    ENDIF
 
 seqmenu_all:
         CALL seq_list_default
@@ -7537,7 +7596,32 @@ editor_translate_key:
         CALL apply_graph_prefix
         CALL apply_color_prefix
         CALL apply_speed_prefix
+    IFNDEF LITE
+        CALL apply_field_prefix
+    ENDIF
         JR editor_key_to_attr
+
+    IFNDEF LITE
+; ---- apply_field_prefix (P54): FUNC PROG n -> B2 '0'+n; any other key cancels
+apply_field_prefix:
+        LD HL,FIELD_PENDING
+        LD A,(HL)
+        OR A
+        RET z
+        LD (HL),0
+        LD A,(EDIT_KEY)
+        CALL is_digit
+        JR nc,field_prefix_cancel
+        LD (ALT_NEXT),A
+        LD A,ATTR_ALT
+        LD (EDIT_KEY),A
+        RET
+
+field_prefix_cancel:
+        POP HL                  ; editor_translate_key's return, then ours
+        POP HL
+        JP editor_reshow
+    ENDIF
 
 ; ---- apply_graph_prefix: GRAPH n -> A0|n
 apply_graph_prefix:
@@ -7814,7 +7898,7 @@ redraw_left_attr:
 
 redraw_label_check:
         CALL redraw_in_window
-        JR c,redraw_next
+        JP c,redraw_next
 
 redraw_show_label:
         LD A,(CUR_CHAR)
@@ -7856,6 +7940,8 @@ redraw_speed_label:
         LD A,(CUR_CHAR)
         AND 7
         OR '0'
+
+redraw_label_digit:
         CALL glyph_put_next
         LD HL,STR_CLOSE
         CALL menu_show_text
@@ -7864,6 +7950,20 @@ redraw_speed_label:
 redraw_char_check:
         CALL redraw_in_window
         JR c,redraw_next
+    IFNDEF LITE
+        LD HL,(REDRAW_PTR)      ; P54: a digit after B2 is a field: <F0>-<F9>
+        DEC HL
+        LD A,(HL)
+        CP ATTR_ALT
+        JR nz,redraw_char
+        LD A,(CUR_CHAR)
+        CALL is_digit
+        JR nc,redraw_char
+        LD HL,STR_F
+        CALL show_label
+        LD A,(CUR_CHAR)
+        JR redraw_label_digit
+    ENDIF
 
 redraw_char:
         XOR A
@@ -7894,7 +7994,7 @@ redraw_status:
         LD A,0xff
         LD (TINY_MODE),A
         LD HL,STATUS_FLAGS
-        LD B,6
+        LD B,(STATUS_FLAGS_END-STATUS_FLAGS)/4
 
 status_scan:
         LD E,(HL)
@@ -8121,6 +8221,9 @@ pkt_process:
         LD (PKT_DONE_WANT),A
 
 pkt_entry_nodone:
+    IFNDEF LITE
+        CALL field_park
+    ENDIF
         LD HL,(STORE_CURSOR)
         LD (PKT_SAVE_CURSOR),HL
         LD HL,(INS_PTR)
@@ -8169,7 +8272,7 @@ pkt_marker_back:
         LD A,C
         OR B
         JR nz,pkt_marker_loop
-        JR pkt_process_end
+        JP pkt_process_end
 
 pkt_set_ins:
         LD (STORE_CURSOR),HL
@@ -8393,6 +8496,9 @@ pkt_done_handoff:
 pkt_done_continue:
         LD HL,(PKT_SAVE_CURSOR)
         LD (STORE_CURSOR),HL
+    IFNDEF LITE
+        CALL field_resume
+    ENDIF
         LD HL,(PKT_SAVE_INS)
         LD (INS_PTR),HL
         LD A,(PKT_SAVE_LOCK)    ; P27: cmd_09 and the P24 entry path clear the lock;
@@ -8429,6 +8535,117 @@ pkt_done_restart:
         LD (SEQ_PTR),HL
         CALL shift_chain_clear
         JP restart_display
+
+    IFNDEF LITE
+; ---- field_open (P54): A = the digit; the renderer goes on in channel 90+A and
+;      field_close brings it back. Not inside a field, nothing if missing.
+field_open:
+        INC HL
+        LD (STORE_CURSOR),HL
+        ADD A,MARK_LO
+        LD E,A
+        LD A,(FIELD_RET+1)
+        OR A
+        JR nz,field_next
+        PUSH HL
+        LD HL,(STORE_END)       ; 90-99 sit at the store's end: scan back from it
+        LD BC,MSG_STORE
+        OR A
+        SBC HL,BC
+        LD B,H
+        LD C,L
+        LD HL,(STORE_END)
+
+field_scan:
+        LD A,E
+        CPDR
+        JR nz,field_none
+        LD A,(HL)
+        CP MARK_LO+9
+        JR z,field_found
+        LD A,B
+        OR C
+        JR nz,field_scan
+
+field_none:
+        POP HL
+        JR field_next
+
+field_found:
+        LD (FIELD_MARK),HL
+        INC HL
+        INC HL
+        LD (STORE_CURSOR),HL
+        POP HL
+        LD (FIELD_RET),HL
+
+field_next:
+        POP HL                  ; attr_rainbow's return, as rainbow_next
+        JP render_next_char
+
+; ---- field_close (P54): a 03 ends the field and the parent goes on, or ends the channel
+field_close:
+        LD HL,(FIELD_RET)
+        LD A,H
+        OR A
+        JP z,fx_end_of_channel
+        LD (STORE_CURSOR),HL
+        LD HL,0
+        LD (FIELD_RET),HL
+        JP render_next_char
+
+; ---- field_park (P54): inside a field the packet sees the parent's position, so
+;      its usual checks keep or shift that; FIELD_RET holds the field's meanwhile
+field_park:
+        LD HL,(FIELD_RET)
+        LD A,H
+        OR A
+        RET z
+        LD DE,(STORE_CURSOR)
+        LD (STORE_CURSOR),HL
+        LD (FIELD_RET),DE
+        RET
+
+; ---- field_resume (P54): STORE_CURSOR is the parent's position as kept or shifted;
+;      the field goes on where it was, moved with a lower edit, or ends if it changed
+field_resume:
+        LD HL,(FIELD_RET)
+        LD A,H
+        OR A
+        RET z
+        EX DE,HL
+        LD HL,(PKT_LOW_EDIT)
+        OR A
+        SBC HL,DE
+        JR nc,resume_swap       ; nothing moved under the field
+        LD HL,(PKT_LOW_EDIT)
+        LD BC,(FIELD_MARK)
+        OR A
+        SBC HL,BC
+        JR nc,resume_drop       ; the field's own text changed
+        LD HL,(STORE_END)
+        LD BC,(PKT_SAVE_END)
+        OR A
+        SBC HL,BC
+        PUSH HL
+        ADD HL,DE
+        EX DE,HL
+        POP HL
+        LD BC,(FIELD_MARK)
+        ADD HL,BC
+        LD (FIELD_MARK),HL
+
+resume_swap:
+        LD HL,(STORE_CURSOR)
+        LD (FIELD_RET),HL
+        LD (STORE_CURSOR),DE
+        RET
+
+resume_drop:
+        LD HL,0
+        LD (FIELD_RET),HL
+        RET
+    ENDIF
 
 ; ---- shift_chain_clear: clock a row's worth of zeros through port 40, strobe
 shift_chain_clear:
@@ -9145,7 +9362,11 @@ seq_pair_loop:
         CP 'd'
         JR z,seq_pair_demo
         CALL is_digit
+    IFDEF LITE
         JR nc,pkt_next_jr19
+    ELSE
+        JR nc,seq_messages
+    ENDIF
         AND 15
     IF CHANNELS <= 10
         JR seq_pair_store
@@ -9178,6 +9399,14 @@ seq_pair_store:
         LD (HL),A
         DJNZ seq_pair_loop
         JR pkt_next_jr19
+
+    IFNDEF LITE
+seq_messages:                   ; P54: 'M' is 00-89, leaving 90-99 to the fields
+        AND 0xdf
+        CP 'M'
+        CALL z,seq_list_messages
+        JP pkt_next
+    ENDIF
 
 ; ---- is_ignored_byte: Z (A=0) if A is in IGNORE_TABLE: 00 01 05 08 0A 0B 0C 1C 1D 7F
 is_ignored_byte:
@@ -9297,6 +9526,9 @@ FUNC_TABLE:
         db 0x63, ','
         db ATTR_MAGIC, 0x5e
         db ATTR_BIG, ATTR_TINY
+    IFNDEF LITE
+        db 9, KEY_FIELD         ; P54: PROG
+    ENDIF
         db 0xff
 
 ; ---- FUNC2_TABLE (P46): key, the attribute that follows B2
@@ -9329,6 +9561,10 @@ STATUS_FLAGS:
         dw FUNC_PENDING,STR_FUNC
         dw EURO_STATE,STR_EURO
         dw SPEED_PENDING,STR_SPEED
+    IFNDEF LITE
+        dw FIELD_PENDING,STR_FIELD
+    ENDIF
+STATUS_FLAGS_END:
 
 ; ---- data 2d57-2d60: payload bytes silently ignored by the parser
 IGNORE_TABLE:
@@ -9402,6 +9638,12 @@ STR_CLOSE:
         db ATTR_TINY,"TINY",0x16,0x00
         db 0xff
 ; ---- the status line's labels and the SHIFT indicator (through MENU_MSG_PTR)
+    IFNDEF LITE
+STR_F:
+        db "F",0x00
+STR_FIELD:
+        db "FIELD ",0x00
+    ENDIF
 STR_S:
         db "S",0x00
 STR_SPEED:

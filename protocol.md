@@ -154,6 +154,8 @@ Clear **all** channels (`'A'` in the menu): payload is the single byte `03`.
 
 NETCC sends `"A"` (all) as every channel, `04 30 30 30 31 30 32 … 30 39`, but the firmware lays the full 0–99 sequence down before it parses the digits and stops at the first byte that is not one, so a bare `04`, or `04 41` (`'A'`), means all as well; `cc784.py seq a` sends the bare form.
 
+The patched firmware also takes `04 'M'`: the message channels 00–89, leaving out 90–99, which a message can show inside itself as fields ([patched.md](patched.md#2-patches), patch 54); `cc784.py seq m`.
+
 ### 4.4 Set the clock
 
 ```
@@ -232,6 +234,7 @@ NETCC's names for these are not the sign's. The sign's own editor labels each by
 | — | Scroll right, the variant of the RIGHT wipe: the page slides in from the left a column a frame and pushes the one on the panel off to the right (patch 53; `@{scroll right}`) | `0xB2 0x0F` |
 | — | Glimmer, a patched-firmware modifier for the hold after Pause, a wipe, Hold or a scroll: dark diagonal stripes roll up or down through the page; it goes after the effect ([patched.md](patched.md#2-patches), patch 50; `@{glimmer}`) | `0xB2 0xBB` |
 | — | Twinkle, a patched-firmware modifier for the hold after Pause, a wipe, Hold or a scroll: random pixels go dark while the page holds; it goes after the effect ([patched.md](patched.md#2-patches), patch 49; `@{twinkle}`) | `0xB2 0x19` |
+| — | Field, the patched firmware's channel inside a message: `B2 '0'`–`B2 '9'` renders channel 90–99 at that point, so the host changes a value by loading that channel ([patched.md](patched.md#2-patches), patch 54; `@{field 0}`–`@{field 9}`) | `0xB2 0x30`–`0xB2 0x39` |
 | — | Randbow, the patched firmware's variant of Rainbow: the five colors in a shuffled order ([patched.md](patched.md#2-patches), patch 46; `@{randbow}`) | `0xB2 0xBC` |
 | E, K, O, Q, V | Sync, sync&crawl, var. space, blank, date | **not supported on CC6x7** (listed "(LK)" = later models only) |
 
