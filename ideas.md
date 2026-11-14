@@ -14,13 +14,14 @@ This is the legacy case: one or two RS-232 ports on a PC and many signs. With a 
 
 **Topology.** Host TX fans out to every sign's RX (pin 8). Replies come back up a chain: the last sign's TX (pin 3) goes to the spare input of the sign above it, that sign forwards it onto its own TX, and so on to the host. Only the first sign needs the dongle. No collisions by construction: a packet addresses one sign, so at most one sign transmits, and the forwarding sign is never that one.
 
-**Bit repeater, the cheap version, ~15 bytes.** In the ISR, every 128 µs: read the upstream input bit and copy it to latch bit 4 unless the sign's own transmitter is active. Polarity needs no inversion: an upstream TX idles low for mark, the input reads 0, and latch bit 4 at 0 is mark. Each hop re-times every edge to the interrupt grid, so each hop adds up to 128 µs of jitter per edge:
+**Bit repeater, the cheap version, ~15 bytes.** In the ISR, every interrupt (130 µs): read the upstream input bit and copy it to latch bit 4 unless the sign's own transmitter is active. Polarity needs no inversion: an upstream TX idles low for mark, the input reads 0, and latch bit 4 at 0 is mark. Each hop re-times every edge to the interrupt grid, so each hop adds up to an interrupt of jitter per edge:
 
 | Baud | Bit | Hops before the host's mid-bit sample is at risk |
 |---|---|---|
 | 300 | 3333 µs | 10 or more |
 | 600 | 1667 µs | 5 |
 | 1200 | 833 µs | 2; a third is marginal |
+| 1920 | 521 µs | 1; a second is marginal |
 
 **Byte-level forwarding, the robust version, ~120 bytes ROM plus a few of RAM.** A second receive engine re-times each byte before the transmitter resends it: unlimited hops at any rate, one byte of latency per hop. Only worth building if a chain grows past three signs.
 
@@ -47,9 +48,7 @@ Dim or blank the display between two times of day, set like the clock over seria
 
 ## 6. ROM savings
 
-| Item | Bytes | Note |
-|---|---|---|
-| Faster boot CRC | dropped | only ~20 % faster and needs a chip burn; not worth it |
+Nothing open. Dropped: a faster boot CRC, only about 20 percent faster and in need of a chip burn.
 
 ## 7. Skip empty channels in the sequence
 
@@ -65,19 +64,14 @@ A Z84C0020 is a drop-in at 8 MHz. Faster clocks were worked through and set asid
 
 ## 9. Dongle follow-ups
 
-- **ESPHome config:** `serial_proxy` at 1200 baud with `tx_pin` `inverted: true` only; `remote_receiver` on IO7 with `dump: raw` to read a NIR's remote through U5B; `power_save_mode: light`, since the sign's 10 Ω R31 caps the average current near 130 mA. Bridge R31 on the sign if a dongle ever browns out.
+- **ESPHome config:** one shared base for every dongle. The UART has `tx_pin` `inverted: true` only, two stop bits, a 16 K `rx_buffer_size` (a whole store dump survives a stalled API connection) and a 1 K `tx_buffer_size` (a whole frame goes in one write); the host tools set the rate, up to 1920, when they connect. `serial_proxy` needs [esphome/esphome#22687](https://github.com/esphome/esphome/pull/22687): before it, bytes read from the sign while the API connection was blocked were lost, which showed as long replies missing a few bytes at 1920 on a busy network. The entities: a Display light (brightness, configuration byte 2), Remote and Beeper switches (bytes 11 and 10), a clock format select and a set-clock button, with the clock sent from Home Assistant's time on the minute. `power_save_mode: light`, since the sign's 10 Ω R31 caps the average current near 130 mA; bridge R31 on the sign if a dongle ever browns out. Not fitted: a `remote_receiver` on IO7 with `dump: raw` could read a NIR's remote through U5B.
 - **IR keystroke injection** on a receiver-less NET: close JP2, drive pin 1 from IO2 with the encoder in [tools/cc784_ir.py](tools/cc784_ir.py). Never on a NIR, where the HC14 drives that net.
 - **Remote decoding on the ESP:** the frame format is known ([firmware notes §9](firmware.md#9-ir-remote-decoder-ir_-14821571-h--verified-against-a-capture-of-the-signs-own-receiver)); a custom `remote_receiver` protocol would turn remote keypresses into Home Assistant events.
 - **Declined, recorded:** the LM66200 ideal diode in place of the two MBR120s (better headroom, but raises the WS2812's data threshold above 3.3 V unless the LED keeps a diode of its own); a solder jumper to run the LED from 3.3 V (out of the LED's VDD spec by 0.2 V, blue may be weak).
 
 ## 10. Other models
 
-The CC710 runs a descendant of the original CC784's code base, with the packet protocol added, on the `CC784-3A` board ([firmware notes §15](firmware.md#15-the-cc710-firmware-h--from-a-rom-dump-id-710), [hardware notes §11](hardware.md#11-the-cc784-3a-board-h)). As shipped it cannot run the patched firmware: 2 KB of RAM in a 24-pin socket against the 16 KB the patched build uses. [Hardware notes §12](hardware.md#12-converting-a-cc784-3a-board-to-a-cc784-4) turns the board into a `CC784-4` (RAM, the later power-fail detect, a DB9 cable), after which the patched firmware's CC710 build runs on it ([patched.md](patched.md#2-patches), patch 37). On its stock firmware, two things it could still get:
-
-- **A dongle on its header.** Packet mode needs the boot probe answered (SK1 pins 5, 4, 9) and the CTS/ready lines honoured (SK1 pins 8 and 7 high for TX; pin 4 is the sign's ready). An ESP on the header could do all of that in software, and the CC710 answers queries `0`–`3` once in packet mode. For bench tests there is a way in without an adapter: hold `1`, `7` or `U` on the keypad at power-up (address `*`).
-- **Small patches of its own** (16 KB ROM, 3.9 KB free): the address-inversion bug in the probe's keep path, and the `17` AM/PM handling, if the sign is ever used with a host.
-
-The original CC784 is on the same board ([firmware notes §16](firmware.md#16-the-original-cc784-firmware-h--from-a-rom-dump-id-9g), [hardware notes §13](hardware.md#13-the-original-cc784s-board-h)) and converts the same way, with its `/M1` bodge moved first ([hardware notes §12](hardware.md#12-converting-a-cc784-3a-board-to-a-cc784-4), step 5). Its stock firmware has no packet protocol, so a host can only type into it as keys. Its panel has the NET's and NIR's 84 columns, on 74HC595s like the CC710's; the standard patched build shifts 86 columns and strobes after each row, so once converted it runs that build [H].
+The CC710 and the original CC784 are `CC784-3A` boards ([hardware notes §11](hardware.md#11-the-cc784-3a-board-h), [§13](hardware.md#13-the-original-cc784s-board-h)), converted to a `CC784-4` by [hardware notes §12](hardware.md#12-converting-a-cc784-3a-board-to-a-cc784-4) (the original with its `/M1` bodge moved first, step 5). Both run the patched firmware with a dongle: the CC710 its own build ([patched.md](patched.md#2-patches), patch 37), the original the standard one, since its panel has the NIR's 84 columns. Their stock firmwares are in [firmware notes §15](firmware.md#15-the-cc710-firmware-h--from-a-rom-dump-id-710) and [§16](firmware.md#16-the-original-cc784-firmware-h--from-a-rom-dump-id-9g). An unmodified 3A board runs the LITE build (patch 51).
 
 ## 11. A configuration store
 
@@ -104,4 +98,14 @@ Built for 1920 baud: patch 52 ([patched notes](patched.md#2-patches)). A bit of 
 | 3 | 2560 | ±0.17 | built and tested: about 6 percent of long frames lost to the board's late interrupts, which cost a third of a bit each |
 | 2 | 3840 | ±0.25 | the ceiling: a two-interrupt start pulse is hard to tell from noise |
 
-Open: what delays the board's interrupts by one to three periods in the middle of a byte. The emulator shows no stretch with interrupts off longer than about 60 µs, and the remote decoder accounts for part of it on the signs. If it is found, 2560 could come back as the fast rate. The other route to faster serial is a faster CPU clock (§8).
+Open: what delays the board's interrupts by one to three periods in the middle of a byte. The emulator shows no stretch with interrupts off longer than about 60 µs, and the remote decoder accounts for part of it on the signs. A lead: `/INT` is the HC4020's Q11, high for only 128 µs ([hardware notes §3](hardware.md#3-timebase-h)), so an acknowledge later than that loses the request and the next comes 384 µs after the last acknowledge, two interrupts late. A count of lost requests on the board would test it. If it is found, 2560 could come back as the fast rate.
+
+Other routes to faster serial:
+
+- **A faster CPU clock** (§8).
+- **Q10 for the interrupt** (64 µs, a cut and a jumper at U10 pin 13): 3840 at four interrupts a bit. The request window shrinks to 64 µs, so only the line sample and the counting may run at the full rate and the rest every other interrupt; every constant counted in interrupts changes (`TICK6_DIV`, the display dividers, the lit counts, the remote decoder, the calibration), `RX_FIFO` needs depth, and every board needs the bodge with the firmware. Q9 (32 µs) leaves no time for the handler. Store processing and page writes keep their time, so a push gains far less than the wire does. The watchdog stays on Q13: it counts from the last acknowledge whatever the tap.
+- **A hardware UART** (an 82C51 or 16550 class part on a spare I/O port, on the add-in board): whole bytes, the bit engines out of the interrupt, 9600 and up. A hardware project of its own.
+
+## 13. Smoother crawl during loads
+
+The crawl stutters while a load is processed: during 220-byte loads the stall meter (patch 40) shows pauses of up to about 15 frames, more than patch 42's lead of crawl columns covers, and at 1920 they come about once a second. Not yet broken down between the store insert (already one move of the store's tail per run of plain characters, patch 27), the sequence recount and the DONE; timing each part in the emulator comes first. If the insert dominates, processing a frame in slices between display frames is the likely answer.
