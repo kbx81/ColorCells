@@ -27,7 +27,7 @@ STATIONARY_OTHER = {0x19: 'PAUSE'}                                 # staged page
 
 def is_color(b): return 0x80 <= b <= 0x93
 def is_bg(b): return 0x90 <= b <= 0x93
-def is_text(b): return 0x20 <= b <= 0x7E
+def is_text(b): return 0x20 <= b <= 0x7E or 0x94 <= b <= 0x9F or 0xC0 <= b <= 0xCF or 0xDB <= b <= 0xEF   # ASCII and the Euro glyphs
 
 class Tok:
     def __init__(self, pos, data, kind, name):
@@ -53,7 +53,7 @@ def tokenize(data):
         elif b in STATIONARY_OTHER: toks.append(Tok(i, data[i:i + 1], 'effect', STATIONARY_OTHER[b]))
         elif b == ATTR_LEFT: toks.append(Tok(i, data[i:i + 1], 'left', 'LEFT'))
         elif is_color(b): toks.append(Tok(i, data[i:i + 1], 'color', NAMES.get((b,), '%02X' % b)))
-        elif is_text(b): toks.append(Tok(i, data[i:i + 1], 'text', chr(b)))
+        elif is_text(b): toks.append(Tok(i, data[i:i + 1], 'text', '°' if b == 0x9F else chr(b) if b < 0x7F else '<%02X>' % b))
         else: toks.append(Tok(i, data[i:i + 1], 'attr', NAMES.get((b,), '%02X' % b)))
         i += 1
     return toks

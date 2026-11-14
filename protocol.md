@@ -281,6 +281,8 @@ Note several graphic bytes collide with attribute bytes (`0x1B` is both "left ar
 
 *(NC900/CC900 graphics differ: 3 heart, 2 muncher, 227 phone, 248 wheel, 249 ball, 27 plane, 23 ship, 127 house, 232 car.)*
 
+The patched firmware draws `0x9F` as a degree sign ([patched.md](patched.md#2-patches), patch 55); `cc784.py` sends `°` as that byte, since Latin-1's `0xB0` is REMARK and would hide the text after it. `tools/cc784_font.py` draws every glyph with the codes that reach it.
+
 ---
 
 ## 6. A send routine

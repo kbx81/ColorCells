@@ -92,6 +92,8 @@ NAMED.update({'normal': 0x11, 'bold': 0x12, 'italic': 0x13, 'flash': 0x14, 'larg
               # hold modifiers: after PAUSE, a wipe, HOLD or a scroll, e.g. @{up}@{twinkle}
               'twinkle': (0xB2, 0x19), 'glimmer': (0xB2, 0xBB)})
 NAMED.update({'field %d' % i: (0xB2, 0x30 + i) for i in range(10)})   # patch 54: channel 90+i shown here
+NAMED['degree'] = 0x9F                                                # patch 55
+UNICODE = {'°': 0x9F}                 # Latin-1 B0 would be REMARK, which hides the text after it
 
 def encode_text(s: str) -> bytes:
     out = bytearray(); i = 0
@@ -112,7 +114,7 @@ def encode_text(s: str) -> bytes:
         elif c == '@' and i + 1 < len(s) and s[i + 1] in ESC:
             out.append(ESC[s[i + 1]]); i += 2
         else:
-            out.append(ord(c) & 0xFF); i += 1
+            out.append(UNICODE.get(c, ord(c) & 0xFF)); i += 1
     return bytes(out)
 
 # ---- framing --------------------------------------------------------------

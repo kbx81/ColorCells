@@ -2003,7 +2003,7 @@ def cmd_field():
             if a == cur_ptr:
                 if seat[0] <= pc <= seat[1]: out += b'\x00'
             elif fetch[0] <= pc < fetch[1] or clock[0] <= pc < clock[1]:
-                if 0x20 <= v <= 0x7e and v != 0x5f: out.append(v)
+                if (0x20 <= v <= 0x7e and v != 0x5f) or v == 0x9f: out.append(v)
         s.watch_log.clear()
         return bytes(out)
     def passes(ms):
@@ -2023,6 +2023,16 @@ def cmd_field():
     check('a field with a color: %r' % p[:2], len(p) >= 2 and set(p) == {b'IT IS HOT TODAY'})
     p = play(b'04', b'A\xb2\x35B <\xb2\x36>')
     check('an empty field shows nothing, a nested reference nothing: %r' % p[:2], len(p) >= 2 and set(p) == {b'AB <XY>'})
+    import cc784_font
+    deg = cc784_font.glyphs(rom, syms)[175]
+    send(b'\x09\x39\x37\x0e68\x9fF')
+    p = play(b'07', b'IT IS \xb2\x37')
+    check('P55: 9F is the degree sign (glyph 175 %s), drawn as text in a field: %r' % (deg.hex(), p[:2]),
+          deg == b'\x02\x05\x02' and len(p) >= 2 and set(p) == {b'IT IS 68\x9fF'})
+    send(b'\x09\x30\x37\x0eIT IS \xb2\x37', 1500)                         # the playing channel: a restart, and store_repair
+    store = bytes(s.m.memory[syms['MSG_STORE']:int.from_bytes(s.ram('STORE_END', 2), 'little')])
+    check('P55: 9F survives the store repair of a restart (restart %02x, field 97 %r)' % (s.ram('PKT_RESTART')[0], store[store.find(b'\xd9\xd7'):][:7]),
+          s.ram('PKT_RESTART')[0] == 0xff and b'\xd9\xd768\x9fF\x03' in store)
     p = play(b'05', b'\x5f \xb2\x33 \x5f')
     check('the clock before and after a field: %r' % p[:2], len(p) >= 2 and all(x.count(b':') == 2 and b' 72F ' in x for x in p))
     # status reports: one per channel start, none at a field's end
