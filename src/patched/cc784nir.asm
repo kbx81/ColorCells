@@ -341,6 +341,7 @@ KEY_EURO             equ 0xb6
 KEY_FUNC             equ 0xb7
 KEY_DEL              equ 0x7f
 KEY_FIELD            equ 0xd1        ; P54: FUNC + PROG; a marker byte, which no key produces
+KEY_UNSHIFT          equ 0xd2        ; P56: SHIFT off; it was 9F, the degree sign now
 ; P30: serial timing. An interrupt is 128 us plus the acknowledge latency, about
 ; 130 us; the 300-baud bit is 25.6 of them, kept in fifths as BAUD_T, and the
 ; faster rates step the same accumulator 10 or 20 fifths per interrupt. 2400
@@ -6250,7 +6251,7 @@ editor_dispatch:
         DKEY 9, menu_prog_msg
         DKEY 4, menu_seq_msg
         DKEY 13, editor_exit
-        DKEY 0x9f, editor_loop
+        DKEY KEY_UNSHIFT, editor_loop
         DKEY 0xb1, editor_exit
         db 0xff
         JP editor_insert
@@ -7315,7 +7316,7 @@ getkey_check_shift:
         AND A
         LD A,0x1d
         JR nz,getkey_shift_code
-        LD A,0x9f
+        LD A,KEY_UNSHIFT
 
 getkey_shift_code:
         LD (IR_KEY_CHAR),A
@@ -7796,7 +7797,7 @@ redraw_classify:
 redraw_high:
         CP 0x94
         JR c,redraw_attr
-        CP 0x9f
+        CP 0xa0                 ; P56: 9F is a character
         JR c,redraw_char_check_jr18
         AND 0xf0
         CP 0xc0
@@ -9524,6 +9525,8 @@ FUNC_TABLE:
         db 0x78, '!'
         db 0x43, ','            ; P46: the remote has no comma key
         db 0x63, ','
+        db 0x44, 0x9f           ; P56: the degree sign
+        db 0x64, 0x9f
         db ATTR_MAGIC, 0x5e
         db ATTR_BIG, ATTR_TINY
     IFNDEF LITE
