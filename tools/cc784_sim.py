@@ -1614,9 +1614,10 @@ def cmd_randbow():
     s = Sign(rom, syms, fresh_ram=True); s.run_ms(2500)
     s.send_frame(b'\x09\x30\x30\x0e\xb2\xbc' + text, addr=1); s.rx_wait(); s.run_ms(500)
     runs = deals(s, 30000)
+    n = syms.get('RAINBOW_N', 5)
     def shuffled(r):
-        return all(sorted(r[i:i + 5]) == [1, 2, 3, 4, 5] for i in range(0, len(r) - 4, 5)) \
-            and len(set(r[len(r) - len(r) % 5:])) == len(r) % 5
+        return all(sorted(r[i:i + n]) == list(range(1, n + 1)) for i in range(0, len(r) - n + 1, n)) \
+            and len(set(r[len(r) - len(r) % n:])) == len(r) % n
     check('RANDBOW: %d passes, %s ...' % (len(runs), runs[0][:15] if runs else None),
           len(runs) >= 2 and all(shuffled(r) for r in runs))
     check('no color twice in a row, decks differ between passes',
@@ -1624,8 +1625,8 @@ def cmd_randbow():
 
     s.send_frame(b'\x09\x30\x30\x0e\xbc' + text, addr=1); s.rx_wait(); s.run_ms(500)
     runs = deals(s, 15000)
-    steps = [{(b - a) % 5 for a, b in zip(r, r[1:])} for r in runs]
-    check('plain RAINBOW still steps one color at a time, one direction a pass (%s)' % steps, runs and all(len(x) == 1 and x <= {1, 4} for x in steps))
+    steps = [{(b - a) % n for a, b in zip(r, r[1:])} for r in runs]
+    check('plain RAINBOW still steps one color at a time, one direction a pass (%s)' % steps, runs and all(len(x) == 1 and x <= {1, n - 1} for x in steps))
 
     s.send_frame(b'\x09\x30\x30\x0e' + b'AB\xb2\xbcCD', addr=1); s.rx_wait(); s.run_ms(3000)
     s.ir_key('STOP', stretch_us=100); s.ir_wait(); s.run_ms(1500)
