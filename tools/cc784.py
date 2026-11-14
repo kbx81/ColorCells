@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-cc784.py - talk to a Color Cells CC784 LED sign (bit-banged protocol; 300 baud, or up to 1920 with the patched firmware).
+cc784.py - talk to a Color Cells CC784 LED sign (bit-banged protocol; 300 baud, or up to 2560 with the patched firmware).
 
     pip install pyserial
 
@@ -412,7 +412,7 @@ def parse_reply(raw: bytes, kind: str, ten: bool = False):
         if kind in ('stats', 'timing') and len(data) >= 4:
             t300, step, last, nmi = data[:4]
             print("  300-baud bit %d fifths of an interrupt (a %.2f us interrupt), step %d (%d baud), last second's count low byte %d, NMI %s"
-                  % (t300, 3333.3 / (t300 / 5.0), step, 1920 if step == 40 else step * 60, last, 'seen' if nmi else 'none (DC supply without the add-in board: no calibration)'))
+                  % (t300, 3333.3 / (t300 / 5.0), step, 2560 if step == 40 else step * 60, last, 'seen' if nmi else 'none (DC supply without the add-in board: no calibration)'))
         if kind in ('stats', 'timing') and len(data) in (18, 22):     # patch 40, 44
             d = data
             print("  clock %s (%d NMIs a second); boot %d; up %d s; stack headroom %d of 128 (LITE: 96)"
@@ -427,8 +427,8 @@ def parse_reply(raw: bytes, kind: str, ten: bool = False):
 
 def add_common_args(ap):
     ap.add_argument('-a', '--addr', default='*', help="sign address 0-255 or '*' (broadcast; a broadcast frame gets no ACK and no DONE)")
-    ap.add_argument('-b', '--baud', type=int, default=300, choices=(300, 600, 1200, 1920),
-                    help='line rate; the patched firmware follows the host (patch 30, 1920: patch 52), stock is 300 only')
+    ap.add_argument('-b', '--baud', type=int, default=300, choices=(300, 600, 1200, 2560),
+                    help='line rate; the patched firmware follows the host (patch 30, 2560: patch 52), stock is 300 only')
     ap.add_argument('-g', '--gap', type=float, default=0.0, help='gap between bytes (s)')
     ap.add_argument('-t', '--timeout', type=float, default=3.0, help='reply timeout (s)')
     ap.add_argument('-v', '--verbose', action='store_true')

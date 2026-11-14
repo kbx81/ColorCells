@@ -284,7 +284,7 @@ DISP_FRAC            equ 42          ; DISP_STRETCH counts sevenths of six inter
 BAUD_STEP_300        equ 30          ; BAUD_T fifths of a 1/6 interrupt, so 30 an interrupt;
 BAUD_STEP_600        equ 30          ; 300 baud only
 BAUD_STEP_1200       equ 30
-BAUD_STEP_1920       equ 0           ; never matches BAUD_STEP
+BAUD_STEP_2560       equ 0           ; never matches BAUD_STEP
 TWINKLE_DOTS         equ 24          ; what a 4-frame tick has time for at 4 MHz
 STACK_SIZE           equ 126         ; a 2 K chip's stack fits above PKT_MAX_2K; peak use about 50
 STACK_CANARY         equ 96
@@ -295,7 +295,7 @@ DISP_FRAC            equ 7           ; DISP_STRETCH counts sevenths of an interr
 BAUD_STEP_300        equ 5
 BAUD_STEP_600        equ 10
 BAUD_STEP_1200       equ 20
-BAUD_STEP_1920       equ 40          ; P52: the bit is exactly 4 interrupts (baud_bit)
+BAUD_STEP_2560       equ 40          ; P52: the bit is exactly 3 interrupts (baud_bit)
 TWINKLE_DOTS         equ 80          ; P49: random spots darkened each tick; about 30 land on lit pixels in plain text
 STACK_SIZE           equ 160         ; P35: a boot-time canary measured 130 bytes at most (a 57-channel store fill)
 STACK_CANARY         equ 128         ; bytes of 0x55 laid at the stack's bottom at boot; the stats query counts those left
@@ -344,8 +344,8 @@ KEY_DEL              equ 0x7f
 ; 130 us; the 300-baud bit is 25.6 of them, kept in fifths as BAUD_T, and the
 ; faster rates step the same accumulator 10 or 20 fifths per interrupt. 2400
 ; is not offered: sampled once per interrupt, its bits are read within a third
-; of a bit of their middles and long frames fail on the board. P52: 1920 is
-; exactly 4 interrupts a bit, so every sample sits at the same point of its bit.
+; of a bit of their middles and long frames fail on the board. P52: 2560 is
+; exactly 3 interrupts a bit, so every sample sits at the same point of its bit.
 ; baud_calibrate sets BAUD_T from the tick6 count per NMI second (1280 + s ticks
 ; -> (1280 + s) / 10); until then, or on a DC supply, it is the default.
 BAUD_T_DEFAULT       equ 128
@@ -5296,12 +5296,12 @@ tx_stream_idle:
         LD (PKT_BUSY),A
         RET
 
-; ---- baud_bit (P52): A = the bit time in BAUD_STEP units: 4 interrupts at
-;      1920, else BAUD_T. Flags and A only.
+; ---- baud_bit (P52): A = the bit time in BAUD_STEP units: 3 interrupts at
+;      2560, else BAUD_T. Flags and A only.
 baud_bit:
         LD A,(BAUD_STEP)
-        CP BAUD_STEP_1920
-        LD A,4*BAUD_STEP_1920
+        CP BAUD_STEP_2560
+        LD A,3*BAUD_STEP_2560
         RET z
         LD A,(BAUD_T)
         RET
@@ -5373,7 +5373,7 @@ rx_measured:
         LD A,(RX_WIDTH)
         AND A
         JR z,rx_abort           ; noise
-        LD C,BAUD_STEP_1920     ; P52: 1-4 interrupts
+        LD C,BAUD_STEP_2560     ; P52: 1-4 interrupts
         CP 5
         JR c,rx_rate
         LD C,BAUD_STEP_1200

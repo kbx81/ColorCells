@@ -317,7 +317,7 @@ The sign's side of this protocol is read from the firmware itself, and lives in 
 | Topic | Where |
 |---|---|
 | The fixed 300 baud, the bit-banged receiver and transmitter | [firmware notes §4](firmware.md#4-serial-link-h) |
-| The patched firmware's 300 to 1200 baud, and 1920, set by the first frame after a second of silence | [patched.md](patched.md#2-patches), patches 30 and 52 |
+| The patched firmware's 300 to 1200 baud, and 2560, set by the first frame after a second of silence | [patched.md](patched.md#2-patches), patches 30 and 52 |
 | The patched firmware's configuration block: `B6 index value` writes a byte, `B4 '5'` reads the block, `B4 '6'` the sequence list; `cc784.py config` | [patched.md](patched.md#2-patches), patch 35 |
 | The patched firmware's health counters in the `B4 '4'` reply; `cc784.py stats` | [patched.md](patched.md#2-patches), patches 40 and 44 |
 | The patched firmware's `B4 '1'` reply adds a third five-digit figure, the longest payload a frame may carry: 254, or 128 on a LITE build with 2 K of RAM. A longer frame is dropped unanswered. `cc784.py mem` | [patched.md](patched.md#2-patches), patches 13 and 51 |

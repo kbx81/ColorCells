@@ -1267,8 +1267,8 @@ def cmd_speed():
 
 def cmd_baud():
     """P30: the receiver times the start bit of the first frame after a second of
-    silence and follows the host at 300, 600, 1200 or 1920 baud (P52: 4 interrupts
-    a bit); replies come back at the same rate; 1920 holds through a skewed and
+    silence and follows the host at 300, 600, 1200 or 2560 baud (P52: 3 interrupts
+    a bit); replies come back at the same rate; 2560 holds through a skewed and
     jittered line; NETCC's 300-baud habits still work"""
     rom, syms = assemble(HERE.parent / 'src' / 'patched')
     checks = []
@@ -1278,7 +1278,7 @@ def cmd_baud():
         s.tx_edges.clear(); s.send_frame(payload, addr=1, flag=flag); s.rx_wait(); s.run_ms(wait_ms)
         return s.tx_bytes()
     text = b'THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG ' * 5
-    steps = {300: 5, 600: 10, 1200: 20, 1920: 40}
+    steps = {300: 5, 600: 10, 1200: 20, 2560: 40}
     for baud in steps:
         s = Sign(rom, syms, fresh_ram=True, baud=baud); s.run_ms(2500)
         tx = send(s, b'\xb4\x31', wait_ms=int(16 * 10000 / baud) + 500)
@@ -1292,25 +1292,25 @@ def cmd_baud():
         check('%4d baud: a frame 0.3 s later is taken at the same rate (%s)' % (baud, tx.hex()), tx == b'\x06\x04' and s.ram('BAUD_STEP')[0] == rate)
         check('%4d baud: no faults, no watchdog clears (%d)' % (baud, s.wdog_clears), not s.faults and s.wdog_clears == 0)
     # the bit time is calibrated from the NMI second: 1200 must hold from 126 to 134 us
-    # 1920 is 4 interrupts whatever the calibration says: it holds within 0.5 % of 130.2 us
+    # 2560 is 3 interrupts whatever the calibration says: it holds within 0.5 % of 130.2 us
     for tick_us, label, rate in ((126.0, '-3 %', 1200), (128.0, 'no latency', 1200), (132.0, '+1.5 %', 1200), (134.0, '+3 %', 1200),
-                                 (129.6, '-0.5 %', 1920), (130.9, '+0.5 %', 1920)):
+                                 (129.6, '-0.5 %', 2560), (130.9, '+0.5 %', 2560)):
         s = Sign(rom, syms, fresh_ram=True, baud=rate); s.tick_t = int(tick_us * US); s.run_ms(3500)
         tx = send(s, b'\xb4\x31', wait_ms=600)
         tx2 = send(s, b'\x09\x30\x31\x0e' + text, wait_ms=500)
         d = bytes(s.m.memory[syms['MSG_STORE']:int.from_bytes(s.ram('STORE_END', 2), 'little')])
         check('%d baud with a %.1f us interrupt (%s): BAUD_T %d, query %s, load %s' % (rate, tick_us, label, s.ram('BAUD_T')[0], tx[:4].hex(), tx2.hex()), tx[:4] == b'\x06\xb1\x01\x0f' and tx2 == b'\x06\x04' and text in d)
-    # a DC supply (no NMI, no calibration): 1920 needs none, 1200 takes the default bit time
-    s = Sign(rom, syms, fresh_ram=True, baud=1920, mains=False); s.run_ms(3500)
+    # a DC supply (no NMI, no calibration): 2560 needs none, 1200 takes the default bit time
+    s = Sign(rom, syms, fresh_ram=True, baud=2560, mains=False); s.run_ms(3500)
     tx = send(s, b'\xb4\x31', wait_ms=600)
     s.run_ms(1500); s.set_baud(1200)
     tx2 = send(s, b'\xb4\x31', wait_ms=600)
-    check('DC supply: 1920 answered (%s), then 1200 with the default bit time (%s, BAUD_T %d)' % (tx[:4].hex(), tx2[:4].hex(), s.ram('BAUD_T')[0]), tx[:4] == b'\x06\xb1\x01\x0f' and s.ram('BAUD_T')[0] == 128 and tx2[:4] == b'\x06\xb1\x01\x0f')
-    # 1920 on a line whose spaces are 60 us long or short, edges moved up to 20 us at random
+    check('DC supply: 2560 answered (%s), then 1200 with the default bit time (%s, BAUD_T %d)' % (tx[:4].hex(), tx2[:4].hex(), s.ram('BAUD_T')[0]), tx[:4] == b'\x06\xb1\x01\x0f' and s.ram('BAUD_T')[0] == 128 and tx2[:4] == b'\x06\xb1\x01\x0f')
+    # 2560 on a line whose spaces are 60 us long or short, edges moved up to 20 us at random
     for skew in (60, -60):
-        s = Sign(rom, syms, fresh_ram=True, baud=1920, seed=skew & 0xff); s.rx_skew_us, s.rx_jitter_us = skew, 20; s.run_ms(2500)
+        s = Sign(rom, syms, fresh_ram=True, baud=2560, seed=skew & 0xff); s.rx_skew_us, s.rx_jitter_us = skew, 20; s.run_ms(2500)
         ok = sum(send(s, b'\x09\x30\x31\x0e' + text, wait_ms=400) == b'\x06\x04' for _ in range(5))
-        check('1920 with spaces %+d us and 20 us jitter: %d/5 long loads' % (skew, ok), ok == 5)
+        check('2560 with spaces %+d us and 20 us jitter: %d/5 long loads' % (skew, ok), ok == 5)
     # a session that changes rate after a pause, and one that comes back to 300
     s = Sign(rom, syms, fresh_ram=True, baud=1200); s.run_ms(2500)
     send(s, b'\x09\x30\x30\x0e' + b'FAST', wait_ms=500)

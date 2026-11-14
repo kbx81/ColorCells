@@ -21,7 +21,7 @@ This is the legacy case: one or two RS-232 ports on a PC and many signs. With a 
 | 300 | 3333 µs | 10 or more |
 | 600 | 1667 µs | 5 |
 | 1200 | 833 µs | 2; a third is marginal |
-| 1920 | 521 µs | 1; a second is marginal |
+| 2560 | 391 µs | 1 |
 
 **Byte-level forwarding, the robust version, ~120 bytes ROM plus a few of RAM.** A second receive engine re-times each byte before the transmitter resends it: unlimited hops at any rate, one byte of latency per hop. Only worth building if a chain grows past three signs.
 
@@ -64,7 +64,7 @@ A Z84C0020 is a drop-in at 8 MHz. Faster clocks were worked through and set asid
 
 ## 9. Dongle follow-ups
 
-- **ESPHome config:** one shared base for every dongle. The UART has `tx_pin` `inverted: true` only, two stop bits, a 16 K `rx_buffer_size` (a whole store dump survives a stalled API connection) and a 1 K `tx_buffer_size` (a whole frame goes in one write); the host tools set the rate, up to 1920, when they connect. `serial_proxy` needs [esphome/esphome#22687](https://github.com/esphome/esphome/pull/22687): before it, bytes read from the sign while the API connection was blocked were lost, which showed as long replies missing a few bytes at 1920 on a busy network. The entities: a Display light (brightness, configuration byte 2), Remote and Beeper switches (bytes 11 and 10), a clock format select and a set-clock button, with the clock sent from Home Assistant's time on the minute. `power_save_mode: light`, since the sign's 10 Ω R31 caps the average current near 130 mA; bridge R31 on the sign if a dongle ever browns out. Not fitted: a `remote_receiver` on IO7 with `dump: raw` could read a NIR's remote through U5B.
+- **ESPHome config:** one shared base for every dongle. The UART has `tx_pin` `inverted: true` only, two stop bits, a 16 K `rx_buffer_size` (a whole store dump survives a stalled API connection) and a 1 K `tx_buffer_size` (a whole frame goes in one write); the host tools set the rate, up to 2560, when they connect. `serial_proxy` needs [esphome/esphome#22687](https://github.com/esphome/esphome/pull/22687): before it, bytes read from the sign while the API connection was blocked were lost, which showed as long replies missing a few bytes at the fast rate on a busy network. The entities: a Display light (brightness, configuration byte 2), Remote and Beeper switches (bytes 11 and 10), a clock format select and a set-clock button, with the clock sent from Home Assistant's time on the minute. `power_save_mode: light`, since the sign's 10 Ω R31 caps the average current near 130 mA; bridge R31 on the sign if a dongle ever browns out. Not fitted: a `remote_receiver` on IO7 with `dump: raw` could read a NIR's remote through U5B.
 - **IR keystroke injection** on a receiver-less NET: close JP2, drive pin 1 from IO2 with the encoder in [tools/cc784_ir.py](tools/cc784_ir.py). Never on a NIR, where the HC14 drives that net.
 - **Remote decoding on the ESP:** the frame format is known ([firmware notes §9](firmware.md#9-ir-remote-decoder-ir_-14821571-h--verified-against-a-capture-of-the-signs-own-receiver)); a custom `remote_receiver` protocol would turn remote keypresses into Home Assistant events.
 - **Declined, recorded:** the LM66200 ideal diode in place of the two MBR120s (better headroom, but raises the WS2812's data threshold above 3.3 V unless the LED keeps a diode of its own); a solder jumper to run the LED from 3.3 V (out of the LED's VDD spec by 0.2 V, blue may be weak).
@@ -89,16 +89,16 @@ The live bits of the flags byte (alert playing, editor open, wrapped) sit outsid
 
 ## 12. Serial rates on whole interrupts
 
-Built for 1920 baud: patch 52 ([patched notes](patched.md#2-patches)). A bit of a whole number of interrupts puts every sample at the same point of its bit; what remains is where the start edge falls between two interrupts:
+Built for 2560 baud: patch 52 ([patched notes](patched.md#2-patches)). A bit of a whole number of interrupts puts every sample at the same point of its bit; what remains is where the start edge falls between two interrupts:
 
 | Interrupts a bit | Baud | Sample error, bits | Notes |
 |---|---|---|---|
 | 6.4 | 1200 | ±0.16 | standard; snapped samples |
-| 4 | 1920 | −0.25 to 0 | patch 52: the middle falls between two interrupts, and the earlier one is taken |
-| 3 | 2560 | ±0.17 | built and tested: about 6 percent of long frames lost to the board's late interrupts, which cost a third of a bit each |
+| 4 | 1920 | −0.25 to 0 | built and tested: the middle falls between two interrupts, and the earlier one is taken |
+| 3 | 2560 | ±0.17 | patch 52: a late interrupt costs a third of a bit |
 | 2 | 3840 | ±0.25 | the ceiling: a two-interrupt start pulse is hard to tell from noise |
 
-Open: what delays the board's interrupts by one to three periods in the middle of a byte. The emulator shows no stretch with interrupts off longer than about 60 µs, and the remote decoder accounts for part of it on the signs. A lead: `/INT` is the HC4020's Q11, high for only 128 µs ([hardware notes §3](hardware.md#3-timebase-h)), so an acknowledge later than that loses the request and the next comes 384 µs after the last acknowledge, two interrupts late. A count of lost requests on the board would test it. If it is found, 2560 could come back as the fast rate.
+Open: what delayed the board's interrupts by one to three periods in the middle of a byte in an earlier build, which lost about 6 percent of long frames at 2560. The emulator shows no stretch with interrupts off longer than about 60 µs. The losses are gone with the remote decoder paused during bytes, a shorter interrupt and the host writing a frame in one piece, and which of the three did it was not isolated. A lead: `/INT` is the HC4020's Q11, high for only 128 µs ([hardware notes §3](hardware.md#3-timebase-h)), so an acknowledge later than that loses the request and the next comes 384 µs after the last acknowledge, two interrupts late. A count of lost requests on the board would test it.
 
 Other routes to faster serial:
 
@@ -108,4 +108,4 @@ Other routes to faster serial:
 
 ## 13. Smoother crawl during loads
 
-The crawl stutters while a load is processed: during 220-byte loads the stall meter (patch 40) shows pauses of up to about 15 frames, more than patch 42's lead of crawl columns covers, and at 1920 they come about once a second. Not yet broken down between the store insert (already one move of the store's tail per run of plain characters, patch 27), the sequence recount and the DONE; timing each part in the emulator comes first. If the insert dominates, processing a frame in slices between display frames is the likely answer.
+The crawl stutters while a load is processed: during 220-byte loads the stall meter (patch 40) shows pauses of up to about 15 frames, more than patch 42's lead of crawl columns covers, in about half of the loads at 2560; watched on the sign, few of them show. Not yet broken down between the store insert (already one move of the store's tail per run of plain characters, patch 27), the sequence recount and the DONE; timing each part in the emulator comes first. If the insert dominates, processing a frame in slices between display frames is the likely answer.

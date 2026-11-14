@@ -271,7 +271,7 @@ def main():
         x.add_argument('-p', '--port'); x.add_argument('-H', '--host')
         x.add_argument('-k', '--key', default=os.environ.get('ESPHOME_KEY'))
         x.add_argument('-i', '--instance', default=None, help='serial_proxy instance on the ESPHome device: name or index (default 0)')
-        x.add_argument('-b', '--baud', type=int, default=300, choices=(300, 600, 1200, 1920), help='line rate (patch 30 firmware follows the host, 1920 from patch 52; default 300)')
+        x.add_argument('-b', '--baud', type=int, default=300, choices=(300, 600, 1200, 2560), help='line rate (patch 30 firmware follows the host, 2560 from patch 52; default 300)')
         x.add_argument('-a', '--addr', type=int, default=1); x.add_argument('-v', '--verbose', action='store_true')
     a = ap.parse_args()
 
