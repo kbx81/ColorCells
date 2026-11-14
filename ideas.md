@@ -36,7 +36,7 @@ Caveats:
 
 ## 3. Scrolling right
 
-SCROLL UP and SCROLL DOWN are patch 48 ([patched notes](patched.md#2-patches)), the `B2` variants of the UP and DOWN wipes. SCROLL RIGHT would be `B2 0F`, the variant of RIGHT: the staged page slides in from the left one column per frame, pushing the panel's page off to the right, in full color since the text moves sideways. It reuses patch 48's unrolled outgoing page and the `B2` plumbing; in the editor FUNC2 + SHIFT + BEEP (RIGHT is SHIFT + BEEP on the remote). About 50 bytes. A true mirror of the LEFT crawl stays ruled out: it needs the store walked backwards, and the renderer accumulates fonts and colors forwards.
+Built: patch 53 ([patched notes](patched.md#2-patches)), `B2 0F`. A true mirror of the LEFT crawl stays ruled out: it needs the store walked backwards, and the renderer accumulates fonts and colors forwards.
 
 ## 4. Wired keypad and the remote lock
 

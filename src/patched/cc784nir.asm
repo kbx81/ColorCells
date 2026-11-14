@@ -422,7 +422,7 @@ POLL_AGE             equ STREAM_AREA+49    ; frames since pkt_poll last ran
 STATUS_BUF           equ STREAM_AREA+50    ; P41: the status report being sent, B1 addr 03 'S' channel flags
 RANDBOW_DECK         equ STREAM_AREA+56    ; P46: bit 7 = RANDBOW, bits 0-4 = RAINBOW's colors not yet dealt this round
 ALT_NEXT             equ STREAM_AREA+57    ; P46: the editor inserts this after a FUNC2 key's B2
-ALT_FX               equ STREAM_AREA+58    ; P48: FF = the UP or DOWN that follows scrolls instead of wiping
+ALT_FX               equ STREAM_AREA+58    ; P48: FF = the UP or DOWN (P53: or RIGHT) that follows scrolls instead of wiping
 SPARKLE              equ STREAM_AREA+59    ; P49/P50: the page's hold twinkles (1) or glimmers (2); 0 = a plain hold
 SPARKLE_RND          equ STREAM_AREA+60    ; P49: the holds' 16-bit xorshift state, never 0
 STACK_INIT           equ STREAM_AREA+62    ; P51: ram_probe's choices: the stack's top and bottom,
@@ -2429,8 +2429,20 @@ glyph_stage:
         SBC HL,DE
         JP nc,fx_flush_stage
         LD DE,(STAGE_PTR)
-        LD A,(FLASH_BIT)
-        OR COLOR_DEFAULT
+        LD A,(EFFECT_ID)
+        CP 8                    ; P53: SCROLL RIGHT's page moves sideways, so
+        LD A,COLOR_DEFAULT      ; it is staged in its colors (yellow once it rests)
+        JR nz,stage_color
+        LD A,(CUR_CHAR)
+        CP ' '
+        LD A,(CUR_COLOR)
+        JR nz,stage_color
+        AND 0xf0                ; a space shows only the background
+
+stage_color:
+        LD HL,FLASH_BIT
+        OR (HL)
+        SET 7,A
         LD (DE),A
         LD A,(DRAW_NO_GAP)
         AND A
@@ -2662,9 +2674,13 @@ rainbow_alt:                    ; P46: B2 BC is RANDBOW; a B2 before anything el
         INC C
         CP ATTR_HOLD
         JR z,rainbow_alt_sparkle
+        CP 15                   ; P53: B2 0F: the RIGHT scroll
+        JR z,rainbow_alt_fx
         AND 0xfe
         CP ATTR_UP              ; P48: B2 1A / B2 1B: the UP or DOWN scrolls
         JR nz,rainbow_alt_bc
+
+rainbow_alt_fx:
         LD A,0xff
         LD (ALT_FX),A
 
@@ -3647,12 +3663,13 @@ fx_end_of_channel:
         JP main_loop
 
 ; ---- the movement attributes: 0F RIGHT (effect 4), 18 LEFT (plain crawl, no
-;      staging), BB HOLD (5), 19 PAUSE (1), 1A UP (2), 1B DOWN (3). The staged
-;      ones take the whole frame; all but HOLD stop the window first.
+;      staging), BB HOLD (5), 19 PAUSE (1), 1A UP (2), 1B DOWN (3); after B2 the
+;      scrolls, effect + 4. The staged ones take the whole frame; all but HOLD
+;      stop the window first.
 fx_right:
         LD A,4
         LD HL,fxv_right
-        JR fx_staged
+        JR fx_alt
 
 fx_pause:
         LD A,1
@@ -3673,8 +3690,10 @@ fx_down:
 
 fx_vertical:
         LD HL,fxv_wipe_updown
+
+fx_alt:
         LD C,A
-        LD A,(ALT_FX)           ; P48: after B2, SCROLL UP (6) or SCROLL DOWN (7)
+        LD A,(ALT_FX)           ; P48: after B2, SCROLL UP (6) or SCROLL DOWN (7); P53: RIGHT (8)
         AND A
         LD A,C
         JR z,fx_staged
@@ -3789,18 +3808,7 @@ halt_hold:
 fb_colors_default:
         LD HL,FRAMEBUF
         LD B,FRAMEBUF_SIZE
-
-fbcol_loop:
-        BIT 7,(HL)
-        JR z,fbcol_next
-        LD A,(HL)
-        AND COLOR_FLASH
-        OR COLOR_DEFAULT
-        LD (HL),A
-
-fbcol_next:
-        INC HL
-        DJNZ fbcol_loop
+        CALL fb_colors_range
         LD A,(WINDOW_COLOR)
         AND COLOR_FLASH
         OR COLOR_DEFAULT
@@ -3811,6 +3819,20 @@ fbcol_next:
         RET z
         LD A,15
         LD (CUR_COLOR),A
+        RET
+
+; ---- fb_colors_range (P53): the B bytes from HL, color bytes to 8F, flash kept
+fb_colors_range:
+        BIT 7,(HL)
+        JR z,fbcol_next
+        LD A,(HL)
+        AND COLOR_FLASH
+        OR COLOR_DEFAULT
+        LD (HL),A
+
+fbcol_next:
+        INC HL
+        DJNZ fb_colors_range
         RET
 
 ; ---- attr_color_speed: 0x8x foreground color, 0x9x background, 0xFx speed, 0xBD MAGIC OFF
@@ -4277,6 +4299,7 @@ wipev_next_pass:
 ;      pushes the panel's page out one row a step, in yellow (vertical motion shows
 ;      only pixels, so the color bytes stay out), then rests in its colors. The
 ;      outgoing page waits in GLYPH_BUF, the incoming one 96 bytes up the ring.
+;      P53: effect 8 (SCROLL RIGHT) shares the setup and goes to scroll_right.
 fxv_scroll:
         LD HL,(FB_OUT_PTR)      ; the panel as it stands, unrolled from the ring
         LD DE,GLYPH_BUF
@@ -4288,6 +4311,9 @@ fxv_scroll:
         XOR A
         LD (DISP_ON),A
         CALL fxv_prepare
+        LD A,(EFFECT_ID)
+        CP 8
+        JR z,scroll_right
         LD BC,96
         EX DE,HL
         ADD HL,BC
@@ -4351,6 +4377,138 @@ scroll_col_put:
         LD HL,FRAMEBUF+96
         LD DE,FRAMEBUF
         LD BC,FRAME_COLS
+        LDIR
+        JP fx_hold_done
+
+; ---- scroll_right (P53): step k shows the incoming page's last k columns, then the
+;      outgoing page's first FRAME_COLS-k, one step a frame. Each step is built in the
+;      hidden half and flipped in with its ROW_COLOR just after a frame end, so every
+;      row moves at once. TXBUF is widened in place to the whole incoming frame, with
+;      the row color both pages start in just below it: that byte ends the scan for the
+;      color in force at the left edge and goes where the pages meet, so the outgoing
+;      page keeps its start color.
+scroll_right:
+        LD A,(ROW_COLOR)
+        LD (TXBUF-1),A
+        LD HL,GLYPH_BUF         ; the panel's page shown until the first flip
+        LD DE,FRAMEBUF
+        LD BC,FRAME_COLS
+        LDIR
+        LD A,(COL_COUNT)
+        AND A
+        JR z,scroll_right_wide
+        LD C,A
+        LD B,0
+        LD HL,TXBUF-1
+        ADD HL,BC               ; the text's last column
+        LD DE,(STAGE_OFFSET)
+        PUSH DE
+        EX DE,HL
+        ADD HL,DE               ; and where it goes, centered
+        EX DE,HL
+        LDDR
+        POP BC
+        LD B,C                  ; the left margin, cleared
+        INC B
+        LD HL,TXBUF
+        JR scroll_right_clear
+
+scroll_right_margin:
+        LD (HL),0
+        INC HL
+
+scroll_right_clear:
+        DJNZ scroll_right_margin
+
+scroll_right_wide:
+        LD C,1
+
+scroll_right_step:
+        PUSH BC
+        LD A,FRAME_COLS
+        SUB C
+        LD E,A
+        LD D,0
+        LD HL,TXBUF
+        ADD HL,DE
+        PUSH DE
+        PUSH HL
+        CALL fb_back
+        LD B,0
+        LDIR                    ; the incoming page's last k columns at the left
+        POP HL
+        POP BC                  ; what is left of the outgoing page
+        PUSH HL
+        LD A,B
+        OR C
+        JR z,scroll_right_edge
+        DEC DE
+        LD A,(DE)               ; an unlit column where the pages meet takes
+        AND A                   ; the outgoing page's start color
+        JP m,scroll_right_join
+        JR nz,scroll_right_out
+
+scroll_right_join:
+        LD A,(TXBUF-1)
+        LD (DE),A
+
+scroll_right_out:
+        INC DE
+        LD HL,GLYPH_BUF
+        LDIR
+
+scroll_right_edge:
+        POP HL
+
+scroll_right_color:
+        DEC HL
+        LD A,(HL)
+        OR A
+        JP p,scroll_right_color
+        POP BC
+        PUSH BC
+        LD D,A
+        LD A,C
+        CP FRAME_COLS
+        LD A,D
+        JR nz,scroll_right_show
+        AND COLOR_FLASH         ; the last step is the page at rest: yellow, as
+        OR COLOR_DEFAULT        ; every page that stands still
+        PUSH AF
+        CALL fb_back
+        EX DE,HL
+        LD B,FRAME_COLS
+        CALL fb_colors_range
+        POP AF
+
+scroll_right_show:
+        PUSH AF
+        LD A,1
+        CALL fx_show
+        CALL fb_flip
+        POP AF
+        LD (ROW_COLOR),A
+        POP BC
+        INC C
+        LD A,C
+        CP FRAME_COLS+1
+        JR c,scroll_right_step
+        LD HL,TXBUF             ; the staged page yellow too, for the holds
+        LD B,FRAME_COLS
+        CALL fb_colors_range
+        LD HL,(FB_OUT_PTR)      ; back to the front half and the usual pointers
+        LD DE,FRAMEBUF
+        LD BC,FRAME_COLS
+        LDIR
+        CALL fxv_pointers
+        LD A,(COL_COUNT)        ; and TXBUF back as staged
+        AND A
+        JP z,fx_hold_done
+        LD C,A
+        LD B,0
+        LD HL,(STAGE_OFFSET)
+        LD DE,TXBUF
+        ADD HL,DE
         LDIR
         JP fx_hold_done
 
@@ -7554,6 +7712,7 @@ FUNC2_TABLE:
         db ATTR_DOWN, ATTR_DOWN
         db ATTR_PAUSE, ATTR_PAUSE   ; P49
         db ATTR_HOLD, ATTR_HOLD     ; P50
+        db 15, 15                   ; P53
         db 0xff
 
 ; ---- apply_color_prefix: COLOR n -> FG_IDX_TABLE, BGRND n -> BG_IDX_TABLE
@@ -9197,7 +9356,7 @@ STR_CLOSE:
         db 0x16,0x00            ; also the closing bracket of a speed label
         db 0x06,"HALT",0x16,0x00
         db 0x07,"BEEP",0x16,0x00
-        db 0x0f,"RIGHT",0x16,0x00
+        db 0x0f,"W-RIGHT",0x16,0x00         ; P53
         db ATTR_BIG,"BIG",0x16,0x00
         db ATTR_NORM,"NORM",0x16,0x00
         db ATTR_BOLD,"BOLD",0x16,0x00
@@ -9237,6 +9396,7 @@ STR_CLOSE:
         db ATTR_RAINBOW^0x40,"RANDBOW",0x16,0x00   ; P46: B2 BC; a variant's key is its attribute ^ 40
         db ATTR_UP^0x40,"S-UP",0x16,0x00
         db ATTR_DOWN^0x40,"S-DOWN",0x16,0x00
+        db 0x0f^0x40,"S-RIGHT",0x16,0x00     ; P53
         db ATTR_PAUSE^0x40,"TWINKLE",0x16,0x00
         db ATTR_HOLD^0x40,"GLIMMER",0x16,0x00
         db ATTR_MAGIC_OFF,"MAGIC OFF",0x16,0x00

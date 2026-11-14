@@ -1682,7 +1682,8 @@ def cmd_randbow():
 def cmd_scroll():
     """P48: B2 1A / B2 1B scroll the staged page in one row a step, pushing the panel's
     page out, in yellow (no color bytes while moving), then rest in its colors; plain
-    1A still wipes; FUNC2 UP and FUNC2 SHIFT UP insert them in the editor"""
+    1A still wipes; FUNC2 UP and FUNC2 SHIFT UP insert them in the editor. P53: B2 0F
+    slides the page in from the left a column a frame, in color; FUNC2 SHIFT BEEP"""
     rom, syms = assemble(HERE.parent / 'src' / 'patched')
     checks = []
     def check(name, cond):
@@ -1723,16 +1724,63 @@ def cmd_scroll():
     check('plain UP still wipes (effect 2 seen)', any(e == 2 for e, w in seq))
     check('no faults', not s.faults)
 
+    # P53: SCROLL RIGHT after a colored crawl, sampled every frame: step k is the new page's
+    # last k columns, then the panel's page (unrolled from the ring) pushed right; the margin
+    # byte where they meet carries the old page's start color, and ROW_COLOR is the color in
+    # force at the new page's left edge. The new page moves sideways in its own colors
+    # and turns yellow on the last step, when it comes to rest.
+    s = Sign(rom, syms, fresh_ram=True); s.run_ms(2500)
+    s.send_frame(b'\x09\x30\x30\x0e\x8cRED CRAWL \x83GREEN\xb2\x0f\x8dORANGE\x19\x80', addr=1)
+    s.rx_wait()
+    def panel(s):
+        p, ln, ex = (int.from_bytes(s.ram(k, 2), 'little') for k in ('FB_OUT_PTR', 'FB_OUT_LEN', 'FB_EXTRA_LEN'))
+        return bytes(s.m.memory[p:p + ln]) + bytes(s.m.memory[fb:fb + ex])
+    frames, old, c0, last, tears = [], None, None, None, 0
+    for _ in range(40000):
+        s.run_ms(0.5)
+        e = s.ram('EFFECT_ID')[0]
+        if e != 8 or not frames and s.ram('DISP_ON')[0] == 0:
+            if frames: break
+            if e != 8: old, c0 = panel(s), s.ram('ROW_COLOR')[0]
+            continue
+        win, row = (panel(s), s.ram('ROW_COLOR')[0]), s.ram('ROW_INDEX')[0]
+        if row == 0 and win != last:
+            last = win
+            if frames or win[0] != old: frames.append(win)
+        elif frames and win != last:
+            tears += 1                     # the page changed while a frame was going out
+    rest = frames[-1][0] if frames else b''
+    new = bytes(n) if len(frames) < n else bytes(1) + frames[-2][0][:n - 2] + rest[n - 1:]   # in its colors, from step n-1
+    yellow = lambda b: b & 0x10 | 0x8f if b & 0x80 else b
+    def want(k):
+        if k == n:
+            return bytes(yellow(b) for b in new), yellow(c0)
+        w = bytearray(new[n - k:] + old[:n - k])
+        if k < n and (w[k - 1] & 0x80 or not w[k - 1]):
+            w[k - 1] = c0
+        return bytes(w), next((b for b in reversed(new[:n - k]) if b & 0x80), c0)
+    bad = [k for k, f in enumerate(frames, 1) if f != want(k)]
+    check('SCROLL RIGHT: %d steps (want %d), each the new page k columns in from the left, the old one pushed right (first bad %s)'
+          % (len(frames), n, bad[:1]), len(frames) == n and not bad)
+    check('SCROLL RIGHT: every row moves at once: no page or row color change mid-frame (%d)' % tears, tears == 0)
+    check('SCROLL RIGHT: the new page slides in orange (%d steps) and rests in yellow (row color %02x)'
+          % (sum(1 for f, c in frames[:-1] if 0x8d in f[:len(frames)]), frames[-1][1] if frames else 0),
+          frames and sum(1 for f, c in frames[:-1] if 0x8d in f) > n // 3 and 0x8d not in rest and frames[-1][1] & 0xef == 0x8f)
+    check('SCROLL RIGHT: the crawl it pushes out keeps its colors (red and green bytes in %d steps)'
+          % sum(1 for f, c in frames if 0x8c in f and 0x83 in f),
+          old and 0x8c in old and 0x83 in old and sum(1 for f, c in frames if 0x8c in f) > n // 4)
+    check('no faults', not s.faults)
+
     def store(s):
         return bytes(s.m.memory[syms['MSG_STORE']:int.from_bytes(s.ram('STORE_END', 2), 'little')])
     s.send_frame(b'\x09\x30\x30\x0eAB', addr=1); s.rx_wait(); s.run_ms(3000)
     s.ir_key('STOP', stretch_us=100); s.ir_wait(); s.run_ms(1500)
-    for keys in (('SHIFT', 'STOP', 'SHIFT', '1A'), ('SHIFT', 'STOP', 'SHIFT', 'SHIFT', '1A')):
+    for keys in (('SHIFT', 'STOP', 'SHIFT', '1A'), ('SHIFT', 'STOP', 'SHIFT', 'SHIFT', '1A'), ('SHIFT', 'STOP', 'SHIFT', 'SHIFT', 'BEEP')):
         for k in keys:
             s.ir_key(k, stretch_us=100); s.ir_wait(); s.run_ms(400)
         s.run_ms(1000)
-    check('editor: FUNC2 UP and FUNC2 SHIFT UP insert B2 1A and B2 1B (%s)' % store(s)[:10].hex(),
-          b'\xb2\x1a\xb2\x1b' in store(s))
+    check('editor: FUNC2 UP, FUNC2 SHIFT UP and FUNC2 SHIFT BEEP insert B2 1A, B2 1B and B2 0F (%s)' % store(s)[:12].hex(),
+          b'\xb2\x1a\xb2\x1b\xb2\x0f' in store(s))
     s.send_frame(b'\xb7\x30', addr=1); s.rx_wait(); s.run_ms(2000)
     check('no faults in the editor', not s.faults)
     print('scroll: %d/%d checks pass' % (sum(checks), len(checks)))

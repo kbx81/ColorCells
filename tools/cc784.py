@@ -86,7 +86,7 @@ NAMED.update({'normal': 0x11, 'bold': 0x12, 'italic': 0x13, 'flash': 0x14, 'larg
               'rainbow': 0xBC, 'wait': 0xBA, 'remark': 0xB0, 'graphic': 0xB8,
               'tiny': 0xBE, 'restart': 0xBD,
               'randbow': (0xB2, 0xBC),                    # patched firmware: variants, B2 + the attribute
-              'scroll up': (0xB2, 0x1A), 'scroll down': (0xB2, 0x1B),
+              'scroll up': (0xB2, 0x1A), 'scroll down': (0xB2, 0x1B), 'scroll right': (0xB2, 0x0F),
               # hold modifiers: after PAUSE, a wipe, HOLD or a scroll, e.g. @{up}@{twinkle}
               'twinkle': (0xB2, 0x19), 'glimmer': (0xB2, 0xBB)})
 
