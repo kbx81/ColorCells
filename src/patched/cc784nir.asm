@@ -835,10 +835,6 @@ stub_lib_end:
         JP int_timer
         JP nmi_entry
 
-; ---- data: 16-byte firmware ID, returned by query B4 '0' (0048 in stock)
-ROM_ID:
-        db "78409O1702930205"
-
 ; ---- app_start: cold start: set SP, run init routines, EI, jump to main loop
 app_start:
         LD SP,STACK_TOP_2K      ; the buffer's top half: idle until init_vars picks the stack
@@ -2113,7 +2109,6 @@ chan_boundary:
         RET z
         RES 3,(HL)
         SET 2,(HL)
-        JR cfg_seal
 
 ; ---- cfg_seal: store the sum; every write to the block ends here
 cfg_seal:
@@ -2129,39 +2124,6 @@ cfg_valid:
         LD A,(CFG_SIG)
         CP CFG_MAGIC
         RET
-
-; ---- CFG_DEFAULTS: the block after a RAM loss, the sum computed at boot
-CFG_DEFAULTS:
-        db CFG_MAGIC, 1         ; signature, address 1 (NETCC's default)
-        db 0x03                 ; full brightness, not muted
-        db 0, 0, 0, 0           ; spare line roles: none
-        db CHANNELS-1           ; alert channel
-        db HOLD_FRAMES, FLASH_HALF_PERIOD
-        db 1, 0                 ; beeper on, remote unlocked
-        db 0, 0, 0              ; status reports off, clock source auto, reserved
-
-; ---- INIT_DATA: the boot values of the IMAGE variables, in their RAM order
-INIT_DATA:
-        dw FRAMEBUF_ROW1       ; FB_COLPTR
-        dw FRAMEBUF            ; FB_COL
-        dw TXBUF               ; STAGE_PTR
-        dw FRAMEBUF            ; FB_OUT_PTR
-        dw MSG_STORE           ; STORE_CURSOR
-        db 0x01                ; CLK_RUN
-        db 0x0f                ; CUR_COLOR
-        db 0x01                ; DISP_ON
-        db 0x0f                ; COL_COUNT
-        db 0x00                ; LATCH_BIT7: 00 or LATCH_BLINK, OR-ed into the row code as it is
-        db 0x01                ; FLUSH_PENDING
-        db BAUD_T_DEFAULT      ; BAUD_T
-        db BAUD_STEP_300       ; BAUD_STEP
-        db 0x7f                ; BAUD_CAL_LAST
-        db 0xff                ; RX_IDLE
-        db 0xff                ; CAPS_LOCK
-        db 0xff                ; ROW_OUT_PENDING
-        db 0x01                ; DISP_COUNT
-        db 0xff                ; NEXT_CHAN
-        db ' '                 ; MAGIC_LAST_CHAR
 
 ; ---- init_render: Reset render state for the current message
 init_render:
@@ -2411,11 +2373,6 @@ blit_columns:
         SBC A,A                 ; FF unless the editor is drawing
         LD (SCROLLING),A
         RET
-
-; ---- WIDE_SPACE_GLYPH: 9-column blank for spaces in MAGIC mode; also the 5 and 6
-;      blank columns the TINY push-offs blit
-WIDE_SPACE_GLYPH:
-        db 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
 
 ; ---- glyph_stage: effect active: stage the glyph into TXBUF instead
 glyph_stage:
@@ -2792,10 +2749,6 @@ randbow_take:
         LD A,E
         INC A
         JR rainbow_lookup
-
-; ---- RAINBOW_COLORS: per-character cycle red, orange, yellow, lime, green
-RAINBOW_COLORS:
-        db 0x00,0x8c,0x8d,0x8f,0x87,0x83
 
 attr_remark_check:
         CP ATTR_REM
@@ -3194,18 +3147,6 @@ magic_reset_words:
 
 magic_ret:
         RET
-
-; ---- MAGIC_CLASH_PAIRS: (old<<4 | new) foreground pairs too alike to follow each
-;      other in MAGIC mode: yellow/lime, yellow/orange, red/orange
-MAGIC_CLASH_PAIRS:
-        db 0xf7,0x7f,0xfd,0xdf,0xcd,0xdc
-; ---- MAGIC_PUNCT: a word ending in one of these changes the color in MAGIC mode
-MAGIC_PUNCT:
-        db ".!?:,"
-; ---- MAGIC_COLOR_CYCLE: the 16 foregrounds MAGIC mode walks through
-MAGIC_COLOR_CYCLE:
-        db 0x07,0x0c,0x0f,0x03,0x0c,0x03,0x0d,0x03,0x0f,0x03
-        db 0x0c,0x03,0x03,0x0c,0x0f,0x0c
 
 ; ---- unfetch_char: STORE_CURSOR back one byte
 unfetch_char:
@@ -4507,13 +4448,15 @@ scroll_right_show:
         CALL fxv_pointers
         LD A,(COL_COUNT)        ; and TXBUF back as staged
         AND A
-        JP z,fx_hold_done
+        JR z,fx_hold_done_jr1
         LD C,A
         LD B,0
         LD HL,(STAGE_OFFSET)
         LD DE,TXBUF
         ADD HL,DE
         LDIR
+
+fx_hold_done_jr1:
         JP fx_hold_done
 
 ; ---- fxv_twinkle (P49): TWINKLE's hold: the page held CFG_HOLD frames; every
@@ -5938,15 +5881,6 @@ dec_digit_loop:
 dec_end:
         POP DE
         RET
-
-; ---- data 18e8-18f3: 10000,1000,100,10,1,-1 for bin_to_dec5
-DEC_TABLE:
-        dw 0x2710
-        dw 0x03e8
-        dw 0x0064
-        dw 0x000a
-        dw 0x0001
-        dw 0xffff
 
 ; ---- clock_tick: NMI: NMI_COUNT to NMI_PER_SEC -> seconds -> minutes -> hours (12h, CLK_PM toggles)
 clock_tick:
@@ -7377,13 +7311,6 @@ getkey_return:
         AND A
         RET
 
-; ---- data 2427-2464: IR/keypad code -> character map
-IR_KEY_TABLE:
-        db 0x0f,0x33,0x0c,0x0b,0x0d,0x09,0x0a,0x0e,0x03,0x3f,0x3c,0x3b,0x3d,0x39,0x3a,0x3e
-        db 0x2f,0x13,0x2c,0x2b,0x2d,0x29,0x2a,0x2e,0x24,0x23,0x1c,0x1b,0x1d,0x19,0x1a,0x22   ; P36: 1D is SHIFT, caught before the table: its entry finds the keypad's SHIFT
-        db 0x31,0x30,0x37,0x36,0x35,0x08,0x32,0x34,0x01,0x00,0x07,0x06,0x05,0x38,0x02,0x04
-        db 0x11,0x10,0x17,0x16,0x15,0x28,0x12,0x14,0x21,0x20,0x27,0x26,0x25,0x18
-
 editor_key_shift:
         LD HL,(STORE_CURSOR)
         LD A,(HL)
@@ -7689,36 +7616,6 @@ func_store_key:
         LD (EDIT_KEY),A
         RET
 
-; ---- FUNC_TABLE: key, the attribute FUNC turns it into
-FUNC_TABLE:
-        db ATTR_GRAPH, ATTR_DRAW
-        db ATTR_NORM, ATTR_DRAW+1
-        db ATTR_PAUSE, ATTR_DRAW+1+1
-        db ATTR_FLASH, ATTR_REM
-        db ATTR_BOLD, 6
-        db ATTR_COLOR, ATTR_RAINBOW
-        db 0x8f, ATTR_RAINBOW
-        db 0x51, '?'
-        db 0x71, '?'
-        db 0x58, '!'
-        db 0x78, '!'
-        db 0x43, ','            ; P46: the remote has no comma key
-        db 0x63, ','
-        db ATTR_MAGIC, 0x5e
-        db ATTR_BIG, ATTR_TINY
-        db 0xff
-
-; ---- FUNC2_TABLE (P46): key, the attribute that follows B2
-FUNC2_TABLE:
-        db ATTR_COLOR, ATTR_RAINBOW
-        db 0x8f, ATTR_RAINBOW
-        db ATTR_UP, ATTR_UP         ; P48
-        db ATTR_DOWN, ATTR_DOWN
-        db ATTR_PAUSE, ATTR_PAUSE   ; P49
-        db ATTR_HOLD, ATTR_HOLD     ; P50
-        db 15, 15                   ; P53
-        db 0xff
-
 ; ---- apply_color_prefix: COLOR n -> FG_IDX_TABLE, BGRND n -> BG_IDX_TABLE
 apply_color_prefix:             ; editor_have_key clears both flags: the key is no longer SHIFT
         LD A,(COLOR_PENDING)
@@ -7752,14 +7649,6 @@ prefix_lookup:
         LD A,(HL)
         LD (EDIT_KEY),A
         RET
-
-; ---- data 2718-2721: cmd 15 n: foreground color codes (Red,Orange,Yellow,Lime,Green,84,8E,Black,8B,81)
-FG_IDX_TABLE:
-        db 0x8c,0x8d,0x8f,0x87,0x83,0x84,0x8e,0x80,0x8b,0x81
-
-; ---- data 2722-2727: cmd 16 n: background color codes
-BG_IDX_TABLE:
-        db 0x91,0x93,0x93,0x93,0x92,0x90
 
 ; ---- editor_redraw: Redraw the editor view of the current message
 editor_redraw:
@@ -8086,15 +7975,6 @@ redraw_ret:
         LD (DISP_ON),A
         RET
 
-; ---- STATUS_FLAGS: the status line's flags and labels, the first one set is shown
-STATUS_FLAGS:
-        dw GRAPH_PENDING,STR_GRAPH
-        dw COLOR_PENDING,STR_COLOR
-        dw BGRND_PENDING,STR_BGRND
-        dw FUNC_PENDING,STR_FUNC
-        dw EURO_STATE,STR_EURO
-        dw SPEED_PENDING,STR_SPEED
-
 ; ---- redraw_in_window: CY if the byte at REDRAW_PTR lies before REDRAW_FROM (not shown)
 redraw_in_window:
         LD HL,(REDRAW_PTR)
@@ -8289,7 +8169,7 @@ pkt_marker_back:
         LD A,C
         OR B
         JR nz,pkt_marker_loop
-        JP pkt_process_end
+        JR pkt_process_end
 
 pkt_set_ins:
         LD (STORE_CURSOR),HL
@@ -9310,17 +9190,6 @@ is_ignored_byte:
         XOR A
         RET
 
-; ---- data 2d57-2d60: payload bytes silently ignored by the parser
-IGNORE_TABLE:
-        db 0x00,0x01,0x05,0x08,0x0a,0x0b,0x0c,0x1c,0x1d,0x7f
-; ---- COMMAND_TABLE: the bytes pkt_byte_loop dispatches; follows IGNORE_TABLE
-;      so one CPIR covers both
-COMMAND_TABLE:
-        db CMD_SPEED,CMD_CLEAR_ALL,CMD_SEQUENCE,CMD_CHANNEL,CMD_END,CMD_DELETE_TEXT
-        db CMD_FORE_IDX,CMD_BACK_IDX,CMD_SET_TIME,CMD_COLOR_A0,CMD_APPEND,CMD_QUERY,CMD_OTA
-        db CMD_CONFIG
-COMMAND_TABLE_END:
-
 ; ---- is_plain_byte: Z if A is message text (neither ignored nor a command)
 is_plain_byte:
         CP 0x20
@@ -9345,6 +9214,132 @@ plain_lookup:
 plain_no:
         OR 1
         RET
+
+; ---- data: 16-byte firmware ID, returned by query B4 '0' (0048 in stock)
+ROM_ID:
+        db "78409O1702930205"
+
+; ---- CFG_DEFAULTS: the block after a RAM loss, the sum computed at boot
+CFG_DEFAULTS:
+        db CFG_MAGIC, 1         ; signature, address 1 (NETCC's default)
+        db 0x03                 ; full brightness, not muted
+        db 0, 0, 0, 0           ; spare line roles: none
+        db CHANNELS-1           ; alert channel
+        db HOLD_FRAMES, FLASH_HALF_PERIOD
+        db 1, 0                 ; beeper on, remote unlocked
+        db 0, 0, 0              ; status reports off, clock source auto, reserved
+
+; ---- INIT_DATA: the boot values of the IMAGE variables, in their RAM order
+INIT_DATA:
+        dw FRAMEBUF_ROW1       ; FB_COLPTR
+        dw FRAMEBUF            ; FB_COL
+        dw TXBUF               ; STAGE_PTR
+        dw FRAMEBUF            ; FB_OUT_PTR
+        dw MSG_STORE           ; STORE_CURSOR
+        db 0x01                ; CLK_RUN
+        db 0x0f                ; CUR_COLOR
+        db 0x01                ; DISP_ON
+        db 0x0f                ; COL_COUNT
+        db 0x00                ; LATCH_BIT7: 00 or LATCH_BLINK, OR-ed into the row code as it is
+        db 0x01                ; FLUSH_PENDING
+        db BAUD_T_DEFAULT      ; BAUD_T
+        db BAUD_STEP_300       ; BAUD_STEP
+        db 0x7f                ; BAUD_CAL_LAST
+        db 0xff                ; RX_IDLE
+        db 0xff                ; CAPS_LOCK
+        db 0xff                ; ROW_OUT_PENDING
+        db 0x01                ; DISP_COUNT
+        db 0xff                ; NEXT_CHAN
+        db ' '                 ; MAGIC_LAST_CHAR
+
+; ---- MAGIC_CLASH_PAIRS: (old<<4 | new) foreground pairs too alike to follow each
+;      other in MAGIC mode: yellow/lime, yellow/orange, red/orange
+MAGIC_CLASH_PAIRS:
+        db 0xf7,0x7f,0xfd,0xdf,0xcd,0xdc
+; ---- MAGIC_PUNCT: a word ending in one of these changes the color in MAGIC mode
+MAGIC_PUNCT:
+        db ".!?:,"
+; ---- MAGIC_COLOR_CYCLE: the 16 foregrounds MAGIC mode walks through
+MAGIC_COLOR_CYCLE:
+        db 0x07,0x0c,0x0f,0x03,0x0c,0x03,0x0d,0x03,0x0f,0x03
+        db 0x0c,0x03,0x03,0x0c,0x0f,0x0c
+
+; ---- data 18e8-18f3: 10000,1000,100,10,1,-1 for bin_to_dec5
+DEC_TABLE:
+        dw 0x2710
+        dw 0x03e8
+        dw 0x0064
+        dw 0x000a
+        dw 0x0001
+        dw 0xffff
+
+; ---- data 2427-2464: IR/keypad code -> character map
+IR_KEY_TABLE:
+        db 0x0f,0x33,0x0c,0x0b,0x0d,0x09,0x0a,0x0e,0x03,0x3f,0x3c,0x3b,0x3d,0x39,0x3a,0x3e
+        db 0x2f,0x13,0x2c,0x2b,0x2d,0x29,0x2a,0x2e,0x24,0x23,0x1c,0x1b,0x1d,0x19,0x1a,0x22   ; P36: 1D is SHIFT, caught before the table: its entry finds the keypad's SHIFT
+        db 0x31,0x30,0x37,0x36,0x35,0x08,0x32,0x34,0x01,0x00,0x07,0x06,0x05,0x38,0x02,0x04
+        db 0x11,0x10,0x17,0x16,0x15,0x28,0x12,0x14,0x21,0x20,0x27,0x26,0x25,0x18
+
+; ---- FUNC_TABLE: key, the attribute FUNC turns it into
+FUNC_TABLE:
+        db ATTR_GRAPH, ATTR_DRAW
+        db ATTR_NORM, ATTR_DRAW+1
+        db ATTR_PAUSE, ATTR_DRAW+1+1
+        db ATTR_FLASH, ATTR_REM
+        db ATTR_BOLD, 6
+        db ATTR_COLOR, ATTR_RAINBOW
+        db 0x8f, ATTR_RAINBOW
+        db 0x51, '?'
+        db 0x71, '?'
+        db 0x58, '!'
+        db 0x78, '!'
+        db 0x43, ','            ; P46: the remote has no comma key
+        db 0x63, ','
+        db ATTR_MAGIC, 0x5e
+        db ATTR_BIG, ATTR_TINY
+        db 0xff
+
+; ---- FUNC2_TABLE (P46): key, the attribute that follows B2
+FUNC2_TABLE:
+        db ATTR_COLOR, ATTR_RAINBOW
+        db 0x8f, ATTR_RAINBOW
+        db ATTR_UP, ATTR_UP         ; P48
+        db ATTR_DOWN, ATTR_DOWN
+        db ATTR_PAUSE, ATTR_PAUSE   ; P49
+        db ATTR_HOLD, ATTR_HOLD     ; P50
+        db 15, 15                   ; P53
+        db 0xff
+
+; ---- RAINBOW_COLORS: per-character cycle red, orange, yellow, lime, green: entries
+;      1-5 are FG_IDX_TABLE's first five, and entry 0 (off) is never read
+RAINBOW_COLORS       equ FG_IDX_TABLE-1
+; ---- data 2718-2721: cmd 15 n: foreground color codes (Red,Orange,Yellow,Lime,Green,Dark red,Gold,Black,Lemon,Dark green)
+FG_IDX_TABLE:
+        db 0x8c,0x8d,0x8f,0x87,0x83,0x84,0x8e,0x80,0x8b,0x81
+
+; ---- data 2722-2727: cmd 16 n: background color codes
+BG_IDX_TABLE:
+        db 0x91,0x93,0x93,0x93,0x92,0x90
+
+; ---- STATUS_FLAGS: the status line's flags and labels, the first one set is shown
+STATUS_FLAGS:
+        dw GRAPH_PENDING,STR_GRAPH
+        dw COLOR_PENDING,STR_COLOR
+        dw BGRND_PENDING,STR_BGRND
+        dw FUNC_PENDING,STR_FUNC
+        dw EURO_STATE,STR_EURO
+        dw SPEED_PENDING,STR_SPEED
+
+; ---- data 2d57-2d60: payload bytes silently ignored by the parser
+IGNORE_TABLE:
+        db 0x00,0x01,0x05,0x08,0x0a,0x0b,0x0c,0x1c,0x1d,0x7f
+; ---- COMMAND_TABLE: the bytes pkt_byte_loop dispatches; follows IGNORE_TABLE
+;      so one CPIR covers both
+COMMAND_TABLE:
+        db CMD_SPEED,CMD_CLEAR_ALL,CMD_SEQUENCE,CMD_CHANNEL,CMD_END,CMD_DELETE_TEXT
+        db CMD_FORE_IDX,CMD_BACK_IDX,CMD_SET_TIME,CMD_COLOR_A0,CMD_APPEND,CMD_QUERY,CMD_OTA
+        db CMD_CONFIG
+COMMAND_TABLE_END:
 
 ; ============================================================================
 ;  Editor labels: the text the editor shows for an attribute byte, drawn by
@@ -9728,7 +9723,11 @@ FONT_G184:
 ;      in the top bits: 0 printable text, 2 attribute, 3 invalid (store_repair
 ;      turns it into '?'). Read through char_flags only.
 CHAR_FLAGS:
-        db 0xfe,0xfa,0xff,0xfe,0xaa,0x80,0xaa,0xfe,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00   ; char 00-3f
+        db 0xfe,0xfa,0xff,0xfe,0xaa,0x80,0xaa,0xfe                                           ; char 00-1f
+; ---- WIDE_SPACE_GLYPH: 9-column blank for spaces in MAGIC mode; also the 5 and 6
+;      blank columns the TINY push-offs blit. Shares the zeros of characters 20-7f
+WIDE_SPACE_GLYPH:
+        db 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00                                           ; char 20-3f
         db 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00   ; char 40-7f
         db 0xaa,0xaa,0xaa,0xaa,0xaa,0x00,0x00,0x03,0x00,0x00,0x00,0x00,0xbb,0xff,0x2a,0xab   ; char 80-bf
         db 0x00,0x00,0x00,0x00,0xaa,0xaa,0xab,0x00,0x00,0x00,0x00,0x00,0xaa,0xaa,0xff,0xff   ; char c0-ff
