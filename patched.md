@@ -140,7 +140,7 @@ ROM, per 16 K bank ([ota.md §2](ota.md#2-rom-layout-each-bank)):
 | 25 | replacing the playing channel restarts the display visibly faster; the dark second is gone |
 | 26 | red, orange, yellow, lime and green at speeds 1 to 7: the same brightness and hue at every speed, motion as stock |
 | 53 | on all four signs: SCROLL RIGHT slides the page in from the left with every row in step, in the colors set after `B2 0F`, turns yellow as it stops, and TWINKLE and GLIMMER hold it in yellow; a colored crawl pushed out keeps its colors |
-| 52 | on all four signs at 2560: fifty 220-byte loads and thirty stats queries each, none rejected and every reply whole, then five loads at 1200; 280 more loads on one sign with none rejected |
+| 52 | on all four signs at 2560: fifty 220-byte loads and thirty stats queries each, none rejected and every reply whole, then five loads at 1200; 280 more loads on one sign with none rejected; on two signs, forty loads each at full brightness and at low brightness with status reports on, and forty more on one sign with the remote pressed throughout, none rejected; a 10 K store loaded in 40 frames and dumped back whole at the line's 231 bytes a second; an OTA push of all 246 pages in 96 s |
 | 50 | on all four signs: GLIMMER after PAUSE, the three wipes, HOLD and both scrolls; stripes roll and slant both ways, 3 frames a step, a 3-row band after trying 2 rows on the NET |
 | 49 | on all four signs: TWINKLE after PAUSE, the three wipes, HOLD and both scrolls; 80 spots at 4 frames a tick, spread over the whole page, no stray lit rows |
 | 48 | on all four signs: SCROLL UP and SCROLL DOWN push the page out row by row, as smooth as the wipes; the editor's `S-UP`/`S-DOWN` and `W-UP`/`W-DOWN` labels |
