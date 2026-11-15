@@ -347,6 +347,28 @@ ATTR_MAGIC           equ 0x1f
 ATTR_TIME            equ 0x5f
 ATTR_REM             equ 0xb0        ; remark: skipped up to the next B0
 ATTR_ALT             equ 0xb2        ; P46: the variant of the attribute after it: B2 BC = RANDBOW
+
+ATTR_COLOR_BLACK       equ 0x80
+ATTR_COLOR_DARK_GREEN  equ 0x81
+ATTR_COLOR_MID_GREEN   equ 0x82
+ATTR_COLOR_GREEN       equ 0x83
+ATTR_COLOR_DARK_RED    equ 0x84
+ATTR_COLOR_DARK_YELLOW equ 0x85
+ATTR_COLOR_DARK_LIME   equ 0x86
+ATTR_COLOR_LIME        equ 0x87
+ATTR_COLOR_MID_RED     equ 0x88
+ATTR_COLOR_DARK_ORANGE equ 0x89
+ATTR_COLOR_MID_YELLOW  equ 0x8a
+ATTR_COLOR_LEMON       equ 0x8b
+ATTR_COLOR_RED         equ 0x8c
+ATTR_COLOR_ORANGE      equ 0x8d
+ATTR_COLOR_GOLD        equ 0x8e
+ATTR_COLOR_YELLOW      equ 0x8f
+ATTR_BGRND_BLACK       equ 0x90
+ATTR_BGRND_RED         equ 0x91
+ATTR_BGRND_GREEN       equ 0x92
+ATTR_BGRND_YELLOW      equ 0x93
+
 KEY_EURO             equ 0xb6
 KEY_FUNC             equ 0xb7
 KEY_DEL              equ 0x7f
@@ -2724,6 +2746,8 @@ rainbow_alt:                    ; P46: B2 BC is RANDBOW; a B2 before anything el
         JP c,field_open
         LD A,(HL)
     ENDIF
+        CP ' '                  ; P57: B2 20: FLUSH
+        JP z,rainbow_alt_flush
         LD C,1
         CP ATTR_PAUSE           ; P49: B2 19: TWINKLE; P50: B2 BB: GLIMMER;
         JR z,rainbow_alt_sparkle ; modifiers for the page's hold, not effects
@@ -6111,6 +6135,24 @@ scrolloff_loop:
         DJNZ scrolloff_loop
         RET
 
+; ---- rainbow_alt_flush (P57): the crawl pushes the panel's text off, as at a
+;      message's end, in the font in force after it; staged pages are shown whole anyway
+rainbow_alt_flush:
+        INC HL
+        LD (STORE_CURSOR),HL
+        LD A,(EFFECT_ID)
+        AND A
+        JR nz,flush_done
+        LD A,(FONT_MODE)
+        PUSH AF
+        CALL scroll_off_text
+        POP AF
+        LD (FONT_MODE),A
+
+flush_done:
+        POP HL
+        JP render_next_char
+
 ; ---- clear_framebuf: the column ring = 0x80
         ASSERT FRAMEBUF_SIZE < 256
 clear_framebuf:
@@ -7765,7 +7807,11 @@ func_store:
         LD A,B                  ; a FUNC2 attribute is B2 and its second byte
         AND A
         LD A,(HL)
-        JR z,func_store_key
+        JR nz,func_store_alt
+        CP ' '                  ; P57: FUNC SPACE is B2 20, FLUSH
+        JR nz,func_store_key
+
+func_store_alt:
         LD (ALT_NEXT),A
         LD A,ATTR_ALT
 
@@ -8023,13 +8069,15 @@ redraw_label_digit:
 redraw_char_check:
         CALL redraw_in_window
         JR c,redraw_next
-    IFNDEF LITE
-        LD HL,(REDRAW_PTR)      ; P54: a digit after B2 is a field: <F0>-<F9>
+        LD HL,(REDRAW_PTR)
         DEC HL
         LD A,(HL)
         CP ATTR_ALT
         JR nz,redraw_char
         LD A,(CUR_CHAR)
+        CP ' '                  ; P57: FLUSH
+        JR z,redraw_show_label
+    IFNDEF LITE                 ; P54: a digit after B2 is a field: <F0>-<F9>
         CALL is_digit
         JR nc,redraw_char
         LD HL,STR_F
@@ -9606,6 +9654,7 @@ FUNC_TABLE:
     IFNDEF LITE
         db KEY_PROG, KEY_FIELD  ; P54
     ENDIF
+        db ' ', ' '             ; P57: FLUSH, B2 20 (func_store)
         db 0xff
 
 ; ---- FUNC2_TABLE (P46): key, the attribute that follows B2
@@ -9624,12 +9673,13 @@ FUNC2_TABLE:
 RAINBOW_COLORS       equ FG_IDX_TABLE-1
 ; ---- data 2718-2721: cmd 15 n: foreground color codes (Red,Orange,Yellow,Lime,Green,Dark red,Gold,Black,Lemon,Dark green)
 FG_IDX_TABLE:
-        db 0x8c,0x8d,0x8f,0x87,0x83,0x84,0x8e,0x80,0x8b,0x81
+        db ATTR_COLOR_RED,ATTR_COLOR_ORANGE,ATTR_COLOR_YELLOW,ATTR_COLOR_LIME,ATTR_COLOR_GREEN
+        db ATTR_COLOR_DARK_RED,ATTR_COLOR_GOLD,ATTR_COLOR_BLACK,ATTR_COLOR_LEMON,ATTR_COLOR_DARK_GREEN
 FG_COLORS            equ $-FG_IDX_TABLE
 
 ; ---- data 2722-2727: cmd 16 n: background color codes
 BG_IDX_TABLE:
-        db 0x91,0x93,0x93,0x93,0x92,0x90
+        db ATTR_BGRND_RED,ATTR_BGRND_YELLOW,ATTR_BGRND_YELLOW,ATTR_BGRND_YELLOW,ATTR_BGRND_GREEN,ATTR_BGRND_BLACK
 BG_COLORS            equ $-BG_IDX_TABLE
 
 ; ---- STATUS_FLAGS: the status line's flags and labels, the first one set is shown
@@ -9713,6 +9763,7 @@ STR_CLOSE:
         db 0x0f^0x40,"S-RIGHT",0x16,0x00     ; P53
         db ATTR_PAUSE^0x40,"TWINKLE",0x16,0x00
         db ATTR_HOLD^0x40,"GLIMMER",0x16,0x00
+        db ' '^0x40,"FLUSH",0x16,0x00         ; P57
         db ATTR_MAGIC_OFF,"MAGIC OFF",0x16,0x00
         db ATTR_TINY,"TINY",0x16,0x00
         db 0xff
@@ -10113,19 +10164,19 @@ CHARSET_EURO:
         db 0x08,0x0a,0x97,0xee,0xe9,0x99,0xe4,0xe1    ; 38-3f  08 0A 97 EE E9 99 E4 E1
         db 0xda,0xda                                  ; 40-41  DA DA
 
-
 ; ---- DEMO_MESSAGE: shown while every channel is empty. P21 cut the factory
 ;      sales pitch (~700 bytes) down to a line that still exercises the fonts
 ;      and colors; the room went to the render-loop packet processing.
-DEMO_MESSAGE:
-        db 0x12,"COLOR CELLS ",0x13,0x8c
+DEMO_MESSAGE:                   ; P57: hand-colored italic, MAGIC, the model in a twinkling scroll
+        db ATTR_ITALIC,ATTR_COLOR_RED,"C",ATTR_COLOR_ORANGE,"O",ATTR_COLOR_LIME,"L",ATTR_COLOR_YELLOW,"O",ATTR_COLOR_GREEN,"R"
+        db ATTR_MAGIC,ATTR_ITALIC," CELLS",ATTR_ALT,ATTR_UP,ATTR_BOLD,ATTR_ALT,ATTR_PAUSE
     IFDEF CC710
         db "CC710"
     ELSE
         db "CC784"
     ENDIF
-        db " ",0x11,0xbc,0x14,"MULTI-COLOR DISPLAY"
-        db 0xbe,"TINY PRICE",0x10,"LARGE IMPACT!",0x03,0xdb
+        db ATTR_LEFT,ATTR_RAINBOW,ATTR_NORM,ATTR_FLASH,"MULTI-COLOR ",ATTR_NORM,"DISPLAY"
+        db ATTR_TINY,"TINY PRICE",ATTR_BIG,"LARGE IMPACT!",TEXT_END,0xdb
 
 ; ---- ota_updating_msg: what the panel shows from B5 'B' to the reboot, via the
 ;      test-mode buffer (28 bytes max). PAUSE, THIN, the word, WAIT: parked until

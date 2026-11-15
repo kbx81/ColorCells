@@ -52,7 +52,7 @@ Source and tools:
 | [src/patched/](src/patched/) | The patched firmware; `Build patched ROM` and `Pack OTA image` tasks produce the bank image for `push` and the chip image for a programmer |
 | [tools/cc784.py](tools/cc784.py) | Talk to a sign over serial: messages, clock, sequence, queries, dump; `--channels 10` for the CC710 |
 | [tools/cc784_esphome.py](tools/cc784_esphome.py) | As above but through an [ESPHome serial proxy](https://esphome.io/components/serial_proxy/) |
-| [tools/cc784_lint.py](tools/cc784_lint.py) | Checks a message before it is loaded: composition rules (colors only on sideways motion, wipes and scrolls ended by LEFT, no trailing spaces, THIN, background spacing) and each effect page's width at 86 and 60 columns, measured by the patched firmware in the emulator, with the fields' values given by `--field` |
+| [tools/cc784_lint.py](tools/cc784_lint.py) | Checks a message before it is loaded: composition rules (colors only on sideways motion, wipes and scrolls ended by LEFT, no trailing spaces, THIN, background spacing, FLUSH in place of runs of spaces) and each effect page's width at 86 and 60 columns, measured by the patched firmware in the emulator, with the fields' values given by `--field` |
 | [tools/cc784_font.py](tools/cc784_font.py) | Draws every glyph of the patched firmware's font, read from the assembled ROM, as an HTML page, each labeled with the character codes that draw it (`--cc710` for that build) |
 | [tools/cc784_ota.py](tools/cc784_ota.py) | Pack, diff, push, confirm and roll back firmware over the air |
 | [tools/cc784_ir.py](tools/cc784_ir.py) | Remote key map and frame encoder, with ESPHome `remote_transmitter` output |

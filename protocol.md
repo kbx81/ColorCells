@@ -235,6 +235,7 @@ NETCC's names for these are not the sign's. The sign's own editor labels each by
 | — | Glimmer, a patched-firmware modifier for the hold after Pause, a wipe, Hold or a scroll: dark diagonal stripes roll up or down through the page; it goes after the effect ([patched.md](patched.md#2-patches), patch 50; `@{glimmer}`) | `0xB2 0xBB` |
 | — | Twinkle, a patched-firmware modifier for the hold after Pause, a wipe, Hold or a scroll: random pixels go dark while the page holds; it goes after the effect ([patched.md](patched.md#2-patches), patch 49; `@{twinkle}`) | `0xB2 0x19` |
 | — | Field, the patched firmware's channel inside a message: `B2 '0'`–`B2 '9'` renders channel 90–99 at that point, so the host changes a value by loading that channel ([patched.md](patched.md#2-patches), patch 54; `@{field 0}`–`@{field 9}`) | `0xB2 0x30`–`0xB2 0x39` |
+| — | Flush, the patched firmware's push of the crawl's text off the panel mid-message, as at a message's end and in the font in force after it; nothing on a staged page ([patched.md](patched.md#2-patches), patch 57; `@{flush}`) | `0xB2 0x20` |
 | — | Randbow, the patched firmware's variant of Rainbow: the five colors in a shuffled order ([patched.md](patched.md#2-patches), patch 46; `@{randbow}`) | `0xB2 0xBC` |
 | E, K, O, Q, V | Sync, sync&crawl, var. space, blank, date | **not supported on CC6x7** (listed "(LK)" = later models only) |
 

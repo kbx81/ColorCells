@@ -93,6 +93,7 @@ NAMED.update({'normal': 0x11, 'bold': 0x12, 'italic': 0x13, 'flash': 0x14, 'larg
               'twinkle': (0xB2, 0x19), 'glimmer': (0xB2, 0xBB)})
 NAMED.update({'field %d' % i: (0xB2, 0x30 + i) for i in range(10)})   # patch 54: channel 90+i shown here
 NAMED['degree'] = 0x9F                                                # patch 55
+NAMED['flush'] = (0xB2, 0x20)                                         # patch 57: the crawl's text pushed off
 UNICODE = {'°': 0x9F}                 # Latin-1 B0 would be REMARK, which hides the text after it
 
 def encode_text(s: str) -> bytes:

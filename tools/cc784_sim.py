@@ -63,6 +63,10 @@ cc784_sim.py - run the CC784NIR ROM under emulation (kosarev's z80 core) with a 
         Fields (patch 54): channels 90-99 inside a message in a crawl, a wipe and a
         scroll, loads while a field is drawn, seq M.
 
+    uv run tools/cc784_sim.py flush
+        FLUSH (patch 57): B2 20 empties the panel mid-crawl and keeps the font,
+        does nothing on a staged page; FUNC SPACE in the editor, its label, DEL.
+
     uv run tools/cc784_sim.py fuzz [RUNS]
         Cut the power at a random instant of an update, RUNS times (default 100);
         every reboot must land in a bank whose trailer and image CRC check out.
@@ -1857,7 +1861,7 @@ def _sparkle_play(s, syms, chan0, ms):
         spans.append(ending + (bytes(mem[:n]),))
     runs = []
     for kind, t0, t1, after in spans:
-        frames = [(e, w) for t, e, w in samples if t0 <= t < t1]
+        frames = [(e, w) for t, e, w in samples if t0 < t < t1]   # a sample at t0 precedes the writes logged at t0
         if frames:
             runs.append(dict(kind=kind, effect=frames[0][0], ms=(t1 - t0) / US / 1000,
                              frames=[w for e, w in frames], page=after))
@@ -2136,6 +2140,74 @@ def cmd_field():
     e.send_frame(b'\xb7\x30', addr=1); e.rx_wait(); e.run_ms(3000)
     check('editor closed, no faults', e.ram('MENU_ACTIVE')[0] == 0 and not e.faults)
     print('field: %d/%d checks pass' % (sum(checks), len(checks)))
+    return all(checks)
+
+
+def cmd_flush():
+    """P57: B2 20 (FLUSH) pushes the crawl's text off the panel mid-message, in the
+    font in force after it; on a staged page it does nothing; FUNC SPACE inserts it,
+    the editor labels it FLUSH and DEL takes the B2 along"""
+    rom, syms = assemble(HERE.parent / 'src' / 'patched')
+    checks = []
+    def check(name, cond):
+        checks.append(bool(cond)); print('  %s %s' % ('ok  ' if cond else 'FAIL', name))
+    fb = syms['FRAMEBUF']
+    def store(s):
+        return bytes(s.m.memory[syms['MSG_STORE']:int.from_bytes(s.ram('STORE_END', 2), 'little')])
+    def panel(s):
+        p, ln, ex = (int.from_bytes(s.ram(k, 2), 'little') for k in ('FB_OUT_PTR', 'FB_OUT_LEN', 'FB_EXTRA_LEN'))
+        return bytes(s.m.memory[p:p + ln]) + bytes(s.m.memory[fb:fb + ex])
+    def run(text, ms=40000):
+        """the times the panel goes dark in the second pass, and the font when 'D' is fetched"""
+        s = Sign(rom, syms, fresh_ram=True); s.run_ms(2500)
+        s.send_frame(b'\x09\x30\x30\x0e' + text, addr=1); s.rx_wait(); s.run_ms(50)
+        base = syms['MSG_STORE'] + store(s).index(text)
+        d = base + text.index(b'D')
+        darks, font, npass, prev, was = 0, None, 0, 0, False
+        for _ in range(ms):
+            s.run_ms(1)
+            cur = int.from_bytes(s.ram('STORE_CURSOR', 2), 'little')
+            if cur < prev: npass += 1
+            prev = cur
+            if npass == 3: break
+            lit = any(b for b in panel(s) if not b & 0x80)
+            if npass == 2 and was and not lit: darks += 1
+            was = lit
+            if cur == d + 1 and font is None: font = s.ram('FONT_MODE')[0]
+        return s, darks, font
+    s, darks, font = run(b'\x12AB\xb2\x20CD')
+    check('FLUSH: the panel goes dark twice a pass, at FLUSH and at the end (%d)' % darks, darks == 2)
+    check('FLUSH: CD in the font in force, BOLD (%s)' % font, font == syms['FONT_BOLD'])
+    s0, darks0, _ = run(b'\x12AB CD')
+    check('without it, once (%d)' % darks0, darks0 == 1)
+    s1, darks1, _ = run(b'\x19AB\xb2\x20CD\x18')
+    check('on a PAUSE page it does nothing: once (%d)' % darks1, darks1 == 1)
+    check('no faults, stack high-water %d' % s.depth(), not (s.faults or s0.faults or s1.faults) and s.depth() < 110)
+
+    e = Sign(rom, syms, fresh_ram=True); e.run_ms(2500)
+    e.send_frame(b'\x09\x30\x30\x0eAB CD', addr=1); e.rx_wait(); e.run_ms(3000)
+    lbl = rom.index(b'\x60FLUSH') + 1
+    reads = []
+    rd0 = e._on_read
+    def rd(addr):
+        if addr == lbl:
+            reads.append(e.t); return e.m.memory[addr]
+        return rd0(addr)
+    e.m.set_read_callback(rd); e.m.mark_addrs(lbl, 1, e.m.READ_MARK)
+    def keys(*ks, ms=400):
+        for k in ks:
+            e.ir_key(k, stretch_us=100); e.ir_wait(); e.run_ms(ms)
+    keys('STOP', ms=1500)
+    before = store(e)
+    keys('SHIFT', 'STOP', 'SPACE', ms=1500)
+    after = store(e)
+    check('FUNC SPACE inserts B2 20 (%d -> %d bytes), labeled FLUSH (%d label reads)'
+          % (len(before), len(after), len(reads)), after.count(b'\xb2\x20') == 1 and len(after) == len(before) + 2 and reads)
+    keys('DEL', ms=1500)
+    check('DEL takes the B2 along', store(e) == before)
+    e.send_frame(b'\xb7\x30', addr=1); e.rx_wait(); e.run_ms(3000)
+    check('editor closed, no faults', e.ram('MENU_ACTIVE')[0] == 0 and not e.faults)
+    print('flush: %d/%d checks pass' % (sum(checks), len(checks)))
     return all(checks)
 
 
@@ -2626,7 +2698,7 @@ def cmd_compare(dir_a, dir_b):
 
 if __name__ == '__main__':
     args = sys.argv[1:]
-    if not args or args[0] not in ('stack', 'compare', 'eeprom', 'ota', 'update', 'push', 'fuzz', 'ram', 'quiet', 'speed', 'baud', 'clock', 'config', 'keypad', 'seq', 'stats', 'status', 'term', 'randbow', 'scroll', 'twinkle', 'glimmer', 'lite', 'field'):
+    if not args or args[0] not in ('stack', 'compare', 'eeprom', 'ota', 'update', 'push', 'fuzz', 'ram', 'quiet', 'speed', 'baud', 'clock', 'config', 'keypad', 'seq', 'stats', 'status', 'term', 'randbow', 'scroll', 'twinkle', 'glimmer', 'lite', 'field', 'flush'):
         sys.exit(__doc__)
     if args[0] == 'ram':
         sys.exit(0 if cmd_ram() else 1)
@@ -2660,6 +2732,8 @@ if __name__ == '__main__':
         sys.exit(0 if cmd_lite() else 1)
     if args[0] == 'field':
         sys.exit(0 if cmd_field() else 1)
+    if args[0] == 'flush':
+        sys.exit(0 if cmd_flush() else 1)
     if args[0] == 'quiet':
         sys.exit(0 if cmd_quiet() else 1)
     if args[0] == 'push':

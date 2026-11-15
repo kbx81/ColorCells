@@ -140,6 +140,25 @@ def rule_field(m):
             if t.kind == 'field' and t.data[1] - 0x30 not in m.fields:
                 yield 'warn', t.pos, '%s page "%s" holds field %d with no --field value: measured empty' % (p.effect.name, p.text, t.data[1] - 0x30)
 
+def rule_flush(m):
+    """FLUSH (B2 20) pushes the crawl's text off: spaces do the same at a byte each"""
+    staged = {id(u) for p in m.pages for u in p.body}
+    for i, t in enumerate(m.toks):
+        if t.name != 'FLUSH': continue
+        if id(t) in staged:
+            yield 'warn', t.pos, 'FLUSH on a %s page does nothing: staged pages are shown whole' % next(p.effect.name for p in m.pages if t in p.body)
+        if i and m.toks[i - 1].name == ' ':
+            yield 'warn', m.toks[i - 1].pos, 'spaces before FLUSH are wasted'
+        if i == len(m.toks) - 1:
+            yield 'warn', t.pos, 'FLUSH at the end of the message: the end flushes anyway'
+    run = []
+    for t in m.toks + [None]:
+        if t is not None and t.name == ' ' and id(t) not in staged:
+            run.append(t); continue
+        if len(run) >= 6:
+            yield 'info', run[0].pos, '%d spaces in a row: @{flush} (2 bytes) pushes the text off' % len(run)
+        run = []
+
 def rule_redundant_default(m):
     """unattributed text is already NORM and yellow"""
     for t in m.toks:
@@ -148,7 +167,7 @@ def rule_redundant_default(m):
             yield 'info', t.pos, '%s before the first text is the default (a wasted byte)' % t.name
 
 RULES = [rule_trailing_space, rule_bg_space, rule_stationary_color, rule_left_terminator,
-         rule_page_trailing_space, rule_thin, rule_field, rule_redundant_default]
+         rule_page_trailing_space, rule_thin, rule_field, rule_flush, rule_redundant_default]
 
 # ---- page widths, measured by the firmware in the emulator
 def measure(data, cc710, fields={}):
