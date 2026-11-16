@@ -6,7 +6,7 @@ Work not built, with its sizing and the decisions already made. Firmware sizes a
 
 ## 1. The four spare DB9 lines
 
-Dropped. Every sign has a dongle, and the dongle already does over serial what the lines were for: brightness and mute are configuration bytes (`B6`), an alert is a sequence change sent and later undone, the message boundary is the status report (patch 41, §11), and the heartbeat is a periodic `stats` poll (patch 40): no reply, or an uptime that stops counting, is a hung sign; a boot count that moves is a reboot. The lines also belong to the wired keypad in keypad mode (patch 36), so leaving them alone avoids that conflict. Two are inputs to the sign (`PORT_IN` bits 0 and 2, DB9 pins 2 and 6), two are outputs (`CTRL_LATCH` bits 5 and 6, pins 4 and 7) ([hardware notes §2.4](hardware.md#24-host-port-serial-and-keypad-h)); the four role bytes in the configuration block (3–6) stay unused. The chain of §2 would still need pin 2.
+Dropped. Every sign has a dongle, and the dongle already does over serial what the lines were for: brightness and mute are configuration bytes (`B6`), an alert is a sequence change sent and later undone, the message boundary is the status report (patch 41, §11), and the heartbeat is a periodic `stats` poll (patch 40): no reply, or an uptime that stops counting, is a hung sign; a boot count that moves is a reboot. The lines also belong to the wired keypad in keypad mode (patch 36), so leaving them alone avoids that conflict. Two are inputs to the sign (`PORT_IN` bits 0 and 2, DB9 pins 2 and 6), two are outputs (`CTRL_LATCH` bits 5 and 6, pins 4 and 7) ([hardware notes §2.4](hardware.md#24-host-port-serial-and-keypad-h)). The chain of §2 would still need pin 2.
 
 ## 2. Several signs on one serial link
 
@@ -75,17 +75,16 @@ The CC710 and the original CC784 are `CC784-3A` boards ([hardware notes §4](har
 
 ## 11. A configuration store
 
-The block itself exists since patch 35 ([patched notes](patched.md#2-patches)): sixteen battery-backed bytes with a signature and a sum, written with `B6 index value`, read with `B4 '5'`, carrying brightness, mute, the spare-line roles, the alert channel, hold time, flash rate, beeper and remote lock. Settings it reserves bytes for but does not act on yet:
+The block itself exists since patch 35 ([patched notes](patched.md#2-patches)): six battery-backed bytes with a signature and a sum, written with `B6 index value`, read with `B4 '5'`, carrying brightness, mute, beeper, remote lock and the status-report switch in its flags byte, then hold time and flash rate. Settings it could grow by:
 
 | Setting | Values | Default | Notes | ROM |
 |---|---|---|---|---|
-| Clock source | auto, mains, crystal | auto | overrides patch 31's boot-time detection on the add-in board | ~8 |
-| Night schedule | start, end, level | off | the clock-based night mode of §5 as three bytes in the reserved space instead of its own editor dialog | ~40 |
+| Night schedule | start, end, level | off | the clock-based night mode of §5 as three more bytes in the block instead of its own editor dialog | ~40 |
 | Chain forwarding | on, off | off | the bit repeater of §2 | 1 |
 
-The live bits of the flags byte (alert playing, editor open, wrapped) sit outside the sum so they can change without a reseal; the clock and the sequence beside the block are outside it for the same reason, and the sequence is read with `B4 '6'`.
+The live bit of the flags byte (wrapped) sits outside the sum so they can change without a reseal; the clock and the sequence beside the block are outside it for the same reason, and the sequence is read with `B4 '6'`.
 
-**Status reports** are built as patch 41 ([patched notes](patched.md#2-patches)): byte 12, `B1 addr 03 'S' channel flags sum` at each channel start and with channel `FF` when the editor opens, the flags being `CFG_FLAGS` as is. Not built from the design: a report on every flag change, since with the spare lines dropped (§1) nothing else changes behind the host's back.
+**Status reports** are built as patch 41 ([patched notes](patched.md#2-patches)): flags bit 7, `B1 addr 03 'S' channel flags sum` at each channel start and with channel `FF` when the editor opens, the flags being `CFG_FLAGS` as is. Not built from the design: a report on every flag change, since with the spare lines dropped (§1) nothing else changes behind the host's back.
 
 ## 12. Serial rates on whole interrupts
 

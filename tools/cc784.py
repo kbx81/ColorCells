@@ -344,34 +344,30 @@ def _onoff(v):
 def _mute(v):
     return {'off': 0x00, 'now': 0x04, 'after': 0x08}[v] if v in ('off', 'now', 'after') else int(v, 0) & 0x0C
 
-# patch 35: the configuration block, byte index and how a value is written
+def _bit(mask, invert=False):
+    return lambda v: mask if bool(_onoff(v)) != invert else 0
+
+# patch 35: the configuration block. Byte, the bits a setting owns in it (None: the
+# whole byte), and how a value is written
 CONFIG_FIELDS = {
-    'brightness': (2, _choice('off', 'low', 'medium', 'full')),
-    'mute':       (2, _mute),                               # off, now, after (the current message)
-    'pin2':       (3, _choice('none', 'alert', 'chain')),
-    'pin6':       (4, _choice('none', 'mute')),
-    'pin4':       (5, _choice('none', 'boundary')),
-    'pin7':       (6, _choice('none', 'heartbeat', 'busy')),
-    'alert':      (7, lambda v: int(v, 0)),                 # channel 0-99
-    'hold':       (8, lambda v: int(v, 0)),                 # frames, 62 per second
-    'flash':      (9, lambda v: int(v, 0)),                 # frames per half period
-    'beeper':     (10, _onoff),
-    'lock':       (11, _onoff),                             # remote keys ignored
-    'status':     (12, _onoff),                             # patch 41: status reports
-    'clocksource': (13, _choice('auto', 'mains', 'crystal')),
+    'brightness': (2, 0x03, _choice('off', 'low', 'medium', 'full')),
+    'mute':       (2, 0x0C, _mute),                         # off, now, after (the current message)
+    'beeper':     (2, 0x10, _bit(0x10, invert=True)),       # the bit is set when quiet
+    'lock':       (2, 0x20, _bit(0x20)),                    # remote keys ignored
+    'status':     (2, 0x80, _bit(0x80)),                    # patch 41: status reports
+    'hold':       (3, None, lambda v: int(v, 0)),           # frames, 62 per second
+    'flash':      (4, None, lambda v: int(v, 0)),           # frames per half period
 }
+CONFIG_LEN = 6
 
 def config_text(b: bytes) -> str:
     f = b[2]
     bright = ('off', 'low', 'medium', 'full')[f & 3]
     mute = 'muted' if f & 0x04 else ('mute pending' if f & 0x08 else 'unmuted')
-    live = [n for bit, n in ((0x10, 'alert playing'), (0x20, 'editor open'), (0x40, 'wrapped')) if f & bit]
-    return ("address %d, brightness %s, %s%s; pins 2/6/4/7 roles %d/%d/%d/%d; alert channel %d; "
-            "hold %d frames, flash %d frames; beeper %s, remote %s, status reports %s, clock source %s; "
-            "signature %02x sum %02x"
-            % (b[1], bright, mute, (', ' + ', '.join(live)) if live else '', b[3], b[4], b[5], b[6], b[7],
-               b[8], b[9], 'on' if b[10] else 'off', 'locked' if b[11] else 'unlocked', 'on' if b[12] else 'off',
-               ('auto', 'mains', 'crystal')[b[13]] if b[13] < 3 else b[13], b[0], b[15]))
+    return ("address %d, brightness %s, %s%s; hold %d frames, flash %d frames; "
+            "beeper %s, remote %s, status reports %s; signature %02x sum %02x"
+            % (b[1], bright, mute, ', wrapped' if f & 0x40 else '', b[3], b[4], 'off' if f & 0x10 else 'on',
+               'locked' if f & 0x20 else 'unlocked', 'on' if f & 0x80 else 'off', b[0], b[5]))
 
 def parse_reply(raw: bytes, kind: str, ten: bool = False):
     if not raw:
@@ -487,13 +483,13 @@ def run(link, a, ap):
         parse_reply(s.query({'id': '0', 'mem': '1', 'dump': '3', 'stats': '4', 'timing': '4'}[c]), c, ten)
 
     elif c == 'config':
-        # patch 35: B4 '5' reads the 16-byte block, B4 '6' the sequence list,
-        # B6 index value writes one byte (the firmware refuses 0, 1 and 15 and
-        # keeps the live bits of byte 2)
+        # patch 35: B4 '5' reads the 6-byte block, B4 '6' the sequence list,
+        # B6 index value writes one byte (the firmware refuses 0, 1 and 5 and
+        # keeps the live bit of byte 2)
         if not args:
             blk = reply_data(s.query('5'))
             seq = reply_data(s.query('6'))
-            if len(blk) != 16:
+            if len(blk) != CONFIG_LEN:
                 sys.exit("  no config block in the reply (patched firmware 35+ only)")
             print("  " + config_text(blk))
             if seq:
@@ -504,13 +500,12 @@ def run(link, a, ap):
             name, value = args[1], args[2]
             if name not in CONFIG_FIELDS:
                 sys.exit("  unknown setting %s; one of %s" % (name, ', '.join(CONFIG_FIELDS)))
-            index, parse = CONFIG_FIELDS[name]
-            if name in ('brightness', 'mute'):               # the two share byte 2
+            index, mask, parse = CONFIG_FIELDS[name]
+            if mask is not None:                            # a field of the flags byte
                 blk = reply_data(s.query('5'))
-                if len(blk) != 16:
+                if len(blk) != CONFIG_LEN:
                     sys.exit("  no config block in the reply")
-                cur = blk[2]
-                byte = (cur & ~0x03 & 0x0F) | parse(value) if name == 'brightness' else (cur & 0x03) | parse(value)
+                byte = (blk[index] & ~mask) | (parse(value) & mask)
             else:
                 byte = parse(value)
             s.send_frame(b'\xB6' + bytes([index, byte & 0xFF]))

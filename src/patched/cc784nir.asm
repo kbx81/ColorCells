@@ -216,26 +216,20 @@ STORE_WARN_LIMIT     equ SEQ_END+0x15     ; STORE_END here trips the 100 KEYS LE
 CFG                  equ SEQ_END+0x17
 CFG_SIG              equ CFG+0            ; CFG_MAGIC while the block is valid
 MY_ADDRESS           equ CFG+1            ; written only by the editor's ADDRESS? dialog
-CFG_FLAGS            equ CFG+2            ; bits 0-1 brightness, 2 muted, 3 mute pending, 4 alert, 5 editor, 6 wrapped
+CFG_FLAGS            equ CFG+2            ; bits 0-1 brightness, 2 muted, 3 mute pending, 4 quiet, 5 locked, 6 wrapped, 7 status
 CFG_BRIGHT           equ 0x03             ; CFG_FLAGS bits 0-1: off, low, medium, full
 CFG_MUTED_BIT        equ 2
 CFG_MUTE_PEND_BIT    equ 3
 CFG_WRAPPED_BIT      equ 6
 CFG_MUTED            equ 1<<CFG_MUTED_BIT
-CFG_LIVE             equ 0xf0             ; bits 4-7 change without a reseal
-CFG_PIN2_ROLE        equ CFG+3            ; P36: 0 none, 1 alert, 2 chain input
-CFG_PIN6_ROLE        equ CFG+4            ; P36: 0 none, 1 mute
-CFG_PIN4_ROLE        equ CFG+5            ; P36: 0 none, 1 boundary
-CFG_PIN7_ROLE        equ CFG+6            ; P36: 0 none, 1 heartbeat, 2 busy
-CFG_ALERT_CHAN       equ CFG+7            ; P36: the channel the alert line plays
-CFG_HOLD             equ CFG+8            ; frames a PAUSE, HOLD, wipe or clock holds the panel
-CFG_FLASH            equ CFG+9            ; frames per half period of the FLASH blink
-CFG_BEEP             equ CFG+10           ; 0: the beeper stays silent
-CFG_LOCK             equ CFG+11           ; non-zero: remote keys are ignored
-CFG_STATUS           equ CFG+12           ; P41: non-zero: a status report at each channel start and editor entry
-CFG_CLKSRC           equ CFG+13           ; reserved: clock source override
-CFG_SUM              equ CFG+15           ; 8-bit sum of the 15 bytes before it
-CFG_LEN              equ 16
+CFG_QUIET            equ 0x10             ; the beeper stays silent
+CFG_LOCKED           equ 0x20             ; remote keys are ignored
+CFG_LIVE             equ 0x40             ; wrapped changes without a reseal
+                                          ; bit 7, P41: a status report at each channel start and editor entry
+CFG_HOLD             equ CFG+3            ; frames a PAUSE, HOLD, wipe or clock holds the panel
+CFG_FLASH            equ CFG+4            ; frames per half period of the FLASH blink
+CFG_SUM              equ CFG+5            ; 8-bit sum of the bytes before it
+CFG_LEN              equ 6
 CFG_MAGIC            equ 0xa5
 STORE_GUARD          equ CFG+CFG_LEN      ; store_repair writes a space at MSG_STORE-1 every boot
 MSG_STORE            equ STORE_GUARD+1
@@ -1850,9 +1844,9 @@ chan_open:
 ; ---- status_send (P41): with reports on and the line quiet, hand the transmitter
 ;      B1 addr 03 'S' E flags sum. Dropped while a reply streams or a frame is arriving.
 status_send:
-        LD A,(CFG_STATUS)
-        AND A
-        RET z
+        LD A,(CFG_FLAGS)
+        RLA
+        RET nc
         LD A,(TX_ACTIVE)
         LD HL,RX_PHASE
         OR (HL)
@@ -2193,8 +2187,8 @@ init_vars_done:
         LD (SEQ_PTR),HL
         RET
 
-; ---- cfg_sum (P35): A = 8-bit sum of the block's first 15 bytes, HL -> CFG_SUM.
-;      The live bits of CFG_FLAGS (4-7) change without a reseal and do not count.
+; ---- cfg_sum (P35): A = 8-bit sum of the block before CFG_SUM, HL -> CFG_SUM.
+;      The live bit of CFG_FLAGS changes without a reseal and does not count.
 cfg_sum:
         LD HL,CFG
         LD B,CFG_LEN-1
@@ -3714,9 +3708,9 @@ fx_beep:
 
 ; ---- beep_start: BEEP_TICKS = BEEP_LEN (~115 ms); P35: nothing with the beeper off
 beep_start:
-        LD A,(CFG_BEEP)
-        AND A
-        RET z
+        LD A,(CFG_FLAGS)
+        AND CFG_QUIET
+        RET nz
         PUSH HL
         LD HL,BEEP_LEN
         LD (BEEP_TICKS),HL
@@ -5184,8 +5178,8 @@ ir_frame_done:
         LD HL,STAT_IR_OK        ; P40
         INC (HL)
         POP HL
-        LD A,(CFG_LOCK)         ; P35: a locked sign drops the key here, before
-        AND A                   ; either consumer sees it
+        LD A,(CFG_FLAGS)        ; P35: a locked sign drops the key here, before
+        AND CFG_LOCKED          ; either consumer sees it
         JR nz,ir_done
         LD A,(IR_SHIFT)
         OR 0x80
@@ -9572,12 +9566,8 @@ ROM_ID:
 ; ---- CFG_DEFAULTS: the block after a RAM loss, the sum computed at boot
 CFG_DEFAULTS:
         db CFG_MAGIC, 1         ; signature, address 1 (NETCC's default)
-        db 0x03                 ; full brightness, not muted
-        db 0, 0, 0, 0           ; spare line roles: none
-        db CHANNELS-1           ; alert channel
+        db 0x03                 ; full brightness, beeper on, remote unlocked, no status reports
         db HOLD_FRAMES, FLASH_HALF_PERIOD
-        db 1, 0                 ; beeper on, remote unlocked
-        db 0, 0, 0              ; status reports off, clock source auto, reserved
 
 ; ---- INIT_DATA: the boot values of the IMAGE variables, in their RAM order
 INIT_DATA:

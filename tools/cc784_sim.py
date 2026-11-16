@@ -1491,7 +1491,7 @@ def cmd_status():
     s.send_frame(b'\x09\x30\x30\x0eONE\x09\x30\x31\x0eTWO\x04', addr=1); s.rx_wait(); s.run_ms(1000)
     s.tx_edges.clear(); s.run_ms(8000)
     check('off by default: nothing sent in 8 s (%s)' % s.tx_bytes().hex(), s.tx_bytes() == b'')
-    s.send_frame(bytes([0xB6, 12, 1]), addr=1); s.rx_wait(); s.run_ms(500)
+    s.send_frame(bytes([0xB6, 2, 0x83]), addr=1); s.rx_wait(); s.run_ms(500)
     s.tx_edges.clear(); s.run_ms(12000)
     r = reports(s.tx_bytes())
     chans = [c for c, f in r]
@@ -1512,7 +1512,7 @@ def cmd_status():
     r = reports(s.tx_bytes())
     check('the editor opens: report FF (%s)' % r, r[:1] and r[0][0] == 0xFF)
     s.ir_key('STOP', stretch_us=100); s.ir_wait(); s.run_ms(3000)
-    s.send_frame(bytes([0xB6, 12, 0]), addr=1); s.rx_wait(); s.run_ms(500)
+    s.send_frame(bytes([0xB6, 2, 0x03]), addr=1); s.rx_wait(); s.run_ms(500)
     s.tx_edges.clear(); s.run_ms(8000)
     check('off again: nothing sent (%s)' % s.tx_bytes().hex(), s.tx_bytes() == b'')
     check('no faults', not s.faults)
@@ -2041,13 +2041,13 @@ def cmd_field():
     p = play(b'05', b'\x5f \xb2\x33 \x5f')
     check('the clock before and after a field: %r' % p[:2], len(p) >= 2 and all(x.count(b':') == 2 and b' 72F ' in x for x in p))
     # status reports: one per channel start, none at a field's end
-    send(bytes([0xB6, 12, 1]))
+    send(bytes([0xB6, 2, 0x83]))
     s.tx_edges.clear()
     n = len(play(b'00', b'TEMP \xb2\x33 NOW', 15000)) + 1
     tx = s.tx_bytes()
     r = [i for i in range(len(tx) - 6) if tx[i] == 0xB1 and tx[i + 3] == ord('S')]
     check('one status report per pass (%d reports, %d passes)' % (len(r), n), abs(len(r) - n) <= 1)
-    send(bytes([0xB6, 12, 0]))
+    send(bytes([0xB6, 2, 0x03]))
     # loads while a field is drawn
     field = bytes(range(0x41, 0x5b)) * 2
     send(b'\x09\x39\x33\x0e' + field)
@@ -2248,11 +2248,11 @@ def cmd_lite():
                 i += 1
         return out
     s.send_frame(b'\x04\x35\x33', addr=1); s.rx_wait(); s.run_ms(300)
-    s.send_frame(bytes([0xB6, 12, 1]), addr=1); s.rx_wait(); s.run_ms(500)
+    s.send_frame(bytes([0xB6, 2, 0x83]), addr=1); s.rx_wait(); s.run_ms(500)
     s.tx_edges.clear(); s.run_ms(12000)
     r = reports(s.tx_bytes())
     check('status reports at 300 baud: %s' % r, len(r) >= 4 and set(r) == {3, 5})
-    s.send_frame(bytes([0xB6, 12, 0]), addr=1); s.rx_wait(); s.run_ms(500)
+    s.send_frame(bytes([0xB6, 2, 0x03]), addr=1); s.rx_wait(); s.run_ms(500)
     table = rom[syms['IR_KEY_TABLE']:syms['IR_KEY_TABLE'] + 62]
     code = lambda k: table[cc784_ir.key_index(k)]
     s.keypad = True
@@ -2290,9 +2290,9 @@ def cmd_config():
         tx = s.tx_bytes()
         return tx[1:] if tx[:1] == b'\x06' else tx
     def cfg(s):
-        return s.ram('CFG', 16)
+        return s.ram('CFG', 6)
     def valid(b):
-        return b[0] == 0xA5 and (sum(b[:15]) - (b[2] & 0xF0)) & 0xFF == b[15]
+        return b[0] == 0xA5 and (sum(b[:5]) - (b[2] & 0x40)) & 0xFF == b[5]
     def setb(s, index, value, wait_ms=1500):
         reply(s, bytes([0xB6, index, value]), wait_ms)
     def passes(s, ms=1000):
@@ -2306,14 +2306,14 @@ def cmd_config():
         for _ in range(ms * 1000 // 64):
             s.run(512); n += 1; lit += (s.latch & 0x0F) != 0x0F
         return lit / n
-    defaults = bytes([0xA5, 1, 3, 0, 0, 0, 0, syms['CHANNELS'] - 1, 80, 13, 1, 0, 0, 0, 0])
+    defaults = bytes([0xA5, 1, 3, 80, 13])
 
     s = Sign(rom, syms, fresh_ram=True)
     s.run_ms(2500)
     b = cfg(s)
-    check('fresh RAM: defaults %s, sum valid' % b.hex(), b[:15] == defaults and valid(b))
+    check('fresh RAM: defaults %s, sum valid' % b.hex(), b[:5] == defaults and valid(b))
     r = reply(s, b'\xb4\x35')
-    check("B4 '5' returns the block (%s)" % r[3:19].hex(), r[:3] == b'\xb1\x01\x10' and r[3:19] == b and r[19] == sum(b) & 0xFF)
+    check("B4 '5' returns the block (%s)" % r[3:9].hex(), r[:3] == b'\xb1\x01\x06' and r[3:9] == b and r[9] == sum(b) & 0xFF)
     r = reply(s, b'\xb4\x36', wait_ms=5000)
     check("B4 '6' returns SEQ_LIST (%d bytes, first %s)" % (r[2], r[3:7].hex()), r[:3] == b'\xb1\x01' + bytes([syms['SEQ_LIST_LEN']])
           and r[3:3 + syms['SEQ_LIST_LEN']] == s.ram('SEQ_LIST', syms['SEQ_LIST_LEN']))
@@ -2321,18 +2321,15 @@ def cmd_config():
     s.send_frame(b'\x09\x30\x30\x0eHELLO THERE \x04\x30\x30', addr=1, flag=0x80); s.rx_wait(); s.run_ms(3000)
 
     # writes: protected bytes refused, others sealed, the flags byte keeps its live bits
-    setb(s, 0, 0x00); setb(s, 1, 7); setb(s, 15, 0)
+    setb(s, 0, 0x00); setb(s, 1, 7); setb(s, 5, 0)
     b = cfg(s)
     check('B6 to the signature, the address and the sum is refused (%s)' % b.hex(), b[:2] == bytes([0xA5, 1]) and valid(b))
-    setb(s, 8, 20); setb(s, 9, 5)
+    setb(s, 3, 20); setb(s, 4, 5)
     b = cfg(s)
-    check('B6 8 20 and B6 9 5 land and reseal: hold %d flash %d' % (b[8], b[9]), b[8] == 20 and b[9] == 5 and valid(b))
-    a = syms['CFG_FLAGS']
-    s.m.memory[a] |= 0x10                           # a live bit, as patch 36 will set
+    check('B6 3 20 and B6 4 5 land and reseal: hold %d flash %d' % (b[3], b[4]), b[3] == 20 and b[4] == 5 and valid(b))
     setb(s, 2, 0x02)
     b = cfg(s)
-    check('B6 2 keeps the live bits: flags %02x, sum valid' % b[2], b[2] & 0x1F == 0x12 and valid(b))   # bit 6 may be set by a wrap
-    s.m.memory[a] &= 0x0F
+    check('B6 2 sets the flags, the wrapped bit outside the sum: flags %02x, sum valid' % b[2], b[2] & 0xBF == 0x02 and valid(b))
 
     # brightness: lit time, both passes still sent so no color loses a bit
     setb(s, 2, 0x03); d3 = duty(s); f3, s3 = passes(s)
@@ -2386,7 +2383,7 @@ def cmd_config():
         return top
     s.send_frame(b'\x09\x30\x30\x0e\x19HOLD ME\x18\x04\x30\x30', addr=1, flag=0x80); s.rx_wait(); s.run_ms(1500)
     h20 = max_delay(s, 6000)
-    setb(s, 8, 80)
+    setb(s, 3, 80)
     h80 = max_delay(s, 6000)
     check('PAUSE holds %d frames with hold 20, %d with 80' % (h20, h80), h20 == 20 and h80 == 80)
 
@@ -2398,17 +2395,17 @@ def cmd_config():
             if v != last: n += 1; last = v
         return n
     t5 = toggles(s, 2000)
-    setb(s, 9, 13)
+    setb(s, 4, 13)
     t13 = toggles(s, 2000)
     check('flash toggles %d times in 2 s at 5 frames, %d at 13 (want ~25 and ~9)' % (t5, t13), 20 <= t5 <= 30 and 7 <= t13 <= 12)
 
     # beeper off: a BEEP attribute does nothing
-    setb(s, 10, 0)
+    setb(s, 2, 0x13)
     s.send_frame(b'\x09\x30\x30\x0e\x07BEEP\x04\x30\x30', addr=1, flag=0x80); s.rx_wait()
     beeped = False
     for _ in range(400):
         s.run_ms(10); beeped |= s.ram('BEEP_TICKS', 2) != b'\x00\x00'
-    setb(s, 10, 1)
+    setb(s, 2, 0x03)
     s.send_frame(b'\x09\x30\x30\x0e\x07BEEP\x04\x30\x30', addr=1, flag=0x80); s.rx_wait()
     beeped_on = False
     for _ in range(400):
@@ -2416,10 +2413,10 @@ def cmd_config():
     check('beeper off: silent (%s); on: beeps (%s)' % (beeped, beeped_on), not beeped and beeped_on)
 
     # remote lock: STOP opens the editor only when unlocked
-    setb(s, 11, 1)
+    setb(s, 2, 0x23)
     s.ir_key('STOP'); s.ir_wait(); s.run_ms(800)
     locked = s.ram('MENU_ACTIVE')[0]
-    setb(s, 11, 0)
+    setb(s, 2, 0x03)
     s.ir_key('STOP'); s.ir_wait(); s.run_ms(800)
     opened = s.ram('MENU_ACTIVE')[0]
     check('remote lock: STOP ignored (%02x); unlocked: editor opens (%02x)' % (locked, opened), locked == 0 and opened == 0xFF)
@@ -2459,7 +2456,7 @@ def cmd_config():
     s3.run_ms(2500)
     b3 = cfg(s3)
     check('reset with a corrupt sum: defaults, store cleared, address 1 (%s)' % b3.hex(),
-          b3[:15] == defaults and valid(b3) and s3.ram('MSG_STORE', 3) == b'\xd0\xd0\x03')
+          b3[:5] == defaults and valid(b3) and s3.ram('MSG_STORE', 3) == b'\xd0\xd0\x03')
     check('no faults, stack ok (depth %d)' % s.depth(), not s.faults and not s2.faults and not s3.faults and s.depth() < 160)
     print('config: %d/%d checks pass' % (sum(checks), len(checks)))
     return all(checks)
