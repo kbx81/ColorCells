@@ -22,7 +22,18 @@ Opened as `COMn:baud,n,8,2,cs,ds,cd,bin`:
 
 The program sends **one byte at a time with a ~50 ms pause after each byte**. The firmware shows this is *not* required: reception is interrupt-driven into an 8-byte FIFO. What *is* required is not sending the next frame until the sign has ACKed the previous one (see §7).
 
-**Connecting anything else** (a microcontroller, a USB adapter, your own cable): a TX line to the sign's RX on DB9 pin 8 and an RX line from the sign's TX on pin 3, ground on pin 5. The sign expects RS-232 polarity; a MAX3232-class driver is the faithful interface, and the [hardware notes §4](hardware.md#4-serial-port-h) explain why plain TTL may do. Nothing else is required on a NIR or on the patched firmware. A CC784NET on its stock firmware also needs sign pins 2 and 5 tied together: its boot-time test reads pin 2 low as "a PC is attached" and otherwise runs in keypad mode and ignores serial ([hardware.md §6](hardware.md#6-connectors)).
+**Connecting anything else** (a microcontroller, a USB adapter, your own cable):
+
+| Signal | Host side | DB9 (`CC784-4`) | 10-pin SK1 (`CC784-3A`) |
+|---|---|---|---|
+| Sign's RX | host TX | 8 | 6 |
+| Sign's TX | host RX | 3 | 3 |
+| Ground | ground | 5 | 2 |
+| Stock firmware serial detect (excluding NIR) | tie to ground | 2 | 9 |
+
+- **Levels:** the sign expects RS-232 polarity; a MAX3232-class driver is the faithful interface, and the [hardware notes §2.4](hardware.md#24-host-port-serial-and-keypad-h) explain why plain TTL may do.
+- **The NIR and the patched firmware** need only the first three lines.
+- **The serial-detect tie** is read at boot by the other stock firmwares; without it they run in keypad mode and ignore serial. With it, the NET talks packets, the CC710 opens terminal mode (packet mode needs more, [§8](#8-the-cc710-on-the-wire)) and the original CC784 takes bytes as keys ([§9](#9-the-original-cc784-on-the-wire)).
 
 ---
 
@@ -316,23 +327,31 @@ send_frame(u, 1, b'\x04' + b'000201')
 
 ---
 
-## 7. What the firmware adds
+## 7. The sign's side
 
-The sign's side of this protocol is read from the firmware itself, and lives in the firmware notes rather than here:
+The sign's side of this protocol is read from the firmware itself, and lives in the firmware notes rather than here.
+
+**Read from the stock firmware:**
 
 | Topic | Where |
 |---|---|
 | The fixed 300 baud, the bit-banged receiver and transmitter | [firmware notes §4](firmware.md#4-serial-link-h) |
-| The patched firmware's 300 to 1200 baud, and 2560, set by the first frame after a second of silence | [patched.md](patched.md#2-patches), patches 30 and 52 |
-| The patched firmware's configuration block: `B6 index value` writes a byte, `B4 '5'` reads the block, `B4 '6'` the sequence list; `cc784.py config` | [patched.md](patched.md#2-patches), patch 35 |
-| The patched firmware's health counters in the `B4 '4'` reply; `cc784.py stats` | [patched.md](patched.md#2-patches), patches 40 and 44 |
-| The patched firmware's `B4 '1'` reply adds a third five-digit figure, the longest payload a frame may carry: 254, or 128 on a LITE build with 2 K of RAM. A longer frame is dropped unanswered. `cc784.py mem` | [patched.md](patched.md#2-patches), patches 13 and 51 |
-| The patched firmware's unsolicited status reports, `B1 addr 03 'S' channel flags sum`; `cc784.py watch` | [patched.md](patched.md#2-patches), patch 41 |
-| The patched firmware's serial line carries frames only: a flag byte of `80` or `81` and no gap of a second inside a frame; `18` (BUSY) while the editor is open; `B7 '1'` opens the editor as a serial terminal, `B7 '0'` closes it; `cc784.py stop` and `start` | [patched.md](patched.md#2-patches), patch 45 |
 | The frame parser state by state, ACK, NAK and the silent discard of other addresses | [firmware notes §5](firmware.md#5-packet-parser-pkt_st_-16ef178c-h) |
 | The complete command list, including the ones NETCC never sends, and the exact reply and dump frame formats | [firmware notes §6](firmware.md#6-packet-processing-and-command-set-pkt_process-2a68-h) |
 | Every attribute byte with the sign's own name for it, the color codes, the graphics and the European characters | [firmware notes §8](firmware.md#8-rendering-h) |
-| The board, the DB9 and the serial levels | [hardware notes §4](hardware.md#4-serial-port-h) |
+| The board, the DB9 and the serial levels | [hardware notes §2.4](hardware.md#24-host-port-serial-and-keypad-h) |
+
+**Added by the patched firmware:**
+
+| Topic | Where |
+|---|---|
+| 300 to 1200 baud, and 2560, set by the first frame after a second of silence | [patched.md](patched.md#2-patches), patches 30 and 52 |
+| The configuration block: `B6 index value` writes a byte, `B4 '5'` reads the block, `B4 '6'` the sequence list; `cc784.py config` | [patched.md](patched.md#2-patches), patch 35 |
+| Health counters in the `B4 '4'` reply; `cc784.py stats` | [patched.md](patched.md#2-patches), patches 40 and 44 |
+| The `B4 '1'` reply adds a third five-digit figure, the longest payload a frame may carry: 254, or 128 on a LITE build with 2 K of RAM. A longer frame is dropped unanswered. `cc784.py mem` | [patched.md](patched.md#2-patches), patches 13 and 51 |
+| Unsolicited status reports, `B1 addr 03 'S' channel flags sum`; `cc784.py watch` | [patched.md](patched.md#2-patches), patch 41 |
+| Frames only on the serial line: a flag byte of `80` or `81` and no gap of a second inside a frame; `18` (BUSY) while the editor is open; `B7 '1'` opens the editor as a serial terminal, `B7 '0'` closes it; `cc784.py stop` and `start` | [patched.md](patched.md#2-patches), patch 45 |
+| Over-the-air updates, `B5` | [ota.md](ota.md) |
 
 Two consequences for a host, both covered in detail there: the NETCC-style status query (`17 32`) is a truncated set-time that does nothing useful (and stops the stock firmware's clock), so use QUERY MEMORY and QUERY DUMP instead; and after a RAM loss the stock firmware answers only at address 0 (the patched firmware at 1) until an address is set, so `0x2A` broadcast is the way to reach an unknown sign.
 
@@ -358,7 +377,7 @@ The ten-channel CC710 ([firmware notes §15](firmware.md#15-the-cc710-firmware-h
 - At address `*` (the keypad route) the sign never ACKs, since frames to `*` get no reply; queries still answer [H].
 - `cc784.py --channels 10` sends one-digit channel numbers and reads the one-byte markers in a dump [H]. With it, `time` sends `A`/`P` instead of the CC784's `Y`/`N`; `time24` is refused.
 
-Verified on a CC710 [H]: terminal mode through the host cable ([hardware notes §12](hardware.md#3-host-cable)); packet mode by holding `1`, then queries `0`–`3` (query `2` with a remark), `09 c` loads including a 314-byte message split over `0E` and `B3` frames, `04`, `17` and `03`; ACK and NAK at address `D5` after a `Z` + `1` boot; terminal-mode `7E` then `*` opens the editor, and `20` releases a WAIT loaded by packet.
+Verified on a CC710 [H]: terminal mode through the host cable ([hardware notes §5, step 3](hardware.md#step-3-host-cable)); packet mode by holding `1`, then queries `0`–`3` (query `2` with a remark), `09 c` loads including a 314-byte message split over `0E` and `B3` frames, `04`, `17` and `03`; ACK and NAK at address `D5` after a `Z` + `1` boot; terminal-mode `7E` then `*` opens the editor, and `20` releases a WAIT loaded by packet.
 
 ## 9. The original CC784 on the wire
 

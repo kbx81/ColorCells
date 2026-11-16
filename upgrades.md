@@ -1,6 +1,6 @@
 # CC784 — upgrades and modifications
 
-Changes to the `CC784-4` controller board, each independent of the others. An earlier `CC784-3A` board (the CC710's) first needs the conversion in [hardware.md §12](hardware.md#12-converting-a-cc784-3a-board-to-a-cc784-4).
+Changes to the `CC784-4` controller board, each independent of the others. An earlier `CC784-3A` board (the CC710's) first needs the conversion in [hardware.md §5](hardware.md#5-converting-a-cc784-3a-board-to-a-cc784-4).
 
 | Upgrade | Gives | Parts |
 |---|---|---|
@@ -20,7 +20,7 @@ All of them run the patched firmware from `src/patched/` ([patched.md](patched.m
 
 - **Programmer.** The T48 needs firmware `00.1.34` or later; any minipro command prints it. The factory `00.1.03` drives D6 and D7 low during the program pulse, so writes come back with two zero bits per byte while reads, ID and blank check all look right (verify fails at the first byte needing bit 7 or 6 high, such as `File=0xF0, Device=0x30`). `minipro -F UpdateT48.dat` with the file from an XGpro installer (V12.90 ships `00.1.34`) fixes it; minipro's "newer than expected" warning is harmless.
 - **Program before wiring.** Nothing on the chips needs changing, and a socketed chip goes in and out of the T48 freely.
-- **Keep the M27C256B un-erased** until the EEPROM is proven in the sign.
+- **Keep the M27C256B un-erased** until the EEPROM is proven in the sign. It drops straight back in only until EEPROM pin 27 is rewired; after that it needs its image in the upper half ([If something is wrong](#if-something-is-wrong)).
 - **Meter** for the continuity checks.
 
 ---
@@ -31,15 +31,21 @@ How the banking works is in [ota.md](ota.md); this is the bench view. The chip m
 
 ### Wiring
 
+#### EEPROM
+
 | EEPROM pin | Socket supplies | Needed | Wire to |
 |---|---|---|---|
-| 27 | A14 (factory wire from Z80 pin 4 on the NIR; nothing on the NET, whose 27128 has `/PGM` here) | `/WE` | **Z80 pin 22 (`/WR`)**, with 10 k to 5 V in **R32**, the footprint that already sits on this pin's net (empty on a NIR; a NET has the 27128's 3.3 k `/PGM` pull-up there, which can stay) |
-| 22 | `/CE` (LS139 pin 12, same net as pin 20) | `/OE` | **Z80 pin 21 (`/RD`)**, unconnected on the board |
 | 1 | VPP, hard-wired to 5 V | A14 | **the added '273, pin 2 (Q0)** |
+| 22 | `/CE` (LS139 pin 12, same net as pin 20) | `/OE` | **Z80 pin 21 (`/RD`)**, unconnected on the board; **cut** pin 22 from the `/CE` net first, or the wire shorts `/RD` to `/CE` |
+| 27 | A14 (factory wire from Z80 pin 4 on the NIR; nothing on the NET, whose 27128 has `/PGM` here) | `/WE` | **Z80 pin 22 (`/WR`)**, with 10 k to 5 V in **R32**, the footprint that already sits on this pin's net (empty on a NIR; a NET has the 27128's 3.3 k `/PGM` pull-up there, which can stay) |
 
-Pin 22 is the one that is easy to miss: the AT28C256 refuses every write while `/OE` is low, and the socket holds it low whenever the chip is selected.
+> [!TIP]
+> - Pins 1 and 28 are joined on the 5 V net in **two** places: a visible track next to the socket and a second **under** it. Cut both to isolate pin 1.
+> - Pin 22 is the one that is easy to miss: the AT28C256 refuses every write while `/OE` is low, and the socket holds it low whenever the chip is selected. Cut its track to the `/CE` net before wiring it to `/RD`.
 
-The bank register is a second 74LS273 piggybacked on U5, the `8000` control latch: same pinout, so D0–D7, VCC and GND come from the stack.
+#### Bank register
+
+A second 74LS273 piggybacked on U5, the `8000` control latch: same pinout, so D0–D7, VCC and GND come from the stack.
 
 | '273 pin | Lift? | Wire to |
 |---|---|---|
@@ -59,6 +65,9 @@ The bank register is a second 74LS273 piggybacked on U5, the `8000` control latc
 
 **EEPROM socket**
 
+- [ ] Isolate pin 1: cut both 5 V tracks, the visible one beside the socket and the one under it.
+- [ ] Isolate pin 22: cut its track to the `/CE` net, the short one on the bottom side that hops around pin 21 to pin 20. Required: the socket ties pin 22 to pin 20 (`/CE`), so without the cut the `/RD` wire below shorts the two.
+- [ ] Isolate pin 27, NIR only: remove the factory wire from Z80 pin 4. A NET has nothing to remove; R32 stays on this net.
 - [ ] Pin 1 (A14) → Bank register ('273 added below) pin 2 (Q0).
 - [ ] Pin 22 (`/OE`) → Z80 pin 21 (`/RD`).
 - [ ] Pin 27 (`/WE`) → Z80 pin 22 (`/WR`), plus 10 k to 5 V in R32 (on a NET the fitted 3.3 k serves).
@@ -97,7 +106,7 @@ EEPROM out of its socket for its three checks.
 
 ### Power on — 5 min
 
-With no battery, RAM comes up invalid and the patched firmware re-initializes: empty store, default sequence, address 1.
+With no battery, RAM comes up invalid and the patched firmware re-initializes: empty store, default sequence, address 1, and the demo message plays.
 
 - [ ] Sign powers up, no heat, no smell.
 - [ ] About a second of dark before anything shows: the stub CRCs the bank before running it.
@@ -129,18 +138,18 @@ An AS6C62256 (32 K, 16 K reachable) in place of the HY6264. The firmware detects
 - [ ] Remove the factory wire from U13 pin 8 to pin 26 (CS2 on the 6264, A13 on the 62256) and wire pin 26 to **Z80 pin 3**. Left floating, the boot hangs at once: the stub runs from RAM.
 - [ ] Pin 1 (NC on the 6264, A14 on the 62256) to **Z80 pin 4**. A14 is always 1 while RAM is selected, so the chip's upper half is used; GND would use the lower half equally well.
 - [ ] Check: pin 26 ↔ Z80 pin 3 and pin 1 ↔ Z80 pin 4 beep; pin 26 ↔ U13 pin 8 must **not** beep.
-- [ ] The power-fail deselect still works: U13 gates the RAM's `/CE` with the same signal that drove CS2, so nothing is lost with pin 26 ([hardware notes §7](hardware.md#7-power--battery)).
+- [ ] The power-fail deselect still works: U13 gates the RAM's `/CE` with the same signal that drove CS2, so nothing is lost with pin 26 ([hardware notes §2.7](hardware.md#27-power-and-battery)).
 - [ ] After power-up, `B4 '1'` reports a total of about 15 K (about 7 K with the 6264). A total near 7 K with the 62256 fitted means an address line is not landing.
 
 ---
 
 ## 4. NET to NIR
 
-The CC784NET is the same board with a 4 MHz crystal, the original interrupt gating, no IR parts and a keypad on the DB9 ([hardware.md §3](hardware.md#3-timebase-h) and §6). The NIR firmware, and the patched one, need the NIR timebase.
+The CC784NET is the same board with a 4 MHz crystal, the original interrupt gating, no IR parts and a keypad on the DB9 ([hardware.md §2.3](hardware.md#23-timebase-h) and §6). The NIR firmware, and the patched one, need the NIR timebase.
 
 - [ ] Crystal Y1: 4 MHz out, **8.000 MHz** in.
 - [ ] Cut the track from U14 pin 1 to U10 pin 12; bridge U10 pins 12 and 13. The interrupt is now Q11 of the HC4020 alone, the 7812.5 Hz tick.
-- [ ] Buffer the panel column clock as on the NIR ([hardware.md §8](hardware.md#8-factory-bodge-wires-h--from-the-schematic)): cut the track at J2 (SK2) pin 11 only, so U11 and U19 stay on the clock; wire U4 pin 5 (or U11 pin 11) to U18 pin 11; bridge U18 pins 10 and 9; wire U18 pin 8 to J2 pin 11. Check: J2 pin 11 ↔ U4 pin 5 must **not** beep, U18 pin 8 ↔ J2 pin 11 and U18 pin 11 ↔ U4 pin 5 beep.
+- [ ] Buffer the panel column clock as on the NIR ([hardware.md §3.2](hardware.md#32-factory-bodge-wires-h--from-the-schematic)): cut the track at J2 (SK2) pin 11 only, so U11 and U19 stay on the clock; wire U4 pin 5 (or U11 pin 11) to U18 pin 11; bridge U18 pins 10 and 9; wire U18 pin 8 to J2 pin 11. Check: J2 pin 11 ↔ U4 pin 5 must **not** beep, U18 pin 8 ↔ J2 pin 11 and U18 pin 11 ↔ U4 pin 5 beep.
 - [ ] CPU: the NET's Z8400A is a 4 MHz grade. It runs at 8 MHz in practice; a **Z84C0008** is the in-spec replacement and drops straight in.
 - [ ] Remote, if wanted: the IR and clock add-in board (§7), or the original way: U18 (CD74HC14), the 3-pin receiver header near it and a **30 kHz** receiver module (TSOP4830/TSOP38230 class; the remote's carrier is 31.25 kHz). U18 pin 6 goes to the '244 of §8 (patched firmware), or to the DB9 pin 1 net (stock NIR firmware).
 - [ ] The NET firmware's cable detect is gone with it: no pin 2–5 short is needed on the serial cable. The patched firmware finds a keypad by itself (patch 36).
@@ -178,7 +187,7 @@ With §2 done, firmware goes in over the serial link: `push` sends only the 64-b
 
 ## 7. IR and clock add-in board
 
-The add-in board ([hardware notes §3](hardware.md#3-timebase-h)) puts a 74HC151 in the NMI line, choosing between the mains zero-cross and a 64 Hz square wave from its own 32.768 kHz crystal, and carries the TSOP38230 receiver. It needs §2 first: the clock-source select is the added bank register's Q7. The patched firmware picks the crystal by itself when no mains cycle arrives at boot (patch 31).
+The add-in board ([hardware notes §2.3](hardware.md#23-timebase-h)) puts a 74HC151 in the NMI line, choosing between the mains zero-cross and a 64 Hz square wave from its own 32.768 kHz crystal, and carries the TSOP38230 receiver. It needs §2 first: the clock-source select is the added bank register's Q7. The patched firmware picks the crystal by itself when no mains cycle arrives at boot (patch 31).
 
 Its connector J1, pin 1 at the square pad:
 
@@ -196,7 +205,9 @@ Both outputs pass through 470 Ω on the add-in board.
 
 ### Wire — 30 min
 
-- [ ] Cut the track from U18 pin 4 to Z80 pin 17. The NMI now goes through the add-in board.
+- [ ] Cut the track from U18 pin 4 to Z80 pin 17; the NMI will go through the add-in board.
+  - Cut it on the top side, where it runs diagonally near Z80 pin 20 and crosses tracks on the bottom.
+  - The vias at its two ends make good solder points for the next step: J1 pin 2 (`AC_IN`) at U18's end, J1 pin 3 (`CLOCK_OUT`) at the Z80's.
 - [ ] Wire J1 as in the table.
 - [ ] A NET board only: U18's spare gate needs a wire from **U18 pin 6** to the '244 of §8 (the NIR's factory wire to the DB9 pin 1 net serves only the stock firmware). Check that pin 5 is not tied to a rail by a track first (a NIR has it on its header instead).
 - [ ] A NIR board: unplug the old receiver from its header. The add-in board's receiver replaces it.
@@ -223,12 +234,12 @@ The NIR's receiver output shares DB9 pin 1 with the keypad's column bit 1, so th
 
 ### Wire — 30 min
 
-- [ ] Solder only the new chip's **pins 10 (GND), 20 (VCC) and 19** (half b's `/OE`) to U12's matching pins. Bend every other pin out horizontally.
-- [ ] Pin 1 (half a's `/OE`) must **not** touch U12's pin 1, which is grounded: bend it out and tie it to VCC, so half a stays off.
-- [ ] Half b to the data bus: pin 9 → D4 (Z80 pin 7), pin 7 → D5 (Z80 pin 9), pin 5 → D6 (Z80 pin 10), pin 3 → D7 (Z80 pin 13).
+- [ ] Solder only the new chip's **pins 10 (GND), 20 (VCC) and 19** (half `b`'s `/OE`) to U12's matching pins. Bend every other pin out horizontally.
+- [ ] Pin 1 (half `a`'s `/OE`) must **not** touch U12's pin 1, which is grounded: bend it out and tie it to VCC, so half `a` stays off.
+- [ ] Half `b` to the data bus: pin 9 → D4 (Z80 pin 7), pin 7 → D5 (Z80 pin 9), pin 5 → D6 (Z80 pin 10), pin 3 → D7 (Z80 pin 13).
 - [ ] **U18 pin 6** (the HC14's output) → pin 11, the input for D4. Same polarity as before: the line idles low.
 - [ ] Remove the wire from U18 pin 6 to the DB9 pin 1 net.
-- [ ] Pins 13, 15 and 17: 10 k each to VCC.
+- [ ] Pins 13, 15 and 17: 10 k each to VCC. Or fit a bussed 10 k SIP such as the `4609X-101-103LF` across pins 11–18, with its common pin, the only one off the stacked chips, wired to VCC: every pin there is an input or one of half `a`'s disabled outputs, so all eight can be pulled up.
 
 ### Check before power — 5 min
 
@@ -260,7 +271,7 @@ The NIR's receiver output shares DB9 pin 1 with the keypad's column bit 1, so th
 | OTA status 1 (verify failed) | `/OE` still on the socket net: pin 22 |
 | `NOT RUNNING THE NEW IMAGE` | the stub rejected the trailer or image CRC; power-cycle and push again |
 
-Fallback at any point: refit the original M27C256B.
+Fallback: until pin 27 is rewired, refit the original M27C256B. After that, its A14 sits on `/WR`, high on every read, so it reads its empty upper half and the sign stays dark. Burn the 16 K image into both halves of a 27C256 instead, or into a 27128 (pin 27 is `/PGM` there); pin 1 then carries the bank bit as VPP, low after reset, outside the datasheet's read condition but usually harmless [M, untested].
 
 ---
 

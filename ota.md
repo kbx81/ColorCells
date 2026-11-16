@@ -25,7 +25,7 @@ ROM `/CE` is gated by `/MREQ`, so only memory accesses to `0x0000–0x3FFF` reac
 |---|---|---|
 | `0000–023F` | boot stub: reset, `0038`, `0066`, bank choice, trial marking, `stub_lib` | T48 only |
 | `0240–0248` | jump table: `JP app_start`, `JP int_timer`, `JP nmi_entry` | OTA |
-| `0249–3FBF` | application (`ROM_ID` directly after the table) | OTA |
+| `0249–3FBF` | application | OTA |
 | `3FC0–3FFF` | trailer page | OTA, written last |
 
 **Trailer:** `+0` `"OTA1"`, `+4` sequence number, `+5` state (1 TRIAL, 2 TRIED, 3 GOOD), `+6` CRC-16 of `0240–3FBF`, `+8` CRC-16 of bytes `+0..+7`, rest `FF`. CRC-16/XMODEM (poly `1021`, init 0), little-endian words.

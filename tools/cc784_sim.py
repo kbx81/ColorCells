@@ -71,7 +71,7 @@ cc784_sim.py - run the CC784NIR ROM under emulation (kosarev's z80 core) with a 
         Cut the power at a random instant of an update, RUNS times (default 100);
         every reboot must land in a bank whose trailer and image CRC check out.
 
-Facts the model rests on (all traced in the firmware notes): INT every 1024 T
+Facts the model rests on (all traced in the firmware notes): INT every 1024 cycles
 (8 MHz / 1024; 4 MHz cannot keep up with the tick work, so the CPU is 8 MHz),
 NMI at 60 Hz, PORT_IN bit 3 = serial RX (1 = space), bit 1 = IR burst (bit 4
 on the patched build), a keypad's column code on bits 0-2 and GS on bit 3,
@@ -2470,7 +2470,7 @@ def cmd_keypad():
     space for 256 frames, keys that edit exactly as the same keys on the remote do
     (with contact bounce), the remote still working alongside, and serial again as
     soon as a host idles on the line. Fine slices: the scan's short DI windows
-    would otherwise hold interrupts to the next 128 T and cost the remote frames."""
+    would otherwise hold interrupts to the next 128 cycles and cost the remote frames."""
     global SLICE
     SLICE, coarse = 16, SLICE
     try:

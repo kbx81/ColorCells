@@ -6,7 +6,7 @@ Work not built, with its sizing and the decisions already made. Firmware sizes a
 
 ## 1. The four spare DB9 lines
 
-Dropped. Every sign has a dongle, and the dongle already does over serial what the lines were for: brightness and mute are configuration bytes (`B6`), an alert is a sequence change sent and later undone, the message boundary is the status report (patch 41, §11), and the heartbeat is a periodic `stats` poll (patch 40): no reply, or an uptime that stops counting, is a hung sign; a boot count that moves is a reboot. The lines also belong to the wired keypad in keypad mode (patch 36), so leaving them alone avoids that conflict. Two are inputs to the sign (`PORT_IN` bits 0 and 2, DB9 pins 2 and 6), two are outputs (`CTRL_LATCH` bits 5 and 6, pins 4 and 7) ([hardware notes §4](hardware.md#4-serial-port-h)); the four role bytes in the configuration block (3–6) stay unused. The chain of §2 would still need pin 2.
+Dropped. Every sign has a dongle, and the dongle already does over serial what the lines were for: brightness and mute are configuration bytes (`B6`), an alert is a sequence change sent and later undone, the message boundary is the status report (patch 41, §11), and the heartbeat is a periodic `stats` poll (patch 40): no reply, or an uptime that stops counting, is a hung sign; a boot count that moves is a reboot. The lines also belong to the wired keypad in keypad mode (patch 36), so leaving them alone avoids that conflict. Two are inputs to the sign (`PORT_IN` bits 0 and 2, DB9 pins 2 and 6), two are outputs (`CTRL_LATCH` bits 5 and 6, pins 4 and 7) ([hardware notes §2.4](hardware.md#24-host-port-serial-and-keypad-h)); the four role bytes in the configuration block (3–6) stay unused. The chain of §2 would still need pin 2.
 
 ## 2. Several signs on one serial link
 
@@ -56,7 +56,7 @@ Built: patch 39 ([patched notes](patched.md#2-patches)).
 
 ## 8. Faster CPU: analyzed and shelved
 
-A Z84C0020 is a drop-in at 8 MHz. Faster clocks were worked through and set aside ([hardware notes §2](hardware.md#2-memory-and-io-decoding-h--from-the-schematic)):
+A Z84C0020 is a drop-in at 8 MHz. Faster clocks were worked through and set aside ([hardware notes §2.2](hardware.md#22-memory-and-io-decoding-h--from-the-schematic)):
 
 - The ROM select is `/MREQ` through the LS139, which leaves 67 ns for the EEPROM at 8 MHz and 12 ns at 16 MHz. No parallel EEPROM or flash reaches that; the AT28HC256-70 is the fastest pin-compatible part and needs two wait states at 16 MHz, one at 12 MHz. The fitted AT28C256-15 needs two waits even at 12 MHz, which hands the gain back.
 - The only visible benefit would be faster serial, because the sampling grid that capped 2400 baud is the interrupt period: 12 MHz gives a 9-tick frame that keeps every timing exact and brings 2400 back; 16 and 20 MHz give 12 and 15.
@@ -71,7 +71,7 @@ A Z84C0020 is a drop-in at 8 MHz. Faster clocks were worked through and set asid
 
 ## 10. Other models
 
-The CC710 and the original CC784 are `CC784-3A` boards ([hardware notes §11](hardware.md#11-the-cc784-3a-board-h), [§13](hardware.md#13-the-original-cc784s-board-h)), converted to a `CC784-4` by [hardware notes §12](hardware.md#12-converting-a-cc784-3a-board-to-a-cc784-4) (the original with its `/M1` bodge moved first, step 5). Both run the patched firmware with a dongle: the CC710 its own build ([patched.md](patched.md#2-patches), patch 37), the original the standard one, since its panel has the NIR's 84 columns. Their stock firmwares are in [firmware notes §15](firmware.md#15-the-cc710-firmware-h--from-a-rom-dump-id-710) and [§16](firmware.md#16-the-original-cc784-firmware-h--from-a-rom-dump-id-9g). An unmodified 3A board runs the LITE build (patch 51).
+The CC710 and the original CC784 are `CC784-3A` boards ([hardware notes §4](hardware.md#4-the-cc784-3a-board-original-cc784-and-cc710-h), [§4.4](hardware.md#44-the-original-cc784s-board-h)), converted to a `CC784-4` by [hardware notes §5](hardware.md#5-converting-a-cc784-3a-board-to-a-cc784-4) (the original with its `/M1` bodge moved first, step 5). Both run the patched firmware with a dongle: the CC710 its own build ([patched.md](patched.md#2-patches), patch 37), the original the standard one, since its panel has the NIR's 84 columns. Their stock firmwares are in [firmware notes §15](firmware.md#15-the-cc710-firmware-h--from-a-rom-dump-id-710) and [§16](firmware.md#16-the-original-cc784-firmware-h--from-a-rom-dump-id-9g). An unmodified 3A board runs the LITE build (patch 51).
 
 ## 11. A configuration store
 
@@ -98,7 +98,7 @@ Built for 2560 baud: patch 52 ([patched notes](patched.md#2-patches)). A bit of 
 | 3 | 2560 | ±0.17 | patch 52: a late interrupt costs a third of a bit |
 | 2 | 3840 | ±0.25 | the ceiling: a two-interrupt start pulse is hard to tell from noise |
 
-Open: what delayed the board's interrupts by one to three periods in the middle of a byte in an earlier build, which lost about 6 percent of long frames at 2560. The emulator shows no stretch with interrupts off longer than about 60 µs. The losses are gone with the remote decoder paused during bytes, a shorter interrupt and the host writing a frame in one piece, and which of the three did it was not isolated. A lead: `/INT` is the HC4020's Q11, high for only 128 µs ([hardware notes §3](hardware.md#3-timebase-h)), so an acknowledge later than that loses the request and the next comes 384 µs after the last acknowledge, two interrupts late. A count of lost requests on the board would test it.
+Open: what delayed the board's interrupts by one to three periods in the middle of a byte in an earlier build, which lost about 6 percent of long frames at 2560. The emulator shows no stretch with interrupts off longer than about 60 µs. The losses are gone with the remote decoder paused during bytes, a shorter interrupt and the host writing a frame in one piece, and which of the three did it was not isolated. A lead: `/INT` is the HC4020's Q11, high for only 128 µs ([hardware notes §2.3](hardware.md#23-timebase-h)), so an acknowledge later than that loses the request and the next comes 384 µs after the last acknowledge, two interrupts late. A count of lost requests on the board would test it.
 
 Other routes to faster serial:
 

@@ -22,7 +22,7 @@ Examples
     cc784.py seq 0 1 2                  # display sequence; 'seq a' = all channels
     cc784.py seq m                      # patched firmware: messages only, 00-89
     cc784.py field 3 "72F"              # patched firmware: load channel 93, shown by @{field 3} in a message
-    cc784.py --channels 10 msg 1 "HI"   # ten-channel firmware (CC710): channels 0-9, one digit
+    cc784.py --channels 10 msg 1 "HI"   # stock ten-channel firmware: channels 0-9, one digit
     cc784.py --lite seq 1 3             # patched LITE build (stock 3A board): one-digit channels, else as patched
     cc784.py time                       # set clock from the PC (12-hour)
     cc784.py time24                     # patched firmware: 24-hour clock, no AM/PM
@@ -439,7 +439,7 @@ def add_common_args(ap):
     ap.add_argument('-t', '--timeout', type=float, default=3.0, help='reply timeout (s)')
     ap.add_argument('-v', '--verbose', action='store_true')
     ap.add_argument('--channels', type=int, default=100, choices=(10, 100),
-                    help='10 for ten-channel firmware (CC710): one-digit channel numbers and one-byte store markers')
+                    help='10 for stock ten-channel firmware: one-digit channel numbers and one-byte store markers')
     ap.add_argument('--lite', action='store_true',
                     help='the patched LITE build: channels 0-9 sent as one digit, long messages split to '
                          'the frame limit B4 \'1\' reports; markers and time as patched')

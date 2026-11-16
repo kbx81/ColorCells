@@ -20,8 +20,8 @@ The four ROMs are one code base, revised in one sequence. The letter after the `
 |---|---|---|---|---|---|---|---|
 | 1 | Original CC784 | `9g` (`CC784-9E-USA ©1990`) | 1990; newest chip from week 26 of 1990 | `CC784-3A`, 4 MHz | 2 KB, 10 | keypad, or serial typed as keys at 300 baud | "NEW COLOR CELLS DYNAMIC DISPLAY SYSTEM", six colors |
 | 2 | CC710 | `710` + `09l` (`CC710-9L-USA 1990`) | 1990 | `CC784-3A`, 4 MHz | 2 KB, 10 | keypad, terminal or packet | "NEW COLOR CELLS 700 SERIES", six colors |
-| 3 | CC784NET | `78409n1401920145` | built 14-01-92 | `CC784-4`, 4 MHz | 8 KB, 100 | keypad or packet | "CC700 SERIES … NETWORKABLE FROM YOUR PC" |
-| 4 | CC784NIR | `78409O1702930205` | built 17-02-93; chips weeks 35–46 of 1992 | `CC784-4`, 8 MHz | 8 KB, 100 | IR remote and packet | "THE ULTIMATE INFRARED REMOTE CONTROL …", ten colors |
+| 3 | CC784NET | `78409n1401920145` | built 14-01-92 | `CC784-4`, 4 MHz | 8 KB, 100 | keypad or serial | "CC700 SERIES … NETWORKABLE FROM YOUR PC" |
+| 4 | CC784NIR | `78409O1702930205` | built 17-02-93; chips weeks 35–46 of 1992 | `CC784-4`, 8 MHz | 8 KB, 100 | IR remote and serial | "THE ULTIMATE INFRARED REMOTE CONTROL …", ten colors |
 
 **Evidence for the order:**
 
@@ -34,40 +34,42 @@ The four ROMs are one code base, revised in one sequence. The letter after the `
 | **CC710** (4263) | | 3589 (84%) | 3469 (81%) |
 | **NET** (4991) | | | 4780 (96%) |
 
-- Features accumulate in the same order: serial typed as keys (1); the `B1` packet protocol and its queries added beside it (2); 100 channels in 8 KB with terminal mode dropped (3); the IR decoder on an 8 MHz tick, with the keypad scan left in but unreferenced (4).
+- Features accumulate in the same order: serial typed as keys (1); the `B1` packet protocol and its queries added beside it (2); 100 channels in 8 KB, with terminal and packet merged: packets during playback, and a byte that opens the editor for terminal typing (3); the IR decoder on an 8 MHz tick, with the keypad scan left in but unreferenced (4).
 - The "700 SERIES" name first appears in the CC710's demo, and the NET's demo still uses it.
 - `NETCC.EXE` v3.0, the packet host, is ©1991, before the NET was built, so the protocol existed before the `CC784-4`, as the CC710 shows.
-- The rating labels agree. Their patent lists grow by one country per sign (US and Australia on the original CC784, Japan added on the CC710, Canada on the NET and NIR), and the keyboard they name changes with the board: the CC100 for the two `CC784-3A` signs, the "CC110 NET" for the two `CC784-4` signs ([hardware notes §14](hardware.md#14-the-four-boards-side-by-side-h--from-photos)).
+- The rating labels agree. Their patent lists grow by one country per sign (US and Australia on the original CC784, Japan added on the CC710, Canada on the NET and NIR), and the keyboard they name changes with the board: the CC100 for the two `CC784-3A` signs, the "CC110 NET" for the two `CC784-4` signs ([hardware notes §1](hardware.md#1-the-four-boards-side-by-side-h--from-photos)).
 
 **Each step:**
 
-1. **Original CC784 → CC710:** the packet parser, queries `0`–`3` and the boot probe that picks keypad, terminal or packet (the original reads one pin, `PORT_IN` bit 0); a 59-column panel in place of 84 (both on 74HC595s). Same board, RAM and channel count ([hardware notes §11](hardware.md#11-the-cc784-3a-board-h), [§13](hardware.md#13-the-original-cc784s-board-h)).
-2. **CC710 → CC784NET:** the `CC784-4` board, with 8 KB RAM, a DB9 in place of the 10-pin header, the power-fail lockout on the regulated 5 V and the delayed `/M1` in copper; 100 channels with two-byte markers; the boot test cut to keypad or packet.
+1. **Original CC784 → CC710:** the packet parser, queries `0`–`3` and the boot probe that picks keypad, terminal or packet (the original reads one pin, `PORT_IN` bit 0); a 59-column panel in place of 84 (both on 74HC595s). Same board, RAM and channel count ([hardware notes §4](hardware.md#4-the-cc784-3a-board-original-cc784-and-cc710-h), [§4.4](hardware.md#44-the-original-cc784s-board-h)).
+2. **CC710 → CC784NET:** the `CC784-4` board, with 8 KB RAM, a DB9 in place of the 10-pin header, the power-fail lockout on the regulated 5 V and the delayed `/M1` in copper; 100 channels with two-byte markers; the boot test cut to keypad or serial, where serial carries packets during playback and terminal typing in the editor.
 3. **CC784NET → CC784NIR:** the 8 MHz crystal and the `/INT` bodge for the IR decoder's 7812.5 Hz tick, the receiver board and the remote; a new demo.
 
-**Open questions:**
+**Oddities:**
 
 - The original CC784's ROM label and its serial sticker both read `9E`, but the ID inside the ROM is `9g`; the CC710's label and ID agree (`9L`, `09l`).
-- The original CC784's board carries the factory `/M1` and beeper bodges ([hardware notes §13](hardware.md#13-the-original-cc784s-board-h)) but the later CC710's does not. The original CC784 here came new and sealed in its box, so its bodges are factory work, not a later service. The CC710's chip date codes settle the rest: both boards come from the same build period, mid-1990, with exact lots in common ([hardware notes §14](hardware.md#14-the-four-boards-side-by-side-h--from-photos)). The fix was applied to some boards, not all; the CC710 shipped without a beeper driver, which may be why it went without [M]. The board dates cannot order the two signs, so the order rests on the ROMs.
+- The original CC784's board carries the factory `/M1` and beeper bodges ([hardware notes §4.4](hardware.md#44-the-original-cc784s-board-h)) but the later CC710's does not. The original CC784 here came new and sealed in its box, so its bodges are factory work, not a later service. The CC710's chip date codes settle the rest: both boards come from the same build period, mid-1990, with exact lots in common ([hardware notes §1](hardware.md#1-the-four-boards-side-by-side-h--from-photos)). The fix was applied to some boards, not all; the CC710 shipped without a beeper driver, which may be why it went without [M], potential cost-cutting aside. The board dates cannot order the two signs, so the order rests on the ROMs.
 
 **Beyond these four.** `NETCC.EXE` also knows a "CC6x7" name for this family, NC900-series network controllers (model type 2) with their own control bytes, date record and CC900 graphics, and features it marks "(LK)", later models only ([protocol notes](protocol.md)). None of those has been seen in the wild. The company is believed to have been acquired or wound up soon after the NIR began shipping, so the NIR is probably the last firmware of this line.
+
 ## 2. Memory map [H]
 
-| Range | Use |
-|---|---|
-| `0000–3C20` | ROM code + data |
-| `3C21–7FFF` | unused (`0xFF`) — free for patches |
-| `4000–403F` | **stack** (64 bytes, grows down from `403F`; below `4000` is ROM) — see B1 |
-| `4040–4197` | `FRAMEBUF` — 4 × 86 bytes |
-| `4198–41A1` | frame-buffer pointers/temps |
-| `41A2–41F7` | `TXBUF` — reply frame buffer (len byte + up to 0x55 data) |
-| `41F8–43E1` | variables (the `equ` block in the source names each from its use; the handful the firmware writes but never reads are marked "never read") |
-| `43CB/43CC` | `MY_ADDRESS` / its complement (RAM-validity check at boot) |
-| `43E2–5EF0` | `MSG_STORE` — message store (see §7); `STORE_LIMIT` at `43D8` |
-| `5EF0` | `PKT_READY` flag |
-| `5EF1–5FF0` | `PKT_BUF` — received payload (≤255 bytes) |
-| `5FF1–5FFB` | packet-parser state (`PKT_STATE`, `PKT_CKSUM`, `PKT_FLAG`, `PKT_LEN`, `PKT_VECTOR`, `PKT_ADDR`, `PKT_PTR`, `PKT_REMAIN`) |
-| `8000` | memory-mapped write-only **control latch** (`CTRL_LATCH`), shadow copy at `422D` |
+| Range | Decoded as | Use |
+|---|---|---|
+| `0000–3C20` | ROM (`2Y0`, `0000–3FFF`) | code + data |
+| `3C21–3FFF` | ROM | unused (`0xFF`), free for patches |
+| `4000–403F` | RAM (`2Y1`, `4000–7FFF`; the 6264 appears twice) | **stack** (64 bytes, grows down from `403F`; below `4000` is ROM) — see B1 |
+| `4040–4197` |  | `FRAMEBUF` — 4 × 86 bytes |
+| `4198–41A1` |  | frame-buffer pointers/temps |
+| `41A2–41F7` |  | `TXBUF` — reply frame buffer (len byte + up to 0x55 data) |
+| `41F8–43E1` |  | variables (the `equ` block in the source names each from its use; the handful the firmware writes but never reads are marked "never read") |
+| `43CB/43CC` |  | `MY_ADDRESS` / its complement (RAM-validity check at boot) |
+| `43E2–5EF0` |  | `MSG_STORE` — message store (see §7); `STORE_LIMIT` at `43D8` |
+| `5EF0` |  | `PKT_READY` flag |
+| `5EF1–5FF0` |  | `PKT_BUF` — received payload (≤255 bytes) |
+| `5FF1–5FFB` |  | packet-parser state (`PKT_STATE`, `PKT_CKSUM`, `PKT_FLAG`, `PKT_LEN`, `PKT_VECTOR`, `PKT_ADDR`, `PKT_PTR`, `PKT_REMAIN`) |
+| `8000` | control latch (`2Y2`, any address in `8000–BFFF`) | write-only **control latch** (`CTRL_LATCH`), shadow copy at `422D` |
+| `C000–FFFF` | `2Y3`, nothing as shipped | — ([hardware notes §2.2](hardware.md#22-memory-and-io-decoding-h--from-the-schematic)) |
 
 Every RAM symbol in the source is written as `FRAMEBUF`, `FRAMEBUF_SIZE` or `RAM_VARS+offset` (the variable block's layout is baked into `INIT_DATA`, so only its base moves). The patched build uses a different geometry ([patched.md §1](patched.md#1-memory-map)).
 
@@ -100,16 +102,16 @@ Data blocks in ROM:
 ## 3. Execution architecture [H]
 
 - **Reset** (`0000`): `LD SP,403F`, init routines, `IM 1`, `EI`, jump to `main_loop`.
-- **/INT** (`0038` → `int_timer`): 7812.5 Hz (8 MHz crystal ÷1024 via 74HC4020). Swaps register banks, increments `TICK6_COUNT`/`TICK1_COUNT`, and *pushes the addresses* of `tick6_service` (every 6th tick) and the handler in `TICK_VECTOR` (every tick, = IR decoder) so they execute as the ISR "returns" (`EI; RETI`). The ISR itself is ~30 cycles; the scheduled routines run with interrupts enabled.
+- **/INT** (`0038` → `int_timer`): 7812.5 Hz (8 MHz crystal ÷1024 via 74HC4020). Swaps register banks, increments `TICK6_COUNT`/`TICK1_COUNT`, and *pushes the addresses* of `tick6_service` (every 6th tick) and the handler in `TICK_VECTOR` (every tick, = IR decoder) so they execute as the ISR "returns" (`EI; RETI`). The ISR itself is ~180–200 cycles, the acknowledge included; the scheduled routines run with interrupts enabled.
 - **`tick6_service`** (1302 Hz): serial RX bit engine, serial TX bit engine, countdowns, display row refresh, flashing, then `rx_consume` (pop RX FIFO → packet parser). Has a re-entrancy guard testing `(IX)==AA && (IY)==55` that is effectively dead code (never true in shipped code).
 - **/NMI** (`0066` → `clock_tick`): 60 Hz mains zero-cross. Counts `NMI_COUNT` to `NMI_PER_SEC`(=60) → seconds → minutes → 12-hour clock with `CLK_PM`.
 - **`main_loop`** (`009A`): if `PKT_READY` → `pkt_process`; else render/effect step; loop. The rendering engine (`render_next_char`, `attr_dispatch`, `fx_*`) runs here. Note the `PKT_READY` test runs **once, on entry** — the inner loop at `00A7` never falls back to `009A`. Re-entry is via `fx_end_of_channel` (`0F5E`, end of a display cycle) or `JP RESET`/`restart_display`. The `JR nz` at `00B0` tests `effect_step`'s flags, not `MAGIC_MODE`: `LD A,(nn)` sets no flags.
 
-Timing: one display row refresh is an `OTIR` of 86 bytes (~1,900 T). Serial bit = 4.33 tick6 = 3.33 ms.
+Timing: one display row refresh is an `OTIR` of 86 bytes (1,801 cycles; ~2,440 for the whole row refresh). Serial bit = 4.33 tick6 = 3.33 ms.
 
 **Row refresh cadence [H]:** a row takes three tick6 periods. The 86 bytes are written twice with identical data, first to port `40+row` and then to `48+row` (`ROW_PORT` selects the group; `ROW_OUT_PENDING` marks the row as still owed), and the third tick advances `ROW_INDEX`. 21 ticks per frame gives a **62 Hz frame rate**. In plain LEFT crawl `SCROLL_SPEED` (0–7, from `F0`–`F7`) adds that many *blanked* ticks after each frame via `BLANK_TIMER`, which is the entire speed mechanism; effects and the editor skip it. Each row is preceded by one color byte (`ROW_COLOR`) on the same port, and bit 5 of the port address is set while `BEEP_TICKS` is non-zero, so the beeper is an I/O decode, not a latch bit. `CTRL_LATCH` bit 7 (`LATCH_BIT7`) is toggled by the firmware every 13 frames (≈210 ms, a 2.4 Hz square wave): **it is the FLASH blink clock** [H — a build with 7 instead of 13 blinked at ~5 Hz on the sign]. The patched source exposes the count as `FLASH_HALF_PERIOD`.
 
-**The CPU runs at 8 MHz [H: by arithmetic, in emulation, and on the scope].** Per tick the ISR costs ~190 T and the IR handler ~100 T; six of those plus one row refresh (OTIR 86 bytes, ~2200 T) come to ~3900 T per `tick6_service` period. At 4 MHz that period is 3072 T, so the service could never finish before the next one was scheduled — the emulator shows exactly that runaway nesting at 4 MHz and a stable ~40-byte stack at 8 MHz.
+**The CPU runs at 8 MHz [H: by arithmetic, in emulation, and on the scope].** Per tick the ISR costs ~180–200 cycles and the IR handler 60 when idle; six of those plus a `tick6_service` with its row refresh (~3,000 cycles, ~2,440 of them the refresh) come to ~4,500 cycles per `tick6_service` period. At 4 MHz that period is 3072 cycles, so the service could never finish before the next one was scheduled — the emulator shows exactly that runaway nesting at 4 MHz and a stable ~40-byte stack at 8 MHz.
 
 **Stack use, measured [H in emulation]:** `tools/cc784_sim.py stack` drives the ROM through the demo, a message using every effect, the three `B4` queries and an editor session while watching every write at SP. High-water marks: demo 40 bytes, effects 46, editor menus 52–62, `B4` queries **70** — always the NMI frame landing on top of a query's `tx_send_byte` chain with a tick interrupt in progress. Stock's 64-byte stack loses 6–17 bytes into ROM on every `B4`, which is B1 in numbers. The worst case that can be constructed by hand (query chain 26 + `tick6_service` 28 + a nested `tick6_service` from the ACK spin 28 + IR tick 10 + NMI 12) is ~108, so the patched build's larger stack (`STACK_SIZE`) covers it.
 
@@ -158,7 +160,7 @@ The command bytes are named in the source (`CMD_*`); the docs use those names, w
 | CONFIG | `B6 i v` | — | *patched only*: writes byte `i` of the configuration block ([patched.md](patched.md#2-patches), patch 35) |
 | (text) | other | `pkt_insert_text` | insert byte into the store at the cursor |
 
-The patched build adds OTA (`B5`), [ota.md](ota.md).
+The patched build adds more commands, listed in [protocol notes §7](protocol.md#7-the-signs-side).
 
 `pkt_process_done` (`2B68`): clear flags, `OUT (40)` pulse, re-init render, jump to `main_loop` (never returns to the caller — this is why immediate-mode processing "works" for normal packets).
 
@@ -257,7 +259,7 @@ Glyphs: `char_to_glyph` → index → `FONT + 8*idx`. Movement effects are state
 
 ## 9. IR remote decoder (`ir_*`, `1482–1571`) [H — verified against a capture of the sign's own receiver]
 
-Runs every tick (128 µs) on `PORT_IN` bit 1 (1 = burst present; the receiver module is active-low and the HC14 inverts it). The remote is a Motorola MC14497 PCM transmitter ([hardware notes §9](hardware.md#9-open-questions)). State machine:
+Runs every tick (128 µs) on `PORT_IN` bit 1 (1 = burst present; the receiver module is active-low and the HC14 inverts it). The remote is a Motorola MC14497 PCM transmitter ([hardware notes §6](hardware.md#6-open-questions)). State machine:
 
 1. idle: line quiet for 130 ticks;
 2. leader burst seen, then its end;
@@ -361,7 +363,7 @@ NETCC's default is address 1; a sign with dead/absent battery answers only to 0 
 `pkt_insert_text` sets `MOVE_DST` from `STORE_LIMIT` (`2B3D`) although `STORE_END` was just updated at `2B37` and everything above it is dead space. The `LDDR` therefore moves ~6.9 KB per inserted character with interrupts off, so a 250-byte message takes seconds. Shifting to `STORE_END` instead moves only `STORE_END − STORE_CURSOR + 1` bytes — 174 for channel 42 in an empty store, about 39× fewer; for channel 0 it is ~6900× fewer. Verified by simulating both loops: the resulting store is byte-identical. *Fixed by patch 5.*
 
 ### B9 — a pending deferred packet turns the next frame into an editor session **[H]**
-While a packet accepted with `PKT_FLAG != 80` waits for `main_loop` to get round to it, `rx_idle_byte` ignores the next `B1` but not the bytes after it: the address byte goes through `rx_not_start`, and `CP 1 → key_handler` opens the on-sign editor if it is `01`. With address 1 as the default, every frame to a sign that still has a deferred packet pending drops it into the editor, which then echoes every following byte on TX. Harmless with NETCC (always `80`) and with `cc784.py`. *A trap for hand-built frames; not changed.*
+While a packet accepted with `PKT_FLAG != 80` waits for `main_loop` to get round to it, `rx_idle_byte` ignores the next `B1` but not the bytes after it: the address byte goes through `rx_not_start`, and `CP 1 → key_handler` opens the on-sign editor if it is `01`. With address 1 as the default, every frame to a sign that still has a deferred packet pending drops it into the editor, which then echoes every following byte on TX. Harmless with NETCC (always `80`) and with `cc784.py`. *Fixed by patch 45: no byte outside a frame is a key unless the host opens a terminal with `B7 '1'`; `B7 '0'` closes it.*
 
 ### B10 — `tx_send_byte` drops a `00` byte offered to a busy transmitter **[H]**
 `tx_try_queue` returned A = 0 for "queued" and A unchanged for "busy", and `tx_send_byte` retried on A ≠ 0 — so a `00` byte that found the transmitter busy looked queued and was lost. Invisible in stock, where no reply ever carries a `00`; binary replies do. *Fixed by patch 12.*
@@ -370,7 +372,7 @@ While a packet accepted with `PKT_FLAG != 80` waits for `main_loop` to get round
 `09 01 B3 "XYZW"` leaves `YZ`; `09 02 0E "XYZW"` stores all four. `cmd_B3_append` seats the cursor on the byte before the channel's `03`, then, if that byte is a marker byte (the channel is empty), steps back once more onto the marker's first byte; the first insert then splits the marker and `store_repair` discards the strays. Appending to a channel that already has text is unaffected. *Fixed by patch 15.*
 
 ### B12 — a `20` byte inside a packet releases WAIT **[H]**
-`rx_fifo_get` leaves every received byte in `RX_BYTE`, and `wait_poll` (the `BA` WAIT spin) releases on `RX_BYTE == 20`, meaning the SPACE key. So any packet carrying a `20` — a space in a message, or `JR nz` in OTA page data — ends the wait. *Fixed by patch 14.*
+`rx_fifo_get` leaves every received byte in `RX_BYTE`, and `wait_poll` (the `BA` WAIT spin) releases on `RX_BYTE == 20`, meaning the SPACE key. So any packet carrying a `20` — a space in a message, or `JR nz` in OTA page data — ends the wait. *Fixed by patch 14; a loose `20` outside a frame still releases a WAIT (patch 45).*
 
 ### B13 — text without a CHANNEL command is dropped while the demo plays **[H]**
 After a bare CLEAR_ALL, or on an empty sign, the renderer is in the ROM demo and the demo channel carries `CHAN_LOCK`, which turns every insert into a no-op: the text is ACKed and vanishes (a dump afterwards shows an empty store). NETCC always sends CHANNEL first, so it never met this. *Fixed by patch 24.*
@@ -381,7 +383,14 @@ After a bare CLEAR_ALL, or on an empty sign, the renderer is in the ROM demo and
 git clone --recurse-submodules https://github.com/z00m128/sjasmplus && make
 cd src/stock && sjasmplus cc784nir.asm   # -> cc784nir.bin; likewise cc784net.asm, cc710.asm and cc784.asm
 ```
-Or the `Build stock ROM` task, which assembles all four stock sources. Each must stay byte-identical to its dump — `cc784nir.bin` md5 `c021af146a50b93a22d13535201b7eaa`, `cc784net.bin` `872c87932339e9e072c5525d30ffb5df`, `cc710.bin` `f346d39e5aa7b49709a717c85d7c7e11`, `cc784.bin` `3e7a679f77d7dac121926182442f923a` — that is the regression test for every edit to the stock sources, and the `Verify stock ROM is byte-identical` task asserts it. The NET and CC710 sources carry the NIR's labels and comments wherever the code is the same, and the original CC784's carry the CC710's, so a name means the same routine in all four. The patched build and its packaging: [patched.md §5](patched.md#5-rebuilding-and-testing).
+Or the `Build stock ROM` task, which assembles all four stock sources. Each must stay byte-identical to its dump; that is the regression test for every edit to the stock sources, and the `Verify stock ROM is byte-identical` task asserts it. The md5 sums:
+
+- `cc784nir.bin`: `c021af146a50b93a22d13535201b7eaa`
+- `cc784net.bin`: `872c87932339e9e072c5525d30ffb5df`
+- `cc710.bin`: `f346d39e5aa7b49709a717c85d7c7e11`
+- `cc784.bin`: `3e7a679f77d7dac121926182442f923a`
+
+The NET and CC710 sources carry the NIR's labels and comments wherever the code is the same, and the original CC784's carry the CC710's, so a name means the same routine in all four. The patched build and its packaging: [patched.md §5](patched.md#5-rebuilding-and-testing).
 
 **Emulation.** `tools/cc784_sim.py` runs either build under an emulated Z80 (kosarev's `z80` package; `uv run tools/cc784_sim.py …` fetches it) with a fake 300-baud line, IR receiver and mains NMI. `stack [stock|patched]` prints the stack high-water mark and the transmitted bytes through a scripted session; `compare DIR_A DIR_B` assembles two source trees and checks that the panel sees the same sequence of frames and the PC the same replies. It reproduces the hardware captures byte for byte (`B4 '0'` → `06 B1 01 10 "78409O1702930205" 58`) and B1's overflow on stock, so it is the regression test for anything that moves RAM or touches the interrupt paths. MAGIC mode seeds its randomness from the mains counter, so frame comparisons use a message without it. The emulator also models the AT28C256 with the OTA bodges and the board's watchdog ([ota.md §6](ota.md#6-testing)).
 
@@ -402,13 +411,13 @@ Same code base, built 14-01-92, 13 months before the NIR's. Read from a CC784NET
 | IR decoder | none | `ir_*` |
 | `keypad_scan` | called from `tick6` and the editor | unreferenced |
 | Input mode | chosen at boot (below) | always serial |
-| Timer ISR | runs the serial bit engines and the row scan every interrupt, at 1302 Hz (4 MHz crystal, [hardware notes §3](hardware.md#3-timebase-h)) | 7812.5 Hz tick, ÷6 for the same work |
+| Timer ISR | runs the serial bit engines and the row scan every interrupt, at 1302 Hz (4 MHz crystal, [hardware notes §2.3](hardware.md#23-timebase-h)) | 7812.5 Hz tick, ÷6 for the same work |
 | Packet commands and `B4` queries `0`–`3` | same | same |
 | Demo message | "CC700 SERIES MULTI COLOR DISPLAY ... NETWORKABLE FROM YOUR PC" | "ULTIMATE INFRARED REMOTE CONTROL ..." |
 
-**Boot-time mode test** (`13CB`, called from the store/serial init at `1376`): sync to a tick with `HALT`, interrupts off, then 16 clocks of a `55 55` pattern out on `CTRL_LATCH` bits 6 (data, DB9 pin 7) and 5 (clock, DB9 pin 4), sampling `PORT_IN` bit 0 (DB9 pin 2) after each clock. If the last 8 samples are all 0 the flag at `4223` is set: serial mode, the RX/TX bit engines run from the timer ISR and `rx_consume` feeds the packet parser. Otherwise keypad mode: `tick6` calls `keypad_scan` instead, code `35` (STOP/START) enters the editor, and the serial engines never run. The factory cable's pin 2–5 short is what makes the test pass; a plain crossover leaves a NET sign deaf.
+**Boot-time mode test** (`13CB`, called from the store/serial init at `1376`): sync to a tick with `HALT`, interrupts off, then 16 clocks of a `55 55` pattern out on `CTRL_LATCH` bits 6 (data, DB9 pin 7) and 5 (clock, DB9 pin 4), sampling `PORT_IN` bit 0 (DB9 pin 2) after each clock. If the last 8 samples are all 0 the flag at `4223` is set: serial mode, the RX/TX bit engines run from the timer ISR and `rx_consume` feeds the packet parser, while a lone `35` (the keypad's STOP/START code) opens the editor, where `editor_getkey` takes serial bytes as keys and echoes them on TX: the CC710's terminal typing, without its playback-time `7E` and `20`. Otherwise keypad mode: `tick6` calls `keypad_scan` instead, code `35` (STOP/START) enters the editor, and the serial engines never run. The factory cable's pin 2–5 short is what makes the test pass; a plain crossover leaves a NET sign deaf.
 
-**Editor keys** are the raw key codes (`00`–`3F`, see [hardware notes §6](hardware.md#6-connectors)): `19` toggles SHIFT, and the charsets are indexed by the code directly, with no `IR_KEY_TABLE`.
+**Editor keys** are the raw key codes (`00`–`3F`, see [hardware notes §2.4](hardware.md#24-host-port-serial-and-keypad-h)): `19` toggles SHIFT, and the charsets are indexed by the code directly, with no `IR_KEY_TABLE`.
 
 The timer ISR starts with a check that `(IX)=AA` and `(IY)=55`, the sentinel the mode test sets so that its `HALT` returns without running the tick machinery. The NIR's firmware has no cable test and no such check: its `int_timer` goes straight to the tick counters.
 
@@ -416,7 +425,7 @@ The annotated source is [src/stock/cc784net.asm](src/stock/cc784net.asm) (`mode_
 
 ## 15. The CC710 firmware [H — from a ROM dump, ID `710`]
 
-The original CC784's code base ([§16](#16-the-original-cc784-firmware-h--from-a-rom-dump-id-9g)) with the packet protocol added, the step before the NET's ([§1](#1-lineage-of-the-stock-firmware-m--from-the-four-roms-their-labels-and-the-boards)), for the ten-channel sign on the `CC784-3A` board ([hardware notes §11](hardware.md#11-the-cc784-3a-board-h)): 16 KB with code to `307A`, 4 MHz, the 1302 Hz ISR doing everything per interrupt, keypad input through the 10-pin header. Source: [src/stock/cc710.asm](src/stock/cc710.asm); 2959 of 5419 instructions are the NIR's, and the NIR names apply.
+The original CC784's code base ([§16](#16-the-original-cc784-firmware-h--from-a-rom-dump-id-9g)) with the packet protocol added, the step before the NET's ([§1](#1-lineage-of-the-stock-firmware-m--from-the-four-roms-their-labels-and-the-boards)), for the ten-channel sign on the `CC784-3A` board ([hardware notes §4](hardware.md#4-the-cc784-3a-board-original-cc784-and-cc710-h)): 16 KB with code to `307A`, 4 MHz, the 1302 Hz ISR doing everything per interrupt, keypad input through the 10-pin header. Source: [src/stock/cc710.asm](src/stock/cc710.asm); 2959 of 5419 instructions are the NIR's, and the NIR names apply.
 
 | | CC710 | CC784 (NET/NIR) |
 |---|---|---|
@@ -426,13 +435,36 @@ The original CC784's code base ([§16](#16-the-original-cc784-firmware-h--from-a
 | Sequence list | 32 entries, default `0..9` | 104 entries |
 | Panel | 60 bytes per row for 59 columns (one falls off the chain) | 86 for 84 |
 | Attributes | PAUSE `06` (the CC784's HALT), BEEP, CRAWL `18` (LEFT), JUMP `19` (PAUSE), UP, DOWN, BCRAWL `0F` (RIGHT), BIG/NORM/BOLD/ITALIC/FLASH, FORE `15`/BACK `16`, SHIFT, GRAPH, MAGIC, REM, DRAW, THIN, WAIT; colors include AMBER `8E` | plus HOLD `BB`, RAINBOW `BC`, MAGIC OFF `BD`, TINY `BE`, the EURO layer |
-| Input | keypad, serial terminal or packet, chosen at boot (below) | NET: keypad or packet; NIR: packet |
+| Input | keypad, serial terminal or packet, chosen at boot (below) | NET: keypad or serial; NIR: serial (packets during playback, typed keys in the editor) and the remote |
 
-**Boot input mode** (`store_init`, `mode_test`) [H]. The NET's cable test in a three-way form: `mode_test` syncs to a tick with the `HALT` sentinel, then clocks the pattern `55` out on `CTRL_LATCH` bit 6 (SK1 pin 5, DB9 pin 7) with bit 5 (SK1 pin 4) as the clock, sampling `PORT_IN` bit 0 (SK1 pin 9, DB9 pin 2) sixteen times into `DE`. `INPUT_MODE` (`4127`) is set from `E`, the last eight samples: `00` → `FF`, serial **terminal** mode (the bit engines run, bytes are key codes: `01` opens the editor with TX echo, `7E` opens `menu_enter`, which blanks the panel and opens the editor if the next byte is `*` or the address, else resets [H], `20` releases WAIT [H]); `55` → `FE`, **packet** mode (the `B1` parser, editor unreachable); anything else → `00`, **keypad** mode. The NET cable's DB9 pin 2–5 short (SK1 pins 9 and 2) therefore gives terminal mode on a CC710, not packets [H: `01` opened the editor, typed bytes appeared at the cursor and each one came back on TX]. Packet mode then derives `MY_ADDRESS` [H]: `D` (the first eight samples) ≠ `55` → address `~D`; `D` = `55` → probe again with `AA`; `55` again → address `AA`; otherwise keep the stored address if `MY_ADDRESS_INV` is its complement, else fall back to `2A`. Both of those paths are wrong [H]: the store routine expects the probe byte and keeps its complement, so the keep path flips the address between X and ~X on every boot that takes it, and the `2A` fallback gives `MY_ADDRESS` `D5`, not `*` (the sign still accepts `*` frames but replies as `D5`). The keypad reaches the keep path (below), and the flip is verified [H]; the fallback is not tried. A plain wire from pin 7 to pin 2 reads `2A/AA` (keypad mode); an inverting echo reads `D5/55` (packet mode, address `*`). The probe's shape (a low pulse on SK1 pin 3, then 15 clocks for 16 samples, the first taken before any clock) fits an address plug of two chained 74HC165s: eight switches holding `~address`, the second byte wired to `55`. No such plug is known, but with no ADDRESS function on the keypad it is the only way to give the sign an address other than `*`. Packet mode caps the store at `46EF` (1204 bytes; query `1` reports `01204` [H]) and keeps `46F0–47FF` for `PKT_READY`, `PKT_BUF` and the parser; the other modes use `423C–47FF` (1476 bytes).
+**Boot input mode** (`store_init`, `mode_test`) [H]. The NET's cable test in a three-way form.
+
+- **The probe:** `mode_test` syncs to a tick with the `HALT` sentinel, then clocks the pattern `55` out on `CTRL_LATCH` bit 6 (SK1 pin 5, DB9 pin 7), with bit 5 (SK1 pin 4) as the clock, and samples `PORT_IN` bit 0 (SK1 pin 9, DB9 pin 2) sixteen times into `DE`. It opens with a low pulse on SK1 pin 3, then gives 15 clocks for the 16 samples, the first taken before any clock.
+- **The mode** goes into `INPUT_MODE` (`4127`), decided by `E`, the last eight samples:
+
+  | `E` | `INPUT_MODE` | Mode |
+  |---|---|---|
+  | `00` | `FF` | serial **terminal**: the bit engines run and bytes are key codes. `01` opens the editor with TX echo; `7E` opens `menu_enter`, which blanks the panel and opens the editor if the next byte is `*` or the address, else resets [H]; `20` releases WAIT [H] |
+  | `55` | `FE` | **packet**: the `B1` parser; the editor is unreachable |
+  | anything else | `00` | **keypad** |
+
+- **What a cable reads:**
+  - The NET cable's DB9 pin 2–5 short (SK1 pins 9 and 2) gives terminal mode on a CC710, not packets [H: `01` opened the editor, typed bytes appeared at the cursor and each one came back on TX].
+  - A plain wire from pin 7 to pin 2 reads `2A/AA`: keypad mode.
+  - An inverting echo reads `D5/55`: packet mode, address `*`.
+- **The address** in packet mode [H], from `D`, the first eight samples:
+  - `D` ≠ `55` → address `~D`.
+  - `D` = `55` → probe again with `AA`; `55` again → address `AA`.
+  - Otherwise keep the stored address if `MY_ADDRESS_INV` is its complement, else fall back to `2A`.
+- **Both of those last two paths are wrong** [H]: the store routine expects the probe byte and keeps its complement.
+  - The keep path flips the address between X and ~X on every boot that takes it. The keypad reaches it (below), and the flip is verified [H].
+  - The `2A` fallback gives `MY_ADDRESS` `D5`, not `*`: the sign still accepts `*` frames but replies as `D5`. Not tried.
+- **An address plug?** The probe's shape fits two chained 74HC165s: eight switches holding `~address`, the second byte wired to `55`. No such plug is known, but with no ADDRESS function on the keypad it is the only way to give the sign an address other than `*`.
+- **Store size:** packet mode caps the store at `46EF` (1204 bytes; query `1` reports `01204` [H]) and keeps `46F0–47FF` for `PKT_READY`, `PKT_BUF` and the parser; the other modes use `423C–47FF` (1476 bytes).
 
 **Boot clear** (`boot_clear_check`) [H, verified on a CC100]: keypad mode only, `PORT_IN` bit 1 low at power-up calls `store_clear_all`. `mode_test` leaves keypad row 3 selected and only column bit 1 is read, so holding any row-3 key in column 0, 1, 4 or 5 while powering on wipes the store: `0`, SHIFT, `8` or `6`. By the same reasoning, a row-7 key in an even column (`08`, `1`, `7`, `U`) held at power-up reads `E` = `55` and puts the sign into packet mode, with address `*` (`D` reads `D5`) [H: `1`, `7` and `U` verified on a CC100]. That is a way into packet mode without an adapter. Holding a row-1 key in an even column as well (SPACE, `)`, `Z` or `Y`) makes the pre-clock sample low, so the `55` probe reads `55/55` and the `AA` probe `2A`: the keep path. After a `1` boot (stored pair `2A`/`D5`) the next `Z` + `1` boot gives address `D5`, the one after `*`, and so on [H: `Z` + `1`, ACK and NAK at `D5`, then `*` on the following boot].
 
-**Store corruption** on mains power cycles, in any mode, is not a firmware bug: and the emulated firmware leaves an intact store unchanged boot after boot ([hardware notes §11](hardware.md#11-the-cc784-3a-board-h)).
+**Store corruption** on mains power cycles, in any mode, is not a firmware bug: and the emulated firmware leaves an intact store unchanged boot after boot ([hardware notes §4](hardware.md#4-the-cc784-3a-board-original-cc784-and-cc710-h)).
 
 **Serial handshake** [H], absent from the NIR: `tx_bit_engine` starts a byte only while `PORT_IN` bits 1 and 2 (SK1 pins 8 and 7) are both high; `rx_bit_engine` drives `CTRL_LATCH` bit 5 (SK1 pin 4) high as "ready", drops it while `RX_FIFO` holds 8 bytes, and samples only while bit 1 is high. Same 300-baud bit timing.
 
@@ -444,7 +476,7 @@ The original CC784's code base ([§16](#16-the-original-cc784-firmware-h--from-a
 
 ## 16. The original CC784 firmware [H — from a ROM dump, ID `9g`]
 
-The ancestor of the CC710 code base, read from the original keypad CC784 (a `CC784-3A` board, ROM labelled `CC784-9E-USA`, [hardware notes §13](hardware.md#13-the-original-cc784s-board-h)): 16 KB image with code to `234C`, everything after it `FF`. Source: [src/stock/cc784.asm](src/stock/cc784.asm). 2673 of its 2800 instructions line up with the CC710's in order (2310 with the NIR's). The CC710 names apply, and where they differ the source uses this ROM's meaning.
+The ancestor of the CC710 code base, read from the original keypad CC784 (a `CC784-3A` board, ROM labelled `CC784-9E-USA`, [hardware notes §4.4](hardware.md#44-the-original-cc784s-board-h)): 16 KB image with code to `234C`, everything after it `FF`. Source: [src/stock/cc784.asm](src/stock/cc784.asm). 2673 of its 2800 instructions line up with the CC710's in order (2310 with the NIR's). The CC710 names apply, and where they differ the source uses this ROM's meaning.
 
 | | Original CC784 | CC710 |
 |---|---|---|
