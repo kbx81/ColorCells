@@ -514,7 +514,11 @@ SPARKLE_RND          equ STREAM_AREA+60    ; P49: the holds' 16-bit xorshift sta
 STACK_INIT           equ STREAM_AREA+62    ; P51: ram_probe's choices: the stack's top and bottom,
 STACK_BOT            equ STREAM_AREA+64    ;   and the longest payload the buffer takes
 PKT_MAX              equ STREAM_AREA+66
-PORT_SAMPLE          equ STREAM_AREA+67    ; P35: PORT_IN as the ISR read it this interrupt
+ISR_WORK             equ STREAM_AREA+67    ; what the ISR must look at, the WORK bits; with the RX line idle too it takes its short path
+WORK_RX_BIT          equ 0                 ; a byte is arriving
+WORK_TX_BIT          equ 1                 ; a byte is queued or going out
+WORK_LIT_BIT         equ 2                 ; a dimmed row is waiting or lit
+WORK_KP_BIT          equ 3                 ; keypad mode: the RX line (PORT_IN bit 3) idles at space
     IFDEF LITE
 STREAM_AREA_SIZE     equ 68
     ELSE
@@ -980,14 +984,27 @@ int_rx_active:
         CALL rx_phase_run
         JR int_tx
 
+int_lit_only:                   ; a dimmed row and nothing else
+        LD A,(LIT_LIMIT)
+        AND A
+        JR nz,int_lit_run
+        RES WORK_LIT_BIT,(HL)   ; stale: cfg_write zeroed the limit
+        JR int_lit_on
+
 int_timer:
         EX AF,AF'
         EXX
-        IN A,(PORT_IN)          ; P35: one sample for the IR gate at the end and
-        LD (PORT_SAMPLE),A      ; P52: the receiver, which then samples every bit at the same point
-        LD E,A
+        IN A,(PORT_IN)          ; P35: one sample, kept in E, for the IR gate at the end and
+        LD E,A                  ; P52: the receiver, which then samples every bit at the same point
+        ASSERT 1<<WORK_KP_BIT == 8
+        AND 8                   ; the RX line off its idle level (space is a start bit, or
+        LD HL,ISR_WORK          ; a keypad's rest) or an engine with work: else none of the
+        XOR (HL)                ; tests down to int_lit_on is needed
+        JR z,int_lit_on
+        CP 1<<WORK_LIT_BIT
+        JR z,int_lit_only
         LD A,(RX_PHASE)         ; P30: the serial bit engines, every interrupt,
-        AND A                   ; so 1200 baud fits; idle they cost a line poll
+        AND A                   ; so 1200 baud fits
         JR nz,int_rx_active
         BIT 3,E
         JR nz,int_rx_start
@@ -999,6 +1016,8 @@ int_tx:
         LD A,(LIT_LIMIT)        ; P35: brightness by lit time (see latch_row_dim):
         AND A                   ; 0 at full brightness, the cheap way out
         JR z,int_lit_on
+
+int_lit_run:
         LD A,(LATCH_PENDING)    ; a row waiting to be lit: lit here, on the
         AND A                   ; interrupt grid, so the count is exact
         JR z,int_lit_count
@@ -1024,6 +1043,8 @@ int_lit_count:
         LD (CTRL_LATCH),A
         XOR A                   ; parked: nothing more to do until the next row arms it
         LD (LIT_LIMIT),A
+        LD HL,ISR_WORK
+        RES WORK_LIT_BIT,(HL)
 
 int_lit_on:
         LD HL,DISP_COUNT
@@ -1053,7 +1074,7 @@ int_svc:
 int_vector:
     IFNDEF LITE                 ; no receiver, and its timing wants 128 us interrupts
         ASSERT IR_QUIET == IR_MASK+1
-        LD A,(PORT_SAMPLE)      ; P35: the decoder waiting on the line sleeps while it reads
+        LD A,E                  ; P35: the decoder waiting on the line sleeps while it reads
         LD HL,IR_MASK           ; the level in IR_QUIET: its handler, ~90 cycles an interrupt,
         AND (HL)                ; is skipped. P52: rx_start zeroes both, so none runs while
         INC HL                  ; serial bytes arrive (it costs the receiver late samples)
@@ -1157,11 +1178,10 @@ svc_loop:
         JR z,svc_display
         RES 0,(HL)
         LD HL,(GEN_COUNTDOWN)
-        DEC HL
         LD A,H
-        AND L
-        CP 0xff
+        OR L
         JR z,tick6_engines
+        DEC HL
         LD (GEN_COUNTDOWN),HL
 
 tick6_engines:
@@ -1214,10 +1234,9 @@ row_output:
         JR z,row_phase_step
         LD A,(CFG_FLAGS)        ; P35: muted or brightness 0: the row stays dark
         AND CFG_BRIGHT|CFG_MUTED
-        CP CFG_MUTED
+        DEC A                   ; 1-3 lit; 0 and 4-7 dark
+        CP CFG_MUTED-1
         JR nc,row_phase_step
-        AND A
-        JR z,row_phase_step
         LD A,(FB_OUT_LEN)
         LD B,A
         LD HL,ROW_INDEX
@@ -1271,9 +1290,8 @@ row_strobe:
         LD (CTRL_LATCH),A
         EI
         OUT (PORT_STROBE),A
-        LD HL,ROW_INDEX
-        LD A,ROWS-1
-        SUB (HL)
+        LD A,C
+        AND 7
         JR nz,row_select
         LD A,ROWS               ; row 6's code is 7, not 0
 
@@ -1470,6 +1488,13 @@ kp_space:
         JR nz,rx_consume
         DEC HL
         INC (HL)
+        DI                      ; the start pulse the receiver has been timing is the keypad's rest
+        XOR A
+        LD (RX_PHASE),A
+        LD HL,ISR_WORK
+        RES WORK_RX_BIT,(HL)
+        SET WORK_KP_BIT,(HL)
+        EI
         JR rx_consume
 
 kp_scan:
@@ -1510,6 +1535,8 @@ kp_next:
         JR nz,kp_key
         XOR A
         LD (KP_MODE),A
+        LD HL,ISR_WORK
+        RES WORK_KP_BIT,(HL)
         JR rx_consume
 
 kp_key:
@@ -4115,10 +4142,9 @@ tiny_row_out:
         CALL latch_blank
         LD A,(CFG_FLAGS)        ; P35: TINY has one pass, so it is dark only
         AND CFG_BRIGHT|CFG_MUTED ; when muted or at brightness 0
-        CP CFG_MUTED
+        DEC A                   ; 1-3 lit; 0 and 4-7 dark
+        CP CFG_MUTED-1
         JR nc,tiny_row_done
-        AND A
-        JR z,tiny_row_done
 
 ; ---- disp_blank_row: Send 0x8F (all off) to the current row
 disp_blank_row:
@@ -4133,9 +4159,8 @@ disp_blank_row:
         OUT (C),A
         OTIR
         OUT (PORT_STROBE),A
-        LD HL,ROW_INDEX
-        LD A,ROWS-1
-        SUB (HL)
+        LD A,C
+        AND 7
         JR nz,tiny_row_select
         LD A,ROWS               ; row 6's code is 7, not 0
 
@@ -4159,13 +4184,13 @@ disp_next_row:
 
 ; ---- row_step: ROW_INDEX + 1: CY while rows are left, else back to 0 with A = 0
 row_step:
-        LD A,(ROW_INDEX)
-        INC A
-        LD (ROW_INDEX),A
+        LD HL,ROW_INDEX
+        INC (HL)
+        LD A,(HL)
         CP ROWS
         RET c
         XOR A
-        LD (ROW_INDEX),A
+        LD (HL),A
         RET
 
 ; ---- fxv_prepare: clear FRAMEBUF and reset the output window; HL = TXBUF,
@@ -5181,6 +5206,8 @@ tx_try_queue:
         RET nz
         LD (TX_PENDING),A
         SET 1,(HL)
+        LD HL,ISR_WORK          ; after the status: the ISR drops the bit when it finds none
+        SET WORK_TX_BIT,(HL)
         XOR A
         RET
 
@@ -5244,6 +5271,8 @@ tx_idle:
         RES 0,(HL)
         BIT 1,(HL)
         RET nz                  ; a queued byte starts on the next interrupt
+        LD HL,ISR_WORK
+        RES WORK_TX_BIT,(HL)    ; tx_start_byte sets it again
         JR tx_stream_next       ; else the background reply's next byte, now
 
 ; ---- tx_start_byte: TX_PENDING goes out; TX_STATUS is set last so the ISR
@@ -5261,6 +5290,8 @@ tx_start_byte:
         LD (CTRL_LATCH),A
         LD HL,TX_STATUS
         LD (HL),1
+        LD HL,ISR_WORK
+        SET WORK_TX_BIT,(HL)
         RET
 
 ; ---- tx_stream_next (P21): the background transmitter. Sends TX_SEG0, then
@@ -5302,10 +5333,12 @@ tx_stream_shift:
         LD A,H
         OR L
         JR z,tx_stream_done
+        PUSH DE
         LD HL,TX_SEG1
         LD DE,TX_SEG0
         LD BC,TX_SEG1-TX_SEG0
         LDIR
+        POP DE
         XOR A
         LD (TX_SUM),A
         LD (TX_SEG1+2),A
@@ -5345,6 +5378,8 @@ rx_start:
         LD A,(KP_MODE)          ; P36: a keypad holds the line at space between keys
         AND A
         RET nz
+        LD HL,ISR_WORK
+        SET WORK_RX_BIT,(HL)
         LD (RX_SHIFT),A
         LD (RX_WIDTH),A
     IFNDEF LITE
@@ -5389,8 +5424,7 @@ rx_start_timed:
 rx_phase_run:
         DEC A
         JP nz,rx_sample_tick
-        LD A,(PORT_SAMPLE)      ; phase 1: how long is the start pulse
-        BIT 3,A
+        BIT 3,E                 ; phase 1: how long is the start pulse
         JR z,rx_measured
         LD HL,RX_WIDTH
         INC (HL)
@@ -5399,6 +5433,7 @@ rx_phase_run:
         RET
 
 rx_measured:
+        PUSH DE                 ; E is the ISR's port sample
         LD A,(RX_WIDTH)
         AND A
         JR z,rx_abort           ; noise
@@ -5475,12 +5510,12 @@ rx_acc_set:
         LD (RX_BITS),A
         LD A,2
         LD (RX_PHASE),A
+        POP DE
         RET
 
 rx_abort:
-        XOR A
-        LD (RX_PHASE),A
-        RET
+        POP DE
+        JR rx_byte_end
 
 ; ---- rx_sample_tick (P30, ISR): phase 2, one sample per bit at the middle
 rx_sample_tick:
@@ -5508,7 +5543,7 @@ rx_sample_now:
         JR z,rx_stop_sample
         DEC A
         LD (RX_BITS),A
-        LD A,(PORT_SAMPLE)
+        LD A,E
         AND 8                   ; space is a 0 bit:
         SUB 1                   ; CY for mark
         LD HL,RX_SHIFT
@@ -5516,25 +5551,26 @@ rx_sample_now:
         RET
 
 rx_stop_sample:
-        LD A,(PORT_SAMPLE)
-        BIT 3,A
+        BIT 3,E
         JR nz,rx_byte_end       ; no stop bit: dropped
         LD A,(RX_COUNT)
         CP RX_COUNT-RX_FIFO
         JR nc,rx_byte_end       ; FIFO full: dropped
-        LD E,A
-        LD D,0
+        LD C,A
+        LD B,0
         LD HL,RX_FIFO
-        ADD HL,DE
+        ADD HL,BC
         LD A,(RX_SHIFT)
         LD (HL),A
-        LD A,E
+        LD A,C
         INC A
         LD (RX_COUNT),A
 
 rx_byte_end:
         XOR A
         LD (RX_PHASE),A
+        LD HL,ISR_WORK
+        RES WORK_RX_BIT,(HL)
         RET
 
 ; ---- baud_calibrate (P30): from the NMI once a second. TICK6_CAL is the low
@@ -5656,7 +5692,7 @@ latch_dim:
         LD A,1
         JR nz,lit_set
         LD (LIT_COUNT),A
-        LD (LIT_LIMIT),A
+        CALL lit_arm
         JR latch_row
     ELSE
         BIT 3,B
@@ -5667,9 +5703,19 @@ latch_dim:
     ENDIF
 
 lit_set:
-        LD (LIT_LIMIT),A
+        CALL lit_arm
         LD A,C
         LD (LATCH_PENDING),A
+        RET
+
+; ---- lit_arm: LIT_LIMIT = A with its work bit, closed to the ISR, which clears
+;      a bit it finds without a limit (HL is lost)
+lit_arm:
+        LD HL,ISR_WORK
+        DI
+        LD (LIT_LIMIT),A
+        SET WORK_LIT_BIT,(HL)
+        EI
         RET
 
 ; ---- rx_fifo_get: Pop one byte from RX_FIFO into RX_BYTE. Returns NC with A=byte, or C if empty

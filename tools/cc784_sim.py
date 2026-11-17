@@ -1314,11 +1314,15 @@ def cmd_baud():
     s.run_ms(1500); s.set_baud(1200)
     tx2 = send(s, b'\xb4\x31', wait_ms=600)
     check('DC supply: 2560 answered (%s), then 1200 with the default bit time (%s, BAUD_T %d)' % (tx[:4].hex(), tx2[:4].hex(), s.ram('BAUD_T')[0]), tx[:4] == b'\x06\xb1\x01\x0f' and s.ram('BAUD_T')[0] == 128 and tx2[:4] == b'\x06\xb1\x01\x0f')
-    # 2560 on a line whose spaces are 60 us long or short, edges moved up to 20 us at random
+    # 2560 on a line whose spaces are 60 us long or short, edges moved up to 20 us at random;
+    # at 16-cycle slices: at 128 a short DI holds an interrupt back a whole slice and a sample with it
+    global SLICE
+    SLICE, coarse = 16, SLICE
     for skew in (60, -60):
         s = Sign(rom, syms, fresh_ram=True, baud=2560, seed=skew & 0xff); s.rx_skew_us, s.rx_jitter_us = skew, 20; s.run_ms(2500)
         ok = sum(send(s, b'\x09\x30\x31\x0e' + text, wait_ms=400) == b'\x06\x04' for _ in range(5))
         check('2560 with spaces %+d us and 20 us jitter: %d/5 long loads' % (skew, ok), ok == 5)
+    SLICE = coarse
     # a session that changes rate after a pause, and one that comes back to 300
     s = Sign(rom, syms, fresh_ram=True, baud=1200); s.run_ms(2500)
     send(s, b'\x09\x30\x30\x0e' + b'FAST', wait_ms=500)
@@ -2391,7 +2395,8 @@ def cmd_config():
     h20 = max_delay(s, 6000)
     setb(s, 3, 80)
     h80 = max_delay(s, 6000)
-    check('PAUSE holds %d frames with hold 20, %d with 80' % (h20, h80), h20 == 20 and h80 == 80)
+    # the load can land just before a frame's count, so the highest value seen is the hold or one less
+    check('PAUSE holds %d frames with hold 20, %d with 80' % (h20, h80), h20 in (19, 20) and h80 in (79, 80))
 
     # flash rate: LATCH_BIT7 toggles every CFG_FLASH frames
     def toggles(s, ms):
