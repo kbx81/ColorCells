@@ -65,7 +65,7 @@ ROW_OUT_PENDING      equ RAM_VARS+0x06b   ; FF = the current row still has to be
 DISP_COUNT           equ RAM_VARS+0x06c   ; P26: interrupts to the next display tick (was TICK1_COUNT, a divider by 1)
 NEXT_CHAN            equ RAM_VARS+0x06d   ; channel to show first after the editor (FF = none)
 MAGIC_LAST_CHAR      equ RAM_VARS+0x06e   ; magic mode: last char of the current word (punctuation check)
-IMAGE_LEN            equ 25
+IMAGE_LEN            equ BOOT_ZERO-IMAGE
 ; ---- BOOT_ZERO: cleared at boot; its first RENDER_ZERO_LEN bytes again by init_render
 BOOT_ZERO            equ RAM_VARS+0x06f
 RENDER_ZERO          equ BOOT_ZERO
@@ -92,7 +92,7 @@ FORCE_BOLD           equ RAM_VARS+0x080   ; editor redraw: FF = effect text is d
 TINY_MODE            equ RAM_VARS+0x081   ; FF = glyphs go to the tiny buffer (menus, TINY)
 FONT_MODE            equ RAM_VARS+0x082   ; bit 1 BOLD, bit 2 ITALIC, bit 3 BIG
 THIN_MODE            equ RAM_VARS+0x083   ; non-zero after THIN (B9): no bold in effects
-RENDER_ZERO_LEN      equ 21
+RENDER_ZERO_LEN      equ BGRND_PENDING-RENDER_ZERO
 BGRND_PENDING        equ RAM_VARS+0x084   ; editor: BGRND key pressed, next key is the color digit
 STAGE_OFFSET         equ RAM_VARS+0x085   ; centering offset of the staged text (free columns / 2)
 ROW_PORT             equ RAM_VARS+0x087   ; port group for the row data: 40 first pass, 48 second
@@ -179,7 +179,7 @@ LATCH_PENDING        equ RAM_VARS+0x0f3   ; P35: row select code the ISR latches
 DISP_ACC             equ RAM_VARS+0x0f4   ; P26: sevenths of an interrupt carried to the next display tick (was BLANK_TIMER)
 SPEED_PENDING        equ RAM_VARS+0x0f5   ; editor: SPEED key pressed, next key is the digit
 KEY_ECHO_TX          equ RAM_VARS+0x0f6   ; non-zero = echo accepted keys on serial TX
-BOOT_ZERO_LEN        equ 136
+BOOT_ZERO_LEN        equ GLYPH_BUF-BOOT_ZERO
 ; ---- scratch, never initialized
 GLYPH_BUF            equ RAM_VARS+0x0f7   ; working copy of the glyph (bold/plain), 32 bytes
 GLYPH_BUF_ITALIC     equ RAM_VARS+0x117   ; sheared copy for ITALIC, 32 bytes
@@ -224,8 +224,8 @@ CFG_WRAPPED_BIT      equ 6
 CFG_MUTED            equ 1<<CFG_MUTED_BIT
 CFG_QUIET            equ 0x10             ; the beeper stays silent
 CFG_LOCKED           equ 0x20             ; remote keys are ignored
-CFG_LIVE             equ 0x40             ; wrapped changes without a reseal
-                                          ; bit 7, P41: a status report at each channel start and editor entry
+CFG_LIVE             equ 1<<CFG_WRAPPED_BIT ; wrapped changes without a reseal
+CFG_STATUS           equ 0x80             ; P41: a status report at each channel start and editor entry
 CFG_HOLD             equ CFG+3            ; frames a PAUSE, HOLD, wipe or clock holds the panel
 CFG_FLASH            equ CFG+4            ; frames per half period of the FLASH blink
 CFG_SUM              equ CFG+5            ; 8-bit sum of the bytes before it
@@ -252,6 +252,7 @@ CTRL_LATCH           equ 0x8000
 NMI_SEEN             equ RAM_TOP-0x10 ; FF once a mains NMI has fired since reset: the page writer syncs to the NMI only then (7FF0, between PKT_BUF and the parser state)
 NMI_VEC              equ RAM_TOP-4   ; NMI_VECTOR jumps here once NMI_MAGIC holds 0xA5
 NMI_MAGIC            equ RAM_TOP-2
+NMI_VALID            equ 0xa5
 ROM_BANK             equ RAM_TOP-1   ; bank the stub booted; BANK_REG cannot be read back
 BANK_REG             equ 0xc000      ; write-only: bit 0 = EEPROM A14 (bits 1-2 reserved for A15/A16)
 
@@ -316,6 +317,7 @@ IR_DEBOUNCE_WINDOW   equ 400         ; tick6 periods a lone first frame waits fo
 MARK_LO              equ 0xd0        ; channel markers are two bytes D0+tens, D0+units
 MARK_HI              equ 0xda        ; the last marker byte value; alone, DA ends the store
 TEXT_END             equ 0x03        ; ends a channel's text
+FIELDS               equ 10
 CHAN_DEMO            equ CHANNELS    ; the pseudo-channel that plays DEMO_MESSAGE
 SEQ_LIST_LEN         equ CHANNELS+4  ; SEQ_LIST: an entry per channel plus FF terminators
 
@@ -501,8 +503,8 @@ STAT_PKT_OK          equ STREAM_AREA+45    ; frames with a good checksum (own ad
 STAT_PKT_BAD         equ STREAM_AREA+46    ; ... with a bad one
 STAT_IR_OK           equ STREAM_AREA+47    ; remote frames decoded
 STAT_IR_BAD          equ STREAM_AREA+48    ; remote frames dropped after the leader
-STATS_LEN            equ 11
 POLL_AGE             equ STREAM_AREA+49    ; frames since pkt_poll last ran
+STATS_LEN            equ POLL_AGE-STATS
 STATUS_BUF           equ STREAM_AREA+50    ; P41: the status report being sent, B1 addr 03 'S' channel flags
 RANDBOW_DECK         equ STREAM_AREA+56    ; P46: bit 7 = RANDBOW, bits 0..RAINBOW_N-1 = RAINBOW's colors not yet dealt this round
 ALT_NEXT             equ STREAM_AREA+57    ; P46: the editor inserts this after a FUNC2 key's B2
@@ -551,8 +553,8 @@ QUERY_MEMORY         equ '1'
 QUERY_NOP            equ '2'
 QUERY_DUMP           equ '3'
 QUERY_STATS          equ '4'         ; P30: BAUD_T, BAUD_STEP, BAUD_CAL_LAST, NMI_SEEN; P40: then the health counters
-QUERY_CONFIG         equ '5'         ; P35: the 16-byte configuration block
-QUERY_SEQ            equ '6'         ; P35: SEQ_LIST, 104 bytes
+QUERY_CONFIG         equ '5'         ; P35: the configuration block, CFG_LEN bytes
+QUERY_SEQ            equ '6'         ; P35: SEQ_LIST, SEQ_LIST_LEN bytes
 CMD_OTA              equ 0xb5        ; B5 c ... (patch 11)
 CMD_CONFIG           equ 0xb6        ; B6 index mask value (patch 35); taken in the editor too
 CMD_EDITOR           equ 0xb7        ; B7 '1' opens the editor as a serial terminal, B7 '0' closes it (patch 45)
@@ -624,7 +626,7 @@ NMI_VECTOR:
         LD A,0xff
         LD (NMI_SEEN),A         ; the mains is alive (the page writer and a trial boot need it)
         LD A,(NMI_MAGIC)
-        CP IR_CODE_SPACE
+        CP NMI_VALID
         JR nz,nmi_ignore
         POP AF
         PUSH HL
@@ -869,7 +871,7 @@ lib_image_check:
         PUSH AF
         LD (BANK_REG),A
         LD HL,STUB_END
-        LD BC,0x3fc0-STUB_END
+        LD BC,TRAILER-STUB_END
         LD DE,0
         CALL lib_crc16
         LD HL,(TRAILER+6)
@@ -913,7 +915,7 @@ lib_boot:
 boot_go:
         LD HL,APP_NMI
         LD (NMI_VEC),HL
-        LD A,0xa5
+        LD A,NMI_VALID
         LD (NMI_MAGIC),A
         JP APP_START
 
@@ -1518,10 +1520,11 @@ kp_key:
 
 kp_lookup:
         LD HL,IR_KEY_TABLE
-        LD BC,62
+        LD BC,IR_KEYS
         CPIR
         JR nz,kp_none           ; 1F: an empty position
-        LD A,0x80+61
+        ASSERT IR_KEY_RELEASE == IR_KEYS
+        LD A,0x80+IR_KEYS-1
         SUB C
         LD (IR_CODE),A
         LD A,2                  ; release after two empty scans: no contact bounce
@@ -1698,8 +1701,8 @@ seq_fill:
 ; ---- seq_list_messages (P54): SEQ_LIST = channels 0..89, then FF
 seq_list_messages:
         CALL seq_list_default
-        LD HL,SEQ_LIST+CHANNELS-11
-        LD B,10
+        LD HL,SEQ_LIST+CHANNELS-FIELDS-1
+        LD B,FIELDS
         JR seq_one_loop
     ENDIF
 
@@ -1808,19 +1811,16 @@ seq_chan_empty:
 
 seq_test_message:
         LD HL,TEST_MSG_BUF
-        LD (STORE_CURSOR),HL    ; falls into clear_chan_lock
-
-; ---- clear_chan_lock
-clear_chan_lock:
-        XOR A
-        LD (CHAN_LOCK),A
-        RET
+        LD (STORE_CURSOR),HL
+        JR clear_chan_lock
 
 ; ---- chan_lock_set: the lock is on for the demo channel (E) and off for any other
 chan_lock_set:
         LD A,E
         CP CHAN_DEMO
         JR z,chan_lock_store
+
+clear_chan_lock:
         XOR A
 
 chan_lock_store:
@@ -1835,6 +1835,8 @@ chan_open:
         POP DE
         OR A
         JP nz,pkt_process_end
+
+chan_seat:                      ; HL = the channel's first text byte, E = the channel
         LD (INS_PTR),HL
         DEC HL
         DEC HL
@@ -1845,6 +1847,7 @@ chan_open:
 ;      B1 addr 03 'S' E flags sum. Dropped while a reply streams or a frame is arriving.
 status_send:
         LD A,(CFG_FLAGS)
+        ASSERT CFG_STATUS == 0x80
         RLA
         RET nc
         LD A,(TX_ACTIVE)
@@ -2126,30 +2129,16 @@ init_nmi_store:
 init_vars:
         LD A,(NMI_COUNT)        ; the seed: RAM noise at power-up, the count after a reset
         PUSH AF
-        XOR A
         LD HL,BOOT_ZERO
-        LD B,BOOT_ZERO_LEN
-
-init_clear:
-        LD (HL),A
-        INC HL
-        DJNZ init_clear
+        LD BC,BOOT_ZERO_LEN*0x100
+        CALL mem_fill
         LD HL,STREAM_AREA       ; P21: no reply in flight, no packet busy
         LD B,STREAM_AREA_SIZE
-
-init_clear_stream:
-        LD (HL),A
-        INC HL
-        DJNZ init_clear_stream
+        CALL mem_fill
         CALL ram_probe
         LD HL,(STACK_BOT)       ; P40: lay the canary at the stack's bottom
-        LD A,CANARY
-        LD B,STACK_CANARY
-
-init_canary:
-        LD (HL),A
-        INC HL
-        DJNZ init_canary
+        LD BC,STACK_CANARY*0x100+CANARY
+        CALL mem_fill
         LD HL,INIT_DATA
         LD DE,IMAGE
         LD BC,IMAGE_LEN
@@ -2166,8 +2155,7 @@ init_canary:
         LD BC,CFG_LEN-1
         LDIR
         CALL cfg_seal
-        ; P6: RAM is fresh, so the clock bytes are noise too - the image copy
-        ; below starts at CLK_RUN and never touches CLK_H10..CLK_PM. Start 12:00 AM.
+        ; P6: RAM is fresh, so the clock bytes are noise too. Start 12:00 AM.
         LD HL,0x0201
         LD (CLK_H10),HL         ; CLK_H10 = 1, CLK_H1 = 2
         LD HL,0
@@ -2190,20 +2178,16 @@ init_vars_done:
 ; ---- cfg_sum (P35): A = 8-bit sum of the block before CFG_SUM, HL -> CFG_SUM.
 ;      The live bit of CFG_FLAGS changes without a reseal and does not count.
 cfg_sum:
+        LD A,(CFG_FLAGS)
+        AND CFG_LIVE
+        NEG
         LD HL,CFG
         LD B,CFG_LEN-1
-        XOR A
 
 cfg_sum_loop:
         ADD A,(HL)
         INC HL
         DJNZ cfg_sum_loop
-        LD C,A
-        LD A,(CFG_FLAGS)
-        AND CFG_LIVE
-        LD B,A
-        LD A,C
-        SUB B
         RET
 
 ; ---- chan_boundary: a new message starts: a pending mute takes effect and the
@@ -2234,14 +2218,9 @@ cfg_valid:
 ; ---- init_render: Reset render state for the current message
 init_render:
         CALL clear_framebuf
-        XOR A
         LD HL,RENDER_ZERO
-        LD B,RENDER_ZERO_LEN
-
-init_render_zero:
-        LD (HL),A
-        INC HL
-        DJNZ init_render_zero
+        LD BC,RENDER_ZERO_LEN*0x100
+        CALL mem_fill
         LD A,0xff
         LD (DISP_ON),A
         LD HL,FRAMEBUF
@@ -2736,7 +2715,7 @@ rainbow_alt:                    ; P46: B2 BC is RANDBOW; a B2 before anything el
         LD A,(HL)
     IFNDEF LITE
         SUB '0'                 ; P54: B2 '0'-'9' shows channel 90-99 here
-        CP 10
+        CP FIELDS
         JP c,field_open
         LD A,(HL)
     ENDIF
@@ -2952,16 +2931,12 @@ draw_begin:
         LD HL,DRAW_BUF
         PUSH HL
         PUSH HL
-        LD B,0x10
-
-draw_clear:
-        LD (HL),0
-        INC HL
-        DJNZ draw_clear
+        LD BC,(SEQ_LIST-DRAW_BUF)*0x100
+        CALL mem_fill
         CALL clear_glyph_tmp
         POP HL
         LD C,0
-        LD B,0x10
+        LD B,SEQ_LIST-DRAW_BUF
 
 draw_hex_loop:
         CALL fetch_char
@@ -2986,7 +2961,6 @@ draw_finish:
         LD A,C
         AND A
         JR nz,draw_set_width
-        XOR A
         LD (DRAW_NO_GAP),A
         LD A,' '
         LD (CUR_CHAR),A
@@ -3593,11 +3567,7 @@ fx_done_effect:
         LD A,(EFFECT_ID)
         AND A
         JR z,fx_reset_stage
-        LD A,(MAGIC_MODE)
-        AND A
-        JR z,fx_toggle_flush
-        LD A,COLOR_DEFAULT & COLOR_FG
-        LD (CUR_COLOR),A
+        CALL magic_color_reset
 
 fx_toggle_flush:
         LD HL,FLUSH_PENDING
@@ -3876,6 +3846,9 @@ fb_colors_default:
         OR COLOR_DEFAULT
         LD (WINDOW_COLOR),A
         LD (ROW_COLOR),A
+
+; ---- magic_color_reset: in MAGIC mode the foreground back to yellow
+magic_color_reset:
         LD A,(MAGIC_MODE)
         AND A
         RET z
@@ -4894,8 +4867,6 @@ ram_mirrors:
 ;      three derived constants, writes the 0xDA store terminator at the
 ;      ceiling, then clears PKT_READY and the parser state (the buffer may
 ;      hold the stack, P51).
-;      0x43DE = ceiling-100, the "100 KEYS LEFT" trip point (used at 0x2601).
-;      0x43DC = free text bytes, the scan bound used by store_repair at 0x0481.
 store_init:
         LD HL,(STORE_LIMIT)
         LD (STORE_END),HL
@@ -5316,8 +5287,6 @@ tx_stream_next:
 
 tx_stream_queue:
         LD (TX_PENDING),A
-        LD HL,TX_STATUS
-        SET 1,(HL)
         JR tx_start_byte
 
 tx_stream_end:
@@ -5335,7 +5304,7 @@ tx_stream_shift:
         JR z,tx_stream_done
         LD HL,TX_SEG1
         LD DE,TX_SEG0
-        LD BC,5
+        LD BC,TX_SEG1-TX_SEG0
         LDIR
         XOR A
         LD (TX_SUM),A
@@ -5352,10 +5321,6 @@ tx_stream_done:
         JR tx_stream_queue
 
 tx_stream_idle:
-        LD A,(TX_ACTIVE)
-        OR A
-        RET z
-        XOR A
         LD (TX_ACTIVE),A
         LD (PKT_BUSY),A
         RET
@@ -5555,7 +5520,7 @@ rx_stop_sample:
         BIT 3,A
         JR nz,rx_byte_end       ; no stop bit: dropped
         LD A,(RX_COUNT)
-        CP 8
+        CP RX_COUNT-RX_FIFO
         JR nc,rx_byte_end       ; FIFO full: dropped
         LD E,A
         LD D,0
@@ -5683,7 +5648,7 @@ latch_dim:
         LD A,(CFG_FLAGS)
         AND CFG_BRIGHT
         CP CFG_BRIGHT
-        JR z,latch_row          ; full: LIT_LIMIT is 0 (cmd_B6_config clears it)
+        JR z,latch_row          ; full: LIT_LIMIT is 0 (cfg_write clears it)
     IFDEF LITE                  ; a tick per interrupt: the single pass dark, the double lit
         BIT 3,B                 ; strobe to interrupt (level 2) or interrupt to blank (1)
         RET z
@@ -5718,7 +5683,7 @@ rx_fifo_get:
         LD HL,RX_FIFO+1
         LD DE,RX_FIFO
         LD A,(DE)
-        LD BC,7
+        LD BC,RX_COUNT-RX_FIFO-1
         LDIR
         EI
         LD (RX_BYTE),A
@@ -5867,6 +5832,7 @@ pkt_st_cksum:
         LD A,REPLY_ACK
         JR z,pkt_send_reply
         LD A,(PKT_BUF)
+        ASSERT CMD_EDITOR == CMD_CONFIG+1
         SUB CMD_CONFIG          ; B6 or B7
         CP CMD_EDITOR-CMD_CONFIG+1
         LD A,REPLY_ACK
@@ -5923,14 +5889,14 @@ pkt_discard_frame:
 ; ---- pkt_in_editor: a B6 is applied here, since packets wait for the render loop;
 ;      anything else was answered BUSY
 pkt_in_editor:
-        LD A,(PKT_BUF)
-        CP CMD_CONFIG
-        JR nz,pkt_discard
         LD A,(PKT_LEN)
         CP 4
         JR nz,pkt_discard
-        LD A,(PKT_BUF+1)
-        LD C,A
+        LD HL,(PKT_BUF)
+        LD A,L
+        CP CMD_CONFIG
+        JR nz,pkt_discard
+        LD C,H
         LD HL,(PKT_BUF+2)
         LD B,H
         LD H,L
@@ -5966,6 +5932,7 @@ pkt_editor_close:
         LD (EDIT_CLOSE),A       ; nothing when the editor is shut
         JR pkt_discard
 
+    IFNDEF LITE
 ; ---- tx_send_frame: Send reply frame: B1, MY_ADDRESS, then (HL)=len, len bytes, 8-bit sum of the data bytes
 tx_send_frame:                  ; ota_reply, its one caller, keeps nothing
         LD A,FRAME_START
@@ -5989,6 +5956,7 @@ txf_data_loop:
         LD A,E
         JP tx_send_byte
 
+    ENDIF
 ; ---- bin_to_dec5: HL -> 5 ASCII digits at DE, which advances (10000,1000,100,10,1)
 bin_to_dec5:
         LD BC,DEC_TABLE
@@ -6187,7 +6155,7 @@ clear_glyph_tmp:
         PUSH HL
         PUSH BC
         LD HL,GLYPH_BUF
-        LD BC,0x6000
+        LD BC,(TEST_MSG_BUF-GLYPH_BUF)*0x100
 
 fill_pop:
         CALL mem_fill
@@ -6269,36 +6237,13 @@ editor_find_marker:
         JR nc,editor_cursor_set
         DEC HL
         LD (STORE_CURSOR),HL
-        JR editor_marker_skip
+        INC HL
+        JR editor_set_ins
 
 editor_cursor_set:
         LD (STORE_CURSOR),HL
-
 editor_scan_back:
-        PUSH HL
-        LD DE,MSG_STORE
-        OR A
-        SBC HL,DE
-        PUSH HL
-        POP BC
-        POP HL
-        DEC HL
-
-editor_scan_loop:
-        LD A,(HL)
-        CALL is_marker
-        JR c,editor_set_ins
-
-editor_scan_next:
-        DEC HL
-        DEC BC
-        LD A,C
-        OR B
-        JR nz,editor_scan_loop
-        JP pkt_process_end
-
-editor_marker_skip:
-        INC HL
+        CALL marker_before
 
 editor_set_ins:
         INC HL
@@ -6451,10 +6396,7 @@ newmsg_select:
         JR newmsg_set_seq
 
 newmsg_empty_found:
-        LD (INS_PTR),HL
-        DEC HL
-        DEC HL
-        LD (STORE_CURSOR),HL
+        CALL chan_seat
 
 newmsg_set_seq:
         CALL chan_lock_set
@@ -6510,6 +6452,42 @@ store_delete_text:
         POP DE                  ; DE = the destination
         LDIR
         JR store_finalize       ; returns NZ
+
+; ---- marker_before: HL = a store address -> HL = the nearest marker byte below
+;      it; a store with none resets
+marker_before:
+        LD DE,MSG_STORE
+        OR A
+        SBC HL,DE
+        LD B,H
+        LD C,L
+        ADD HL,DE
+
+marker_before_loop:
+        DEC HL
+        LD A,(HL)
+        CALL is_marker
+        RET c
+        DEC BC
+        LD A,C
+        OR B
+        JR nz,marker_before_loop
+        JP pkt_process_end
+
+; ---- cursor_to_end: STORE_CURSOR (and HL) to the byte before the channel's 03: its
+;      last text byte, or the marker's last byte when the channel is empty
+cursor_to_end:
+        LD HL,(STORE_CURSOR)
+
+cursor_end_loop:
+        LD A,(HL)
+        INC HL
+        CP TEXT_END
+        JR nz,cursor_end_loop
+        DEC HL
+        DEC HL
+        LD (STORE_CURSOR),HL
+        RET
 
 ; ---- is_marker: CY if A is a channel marker byte, D0-DA (A is lost)
 is_marker:
@@ -6645,10 +6623,8 @@ time_digit_loop:
 time_get_digit:
         CALL menu_getchar
         LD (CUR_CHAR),A
-        CP '9'+1
+        CALL is_digit
         JR nc,time_get_digit
-        CP '0'
-        JR c,time_get_digit
         PUSH AF
         CALL glyph_lookup
         POP AF
@@ -7040,15 +7016,10 @@ mark_digit:
 
 ; ---- is_digit: C set if A is ASCII 0-9
 is_digit:
-        CP '9'+1
-        JR nc,not_digit
         CP '0'
-        JR c,not_digit
-        SCF
-        RET
-
-not_digit:
-        OR A
+        CCF
+        RET nc
+        CP '9'+1
         RET
 
 
@@ -7061,18 +7032,7 @@ menu_addr_invalid:
 
 ; ---- editor_goto_end: B3
 editor_goto_end:
-        LD HL,(STORE_CURSOR)
-
-gotoend_loop:
-        LD A,(HL)
-        CP TEXT_END
-        JR z,gotoend_back
-        INC HL
-        JR gotoend_loop
-
-gotoend_back:
-        DEC HL
-        LD (STORE_CURSOR),HL
+        CALL cursor_to_end
 
 ; ---- editor_back_if_mark: HL = STORE_CURSOR; on a channel marker step back and show TOP
 editor_back_if_mark:
@@ -7136,10 +7096,9 @@ delete_chan_text:
         LD DE,MSG_STORE
         OR A
         SBC HL,DE
-        PUSH HL
-        POP BC
-        CP MARK_LO
-        LD HL,(STORE_CURSOR)
+        LD B,H
+        LD C,L
+        ADD HL,DE
 
 deltext_find_marker:
         LD A,(HL)
@@ -7490,7 +7449,6 @@ getkey_history:
         LD (EURO_STATE),A
 
 getkey_return:
-        XOR A
         LD (KEY_ECHO_TX),A
         LD A,(IR_KEY_CHAR)
         LD (EDIT_KEY),A
@@ -7539,10 +7497,9 @@ delete_do:
         SBC HL,DE
         LD B,H
         LD C,L
-        LD HL,(STORE_CURSOR)
-        INC HL
-        LD D,H
-        LD E,L
+        INC DE
+        LD H,D
+        LD L,E
         INC HL
         LDIR
         LD A,0xff
@@ -7672,7 +7629,7 @@ editor_loop_jr13:
         JP editor_loop
 
 insert_shift:
-        LD HL,(STORE_TMP)
+        ADD HL,DE
         LD (STORE_END),HL       ; the DA moves up one
         CALL store_make_room
         LD HL,(STORE_TMP)
@@ -7680,8 +7637,8 @@ insert_shift:
         OR A
         SBC HL,DE
         LD B,H
-        LD C,L                  ; the cursor .. the old DA
-        LD HL,(STORE_TMP)
+        LD C,L
+        ADD HL,DE
         LD D,H
         LD E,L
         DEC HL
@@ -7979,7 +7936,7 @@ redraw_not_norm:
 redraw_not_flash:
         CP ATTR_ITALIC
         JR nz,redraw_not_italic
-        LD A,0x64               ; bit 2 (the other bits are stock's and unread)
+        LD A,1<<FONT_ITALIC_BIT ; sheared, but not on the bold glyph as FONT_ITALIC is
         JR redraw_set_font
 
 redraw_not_italic:
@@ -8383,29 +8340,8 @@ pkt_cursor_in_store:
         JR nc,pkt_find_marker
         DEC HL
         LD (STORE_CURSOR),HL
-
 pkt_find_marker:
-        PUSH HL
-        LD DE,MSG_STORE
-        OR A
-        SBC HL,DE
-        PUSH HL
-        POP BC
-        POP HL
-        DEC HL
-
-pkt_marker_loop:
-        LD A,(HL)
-        CALL is_marker
-        JR c,pkt_set_ins
-
-pkt_marker_back:
-        DEC HL
-        DEC BC
-        LD A,C
-        OR B
-        JR nz,pkt_marker_loop
-        JP pkt_process_end
+        CALL marker_before
 
 pkt_set_ins:
         LD (STORE_CURSOR),HL
@@ -8609,7 +8545,7 @@ pkt_done_handoff:
         OR A
         SBC HL,DE
         JR nc,pkt_done_continue ; nothing moved under the renderer
-        LD HL,(PKT_LOW_EDIT)
+        ADD HL,DE
         LD DE,(PKT_SAVE_MARK)
         OR A
         SBC HL,DE
@@ -8694,7 +8630,7 @@ field_scan:
         CPDR
         JR nz,field_none
         LD A,(HL)
-        CP MARK_LO+9            ; the tens byte of 90-99
+        CP MARK_LO+(CHANNELS-FIELDS)/10 ; the tens byte of 90-99
         JR z,field_found
         LD A,B
         OR C
@@ -8751,7 +8687,7 @@ field_resume:
         OR A
         SBC HL,DE
         JR nc,resume_swap       ; nothing moved under the field
-        LD HL,(PKT_LOW_EDIT)
+        ADD HL,DE
         LD BC,(FIELD_MARK)
         OR A
         SBC HL,BC
@@ -8834,7 +8770,7 @@ cmd_B4_query:
 
 pq_romid:
         LD HL,ROM_ID
-        LD BC,16
+        LD BC,ROM_ID_LEN
         JR pq_reply
 
 pq_memory:
@@ -8937,15 +8873,16 @@ pq_canary_end:
         LD BC,STATS_LEN
         LDIR
         LD HL,IR_REJ            ; then the remote's drop reasons
-        LD BC,4
+        LD BC,TERM_MODE-IR_REJ
         LDIR
         LD HL,PKT_BUF+3
-        LD BC,7+STATS_LEN+4
+        LD BC,7+STATS_LEN+TERM_MODE-IR_REJ
         JP pq_reply
 
+    IFNDEF LITE
 ; ---- cmd_B5_ota: OTA commands (ota.md §6). B5 must be the first payload
-;      byte and the frame ends with the command. Runs under pkt_process's DI;
-;      interrupts come back only for the reply. Replies are tx_send_frame
+;      byte and the frame ends with the command. Takes its own DI once the ACK
+;      is out; interrupts come back only for the reply. Replies are tx_send_frame
 ;      frames: one status byte (0 ok, 1 verify failed, 2 chip timeout, 3 page
 ;      out of range, 4 CRC mismatch, 5 bad arguments) or the data asked for.
 ;        B5 'I'                 -> bank, 10 trailer bytes per bank, features byte
@@ -8993,7 +8930,7 @@ ota_status:
 
 ; ---- ota_reply: send TXBUF (len, data) and finish the packet. The library
 ;      copy sits in FRAMEBUF and would be painted by the refresh once EI: blank
-;      first, as cmd_B4_query does (it can do so before its work, we after).
+;      first.
 ota_reply:
         CALL clear_framebuf
         CALL shift_chain_clear
@@ -9044,7 +8981,7 @@ ota_copy:
         LD (NMI_MAGIC),A
         POP AF
         CALL lib_copy
-        LD A,IR_CODE_SPACE
+        LD A,NMI_VALID
         LD (NMI_MAGIC),A
         RET
 
@@ -9053,7 +8990,7 @@ ota_crc:
         LD A,(PKT_BUF+3)
         OR A
         JR z,ota_bad_args
-        CP 43                   ; 42 pages at most: 84 bytes of CRCs fill TXBUF
+        CP (OTA_IDLE-TXBUF-1)/2+1 ; 42 pages at most: 84 bytes of CRCs fill TXBUF
         JR nc,ota_bad_args
         LD B,A
         ADD A,A
@@ -9104,12 +9041,8 @@ ota_fetch_page:
 ; ---- ota_erase_buf: OTA_PAGE_BUF = 64 x FF, HL = the buffer
 ota_erase_buf:
         LD HL,OTA_PAGE_BUF
-        LD B,EE_PAGE
-
-ota_erase_loop:
-        LD (HL),0xff
-        INC HL
-        DJNZ ota_erase_loop
+        LD BC,EE_PAGE*0x100+0xff
+        CALL mem_fill
         LD HL,OTA_PAGE_BUF
         RET
 
@@ -9135,7 +9068,7 @@ ota_confirm:
 ota_begin:
         LD HL,ota_updating_msg
         LD DE,TEST_MSG_BUF
-        LD BC,28                ; the whole buffer, so a longer message changes one page
+        LD BC,DRAW_BUF-TEST_MSG_BUF ; the whole buffer, so a longer message changes one page
         LDIR
         LD A,0xff
         LD (TEST_MODE),A
@@ -9189,6 +9122,7 @@ ota_write:
         LD A,OTA_RANGE
         JR c,ota_status_jr21         ; past the end of the bank
         LD A,C                  ; CRC of the data: 64 * C bytes
+        PUSH AF                 ; the page count, for the write loop
         RRCA
         RRCA
         LD C,A
@@ -9196,6 +9130,7 @@ ota_write:
         LD HL,PKT_BUF+5
         LD DE,0
         CALL ROM_CRC16
+        POP BC
         LD HL,(PKT_BUF+3)
         OR A
         SBC HL,DE
@@ -9208,12 +9143,7 @@ ota_write:
         RR E
         SRL D
         RR E
-        LD A,(PKT_LEN)
-        SUB 5
-        RLCA
-        RLCA
-        AND 3
-        LD C,A
+        LD C,B
         LD HL,PKT_BUF+5
 
 ota_write_loop:
@@ -9297,13 +9227,21 @@ ota_finish_done:
         LD A,(OTA_IDLE)
         JP ota_seal_write
 
+    ENDIF
 ; ---- cmd_1E_color_A0: 1E n -> insert 0xA0|(n&15)
 cmd_1E_color_A0:
+        LD BC,0x0f00+GRAPH_BASE
+        JR cmd_masked
+
+; ---- cmd_02_speed: 02 n -> insert 0xF0|(n&7)
+cmd_02_speed:
+        LD BC,0x0700+SPEED_BASE
+
+cmd_masked:                     ; the next byte masked with B, OR C, as prefix_apply
         CALL pkt_next_byte
-        AND 15
-        OR GRAPH_BASE
-        LD (CUR_CHAR),A
-        JR pkt_insert_one_jr23
+        AND B
+        OR C
+        JR idx_store
 
 ; ---- cmd_15_fore_idx: 15 n -> insert FG_IDX_TABLE[n]
 cmd_15_fore_idx:
@@ -9321,18 +9259,16 @@ idx_insert:
         LD B,0
         ADD HL,BC
         LD A,(HL)
+
+idx_store:
         LD (CUR_CHAR),A
 
 pkt_insert_one_jr23:
         JP pkt_insert_one
 
 ; ---- cmd_17_set_time: 17 h h m m a: 4 ASCII digits -> CLK_H10..CLK_M1, a=Y/y -> AM else PM.
-;      B2: CLK_RUN is cleared here but restored only at 0x2C59, and every
-;      pkt_next_byte below can jump straight to pkt_process_done on a short
-;      packet - NETCC's "status query" 17 32 does exactly that and stops the
-;      clock. Fixed in pkt_process_done below.
-;      Unlike the menu's time editor (0x1D14..0x1D8A) this path does not reset
-;      NMI_COUNT, so the new time starts up to one second out of phase.
+;      B2: a short packet (NETCC's "status query" 17 32) leaves through
+;      pkt_next_byte with CLK_RUN clear; pkt_process_done sets it again.
 cmd_17_set_time:
         XOR A
         LD (CLK_RUN),A
@@ -9380,14 +9316,6 @@ pkt_next_byte:
         PUSH IX
         RET
 
-; ---- cmd_02_speed: 02 n -> insert 0xF0|(n&7)
-cmd_02_speed:
-        CALL pkt_next_byte
-        AND 7
-        OR SPEED_BASE
-        LD (CUR_CHAR),A
-        JR pkt_insert_one_jr23
-
 ; ---- cmd_B6_config (P35): B6 index mask value -> the configuration block: only
 ;      the bits in mask take value's. The signature, the address and the sum are
 ;      not writable; CFG_FLAGS keeps its live bit.
@@ -9404,20 +9332,17 @@ cmd_B6_config:
 ; ---- cfg_write: byte C of the block takes value B's bits where mask H has them
 cfg_write:
         LD A,C
-        CP CFG_FLAGS-CFG
-        RET c
-        CP CFG_LEN-1
+        SUB CFG_FLAGS-CFG
+        CP CFG_SUM-CFG_FLAGS
         RET nc
         LD C,H
-        LD HL,CFG
+        LD HL,CFG_FLAGS
         LD E,A
         LD D,0
         ADD HL,DE
-        CP CFG_FLAGS-CFG
+        AND A
         JR nz,cfg_merge
-        LD A,C
-        AND ~CFG_LIVE & 0xff
-        LD C,A
+        RES CFG_WRAPPED_BIT,C
         XOR A
         LD (LIT_LIMIT),A        ; a brightness change: latch_row_dim re-arms, or not at full
         LD (LATCH_PENDING),A
@@ -9434,18 +9359,7 @@ cfg_merge:
 ;      B11: stock stepped back a second time when the byte before the 03 was a
 ;      marker byte (an empty channel), so the first insert split the marker.
 cmd_B3_append:
-        LD HL,(STORE_CURSOR)
-
-append_find_end:
-        LD A,(HL)
-        CP TEXT_END
-        JR z,append_seat
-        INC HL
-        JR append_find_end
-
-append_seat:
-        DEC HL                  ; the byte before the 03: last text byte, or the
-        LD (STORE_CURSOR),HL    ; marker's last byte when the channel is empty, as 0E seats it
+        CALL cursor_to_end
 
 pkt_next_jr19:
         JP pkt_next
@@ -9549,7 +9463,7 @@ seq_messages:                   ; P54: 'M' is 00-89, leaving 90-99 to the fields
 ; ---- is_ignored_byte: Z (A=0) if A is in IGNORE_TABLE: 00 01 05 08 0A 0B 0C 1C 1D 7F
 is_ignored_byte:
         LD HL,IGNORE_TABLE
-        LD BC,10
+        LD BC,COMMAND_TABLE-IGNORE_TABLE
         CPIR
         DEC HL
         CP (HL)
@@ -9585,12 +9499,14 @@ plain_no:
 ; ---- data: 16-byte firmware ID, returned by query B4 '0' (0048 in stock)
 ROM_ID:
         db "78409O1702930205"
+ROM_ID_LEN           equ $-ROM_ID
 
 ; ---- CFG_DEFAULTS: the block after a RAM loss, the sum computed at boot
 CFG_DEFAULTS:
         db CFG_MAGIC, 1         ; signature, address 1 (NETCC's default)
-        db 0x03                 ; full brightness, beeper on, remote unlocked, no status reports
+        db CFG_BRIGHT           ; full brightness, beeper on, remote unlocked, no status reports
         db HOLD_FRAMES, FLASH_HALF_PERIOD
+        ASSERT $-CFG_DEFAULTS == CFG_LEN-1
 
 ; ---- INIT_DATA: the boot values of the IMAGE variables, in their RAM order
 INIT_DATA:
@@ -9614,6 +9530,7 @@ INIT_DATA:
         db 0x01                ; DISP_COUNT
         db 0xff                ; NEXT_CHAN
         db ' '                 ; MAGIC_LAST_CHAR
+        ASSERT $-INIT_DATA == IMAGE_LEN
 
 ; ---- MAGIC_CLASH_PAIRS: (old<<4 | new) foreground pairs too alike to follow each
 ;      other in MAGIC mode: yellow/lime, yellow/orange, red/orange
@@ -9644,6 +9561,7 @@ IR_KEY_TABLE:
         db 0x2f,0x13,0x2c,0x2b,0x2d,0x29,0x2a,0x2e,0x24,0x23,0x1c,0x1b,0x1d,0x19,0x1a,0x22   ; P36: 1D is SHIFT, caught before the table: its entry finds the keypad's SHIFT
         db 0x31,0x30,0x37,0x36,0x35,0x08,0x32,0x34,0x01,0x00,0x07,0x06,0x05,0x38,0x02,0x04
         db 0x11,0x10,0x17,0x16,0x15,0x28,0x12,0x14,0x21,0x20,0x27,0x26,0x25,0x18
+IR_KEYS              equ $-IR_KEY_TABLE
 
 ; ---- FUNC_TABLE: key, the attribute FUNC turns it into
 FUNC_TABLE:
