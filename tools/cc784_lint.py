@@ -179,7 +179,7 @@ def measure(data, cc710, fields={}):
         (pathlib.Path(tmp) / 'cc784nir.asm').write_text(('        DEFINE CC710\n' if cc710 else '') + text)
         rom, syms = S.assemble(tmp)
     s = S.Sign(rom, syms, fresh_ram=True); s.run_ms(2500)
-    s.send_frame(bytes([0xB6, 3, 1]), addr=1); s.rx_wait(); s.run_ms(300)    # holds of one frame: a quick pass
+    s.send_frame(bytes([0xB6, 3, 0xFF, 1]), addr=1); s.rx_wait(); s.run_ms(300)    # holds of one frame: a quick pass
     for n, v in fields.items():
         s.send_frame(b'\x09\x39%c\x0e' % (0x30 + n) + v, addr=1); s.rx_wait(); s.run_ms(300)
     col, ptr, txbuf = syms['COL_COUNT'], syms['STAGE_PTR'], syms['TXBUF']

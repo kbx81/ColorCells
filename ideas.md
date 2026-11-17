@@ -75,7 +75,7 @@ The CC710 and the original CC784 are `CC784-3A` boards ([hardware notes §4](har
 
 ## 11. A configuration store
 
-The block itself exists since patch 35 ([patched notes](patched.md#2-patches)): six battery-backed bytes with a signature and a sum, written with `B6 index value`, read with `B4 '5'`, carrying brightness, mute, beeper, remote lock and the status-report switch in its flags byte, then hold time and flash rate. Settings it could grow by:
+The block itself exists since patch 35 ([patched notes](patched.md#2-patches)): six battery-backed bytes with a signature and a sum, written with `B6 index mask value`, read with `B4 '5'`, carrying brightness, mute, beeper, remote lock and the status-report switch in its flags byte, then hold time and flash rate. Settings it could grow by:
 
 | Setting | Values | Default | Notes | ROM |
 |---|---|---|---|---|

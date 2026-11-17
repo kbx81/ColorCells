@@ -40,7 +40,8 @@ Options
 'stop' and 'start' are frames (patch 45) and want the sign's address. After
 'stop' the sign is in its editor and takes bytes outside frames as typed keys,
 so a terminal can compose a message by hand; 0D or 'start' leaves. While the
-editor is open, however it was opened, every other frame is answered BUSY (18).
+editor is open, however it was opened, every other frame but a config write
+(B6) is answered BUSY (18).
 Stock firmware takes a bare 01 and 0D instead.
 
 Wiring notes: the sign transmits on DB9 pin 3 and receives on pin 2 (DTE-like),
@@ -57,6 +58,7 @@ except ImportError:          # only needed for the local-port front-end
 
 ACK, NAK, START, DONE = 0x06, 0x15, 0xB1, 0x04   # DONE: patched firmware, after a flag-81 frame
 BUSY = 0x18                                      # patched firmware: the editor is open
+NO_REPLY_HINT = "; to broadcast the sign is also silent while its editor is open ('start' closes it)"
 
 # ---- message escapes -------------------------------------------------------
 # Single-letter form:  @B bold, @R red ...   (see ESC)
@@ -323,6 +325,8 @@ class Sign:
         # address byte 01 drops the sign into the editor (firmware notes B9).
         self.send_frame(b'\xB4' + n.encode(), expect_ack=False, reply_follows=True)
         raw = self.read_reply(dump=(n == '3'))
+        if raw == bytes([BUSY]):
+            sys.exit("  BUSY: the sign's editor is open ('start' closes it)")
         if self.done:
             self.wait_done()
         return raw
@@ -347,16 +351,16 @@ def _mute(v):
 def _bit(mask, invert=False):
     return lambda v: mask if bool(_onoff(v)) != invert else 0
 
-# patch 35: the configuration block. Byte, the bits a setting owns in it (None: the
-# whole byte), and how a value is written
+# patch 35: the configuration block. Byte, the bits a setting owns in it, and how a
+# value is written; B6 index mask value changes only those bits
 CONFIG_FIELDS = {
     'brightness': (2, 0x03, _choice('off', 'low', 'medium', 'full')),
     'mute':       (2, 0x0C, _mute),                         # off, now, after (the current message)
     'beeper':     (2, 0x10, _bit(0x10, invert=True)),       # the bit is set when quiet
     'lock':       (2, 0x20, _bit(0x20)),                    # remote keys ignored
     'status':     (2, 0x80, _bit(0x80)),                    # patch 41: status reports
-    'hold':       (3, None, lambda v: int(v, 0)),           # frames, 62 per second
-    'flash':      (4, None, lambda v: int(v, 0)),           # frames per half period
+    'hold':       (3, 0xFF, lambda v: int(v, 0)),           # frames, 62 per second
+    'flash':      (4, 0xFF, lambda v: int(v, 0)),           # frames per half period
 }
 CONFIG_LEN = 6
 
@@ -371,7 +375,7 @@ def config_text(b: bytes) -> str:
 
 def parse_reply(raw: bytes, kind: str, ten: bool = False):
     if not raw:
-        print("  (no reply)"); return
+        print("  (no reply%s)" % NO_REPLY_HINT); return
     if raw[:1] == bytes([ACK]): print("  ACK"); raw = raw[1:]
     if raw[:1] != bytes([START]):
         print("  unexpected:", hexs(raw)); return
@@ -484,11 +488,13 @@ def run(link, a, ap):
 
     elif c == 'config':
         # patch 35: B4 '5' reads the 6-byte block, B4 '6' the sequence list,
-        # B6 index value writes one byte (the firmware refuses 0, 1 and 5 and
-        # keeps the live bit of byte 2)
+        # B6 index mask value writes the masked bits of one byte (the firmware
+        # refuses 0, 1 and 5 and keeps the live bit of byte 2)
         if not args:
             blk = reply_data(s.query('5'))
             seq = reply_data(s.query('6'))
+            if not blk and not seq:
+                sys.exit("  no reply%s" % NO_REPLY_HINT)
             if len(blk) != CONFIG_LEN:
                 sys.exit("  no config block in the reply (patched firmware 35+ only)")
             print("  " + config_text(blk))
@@ -501,15 +507,9 @@ def run(link, a, ap):
             if name not in CONFIG_FIELDS:
                 sys.exit("  unknown setting %s; one of %s" % (name, ', '.join(CONFIG_FIELDS)))
             index, mask, parse = CONFIG_FIELDS[name]
-            if mask is not None:                            # a field of the flags byte
-                blk = reply_data(s.query('5'))
-                if len(blk) != CONFIG_LEN:
-                    sys.exit("  no config block in the reply")
-                byte = (blk[index] & ~mask) | (parse(value) & mask)
-            else:
-                byte = parse(value)
-            s.send_frame(b'\xB6' + bytes([index, byte & 0xFF]))
-            print("  %s = %s (byte %d <- 0x%02x)" % (name, value, index, byte & 0xFF))
+            byte = parse(value) & mask
+            s.send_frame(b'\xB6' + bytes([index, mask, byte]))
+            print("  %s = %s (byte %d, mask 0x%02x <- 0x%02x)" % (name, value, index, mask, byte))
         else:
             sys.exit("usage: config | config set NAME VALUE")
 

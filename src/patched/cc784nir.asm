@@ -554,7 +554,7 @@ QUERY_STATS          equ '4'         ; P30: BAUD_T, BAUD_STEP, BAUD_CAL_LAST, NM
 QUERY_CONFIG         equ '5'         ; P35: the 16-byte configuration block
 QUERY_SEQ            equ '6'         ; P35: SEQ_LIST, 104 bytes
 CMD_OTA              equ 0xb5        ; B5 c ... (patch 11)
-CMD_CONFIG           equ 0xb6        ; B6 index value (patch 35)
+CMD_CONFIG           equ 0xb6        ; B6 index mask value (patch 35); taken in the editor too
 CMD_EDITOR           equ 0xb7        ; B7 '1' opens the editor as a serial terminal, B7 '0' closes it (patch 45)
 DONE_BYTE            equ 0x04        ; sent after processing when the frame's flag was 81 (patch 16)
 
@@ -5862,14 +5862,15 @@ pkt_st_cksum:
         AND A
         LD A,REPLY_NAK
         JR nz,pkt_send_reply
-        LD A,(MENU_ACTIVE)      ; P45: while the editor is open only B7 is taken;
-        AND A                   ; anything else is answered BUSY and dropped
+        LD A,(MENU_ACTIVE)      ; P45: while the editor is open only B7 and B6 are
+        AND A                   ; taken; anything else is answered BUSY and dropped
         LD A,REPLY_ACK
         JR z,pkt_send_reply
         LD A,(PKT_BUF)
-        CP CMD_EDITOR
+        SUB CMD_CONFIG          ; B6 or B7
+        CP CMD_EDITOR-CMD_CONFIG+1
         LD A,REPLY_ACK
-        JR z,pkt_send_reply
+        JR c,pkt_send_reply
         LD A,REPLY_BUSY
 
 pkt_send_reply:
@@ -5903,7 +5904,7 @@ pkt_count:
         JR z,pkt_editor
         LD A,(MENU_ACTIVE)
         AND A
-        JR nz,pkt_discard       ; answered BUSY
+        JR nz,pkt_in_editor
         DEC A
         LD (PKT_READY),A        ; P21: the render loop picks it up at its next step
         INC A
@@ -5918,6 +5919,23 @@ pkt_discard_frame:
         XOR A
         LD (PKT_STATE),A
         RET
+
+; ---- pkt_in_editor: a B6 is applied here, since packets wait for the render loop;
+;      anything else was answered BUSY
+pkt_in_editor:
+        LD A,(PKT_BUF)
+        CP CMD_CONFIG
+        JR nz,pkt_discard
+        LD A,(PKT_LEN)
+        CP 4
+        JR nz,pkt_discard
+        LD A,(PKT_BUF+1)
+        LD C,A
+        LD HL,(PKT_BUF+2)
+        LD B,H
+        LD H,L
+        CALL cfg_write
+        JR pkt_discard
 
 ; ---- pkt_editor (P45): B7 '1' opens the editor as a serial terminal (or makes the
 ;      open one take serial keys), B7 '0' closes it as STOP would. ACK only, no DONE.
@@ -9370,42 +9388,47 @@ cmd_02_speed:
         LD (CUR_CHAR),A
         JR pkt_insert_one_jr23
 
-; ---- cmd_B6_config (P35): B6 index value -> the configuration block. The
-;      signature, the address and the sum are not writable; CFG_FLAGS keeps its
-;      live bits and takes only the brightness and mute bits.
+; ---- cmd_B6_config (P35): B6 index mask value -> the configuration block: only
+;      the bits in mask take value's. The signature, the address and the sum are
+;      not writable; CFG_FLAGS keeps its live bit.
 cmd_B6_config:
         CALL pkt_next_byte
         LD C,A
         CALL pkt_next_byte
+        LD H,A                  ; pkt_next_byte keeps BC and HL, not DE
+        CALL pkt_next_byte
         LD B,A
+        CALL cfg_write
+        JR pkt_next_jr19
+
+; ---- cfg_write: byte C of the block takes value B's bits where mask H has them
+cfg_write:
         LD A,C
         CP CFG_FLAGS-CFG
-        JR c,cfg_cmd_done
+        RET c
         CP CFG_LEN-1
-        JR nc,cfg_cmd_done
+        RET nc
+        LD C,H
         LD HL,CFG
         LD E,A
         LD D,0
         ADD HL,DE
         CP CFG_FLAGS-CFG
-        JR nz,cfg_store
-        LD A,(HL)
-        AND CFG_LIVE
-        LD C,A
-        LD A,B
+        JR nz,cfg_merge
+        LD A,C
         AND ~CFG_LIVE & 0xff
-        OR C
-        LD B,A
+        LD C,A
         XOR A
         LD (LIT_LIMIT),A        ; a brightness change: latch_row_dim re-arms, or not at full
         LD (LATCH_PENDING),A
 
-cfg_store:
-        LD (HL),B
-        CALL cfg_seal
-
-cfg_cmd_done:
-        JR pkt_next_jr19
+cfg_merge:
+        LD A,(HL)
+        XOR B
+        AND C
+        XOR (HL)
+        LD (HL),A
+        JP cfg_seal
 
 ; ---- cmd_B3_append: B3: move STORE_CURSOR to end of current channel.
 ;      B11: stock stepped back a second time when the byte before the 03 was a

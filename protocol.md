@@ -346,11 +346,11 @@ The sign's side of this protocol is read from the firmware itself, and lives in 
 | Topic | Where |
 |---|---|
 | 300 to 1200 baud, and 2560, set by the first frame after a second of silence | [patched.md](patched.md#2-patches), patches 30 and 52 |
-| The configuration block: `B6 index value` writes a byte, `B4 '5'` reads the block, `B4 '6'` the sequence list; `cc784.py config` | [patched.md](patched.md#2-patches), patch 35 |
+| The configuration block: `B6 index mask value` writes the masked bits of a byte, `B4 '5'` reads the block, `B4 '6'` the sequence list; `cc784.py config` | [patched.md](patched.md#2-patches), patch 35 |
 | Health counters in the `B4 '4'` reply; `cc784.py stats` | [patched.md](patched.md#2-patches), patches 40 and 44 |
 | The `B4 '1'` reply adds a third five-digit figure, the longest payload a frame may carry: 254, or 128 on a LITE build with 2 K of RAM. A longer frame is dropped unanswered. `cc784.py mem` | [patched.md](patched.md#2-patches), patches 13 and 51 |
 | Unsolicited status reports, `B1 addr 03 'S' channel flags sum`; `cc784.py watch` | [patched.md](patched.md#2-patches), patch 41 |
-| Frames only on the serial line: a flag byte of `80` or `81` and no gap of a second inside a frame; `18` (BUSY) while the editor is open; `B7 '1'` opens the editor as a serial terminal, `B7 '0'` closes it; `cc784.py stop` and `start` | [patched.md](patched.md#2-patches), patch 45 |
+| Frames only on the serial line: a flag byte of `80` or `81` and no gap of a second inside a frame; `18` (BUSY) while the editor is open, except for `B6`; `B7 '1'` opens the editor as a serial terminal, `B7 '0'` closes it; `cc784.py stop` and `start` | [patched.md](patched.md#2-patches), patch 45 |
 | Over-the-air updates, `B5` | [ota.md](ota.md) |
 
 Two consequences for a host, both covered in detail there: the NETCC-style status query (`17 32`) is a truncated set-time that does nothing useful (and stops the stock firmware's clock), so use QUERY MEMORY and QUERY DUMP instead; and after a RAM loss the stock firmware answers only at address 0 (the patched firmware at 1) until an address is set, so `0x2A` broadcast is the way to reach an unknown sign.

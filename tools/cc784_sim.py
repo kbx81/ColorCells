@@ -1491,7 +1491,7 @@ def cmd_status():
     s.send_frame(b'\x09\x30\x30\x0eONE\x09\x30\x31\x0eTWO\x04', addr=1); s.rx_wait(); s.run_ms(1000)
     s.tx_edges.clear(); s.run_ms(8000)
     check('off by default: nothing sent in 8 s (%s)' % s.tx_bytes().hex(), s.tx_bytes() == b'')
-    s.send_frame(bytes([0xB6, 2, 0x83]), addr=1); s.rx_wait(); s.run_ms(500)
+    s.send_frame(bytes([0xB6, 2, 0x80, 0x80]), addr=1); s.rx_wait(); s.run_ms(500)
     s.tx_edges.clear(); s.run_ms(12000)
     r = reports(s.tx_bytes())
     chans = [c for c, f in r]
@@ -1512,7 +1512,7 @@ def cmd_status():
     r = reports(s.tx_bytes())
     check('the editor opens: report FF (%s)' % r, r[:1] and r[0][0] == 0xFF)
     s.ir_key('STOP', stretch_us=100); s.ir_wait(); s.run_ms(3000)
-    s.send_frame(bytes([0xB6, 2, 0x03]), addr=1); s.rx_wait(); s.run_ms(500)
+    s.send_frame(bytes([0xB6, 2, 0x80, 0x00]), addr=1); s.rx_wait(); s.run_ms(500)
     s.tx_edges.clear(); s.run_ms(8000)
     check('off again: nothing sent (%s)' % s.tx_bytes().hex(), s.tx_bytes() == b'')
     check('no faults', not s.faults)
@@ -2041,13 +2041,13 @@ def cmd_field():
     p = play(b'05', b'\x5f \xb2\x33 \x5f')
     check('the clock before and after a field: %r' % p[:2], len(p) >= 2 and all(x.count(b':') == 2 and b' 72F ' in x for x in p))
     # status reports: one per channel start, none at a field's end
-    send(bytes([0xB6, 2, 0x83]))
+    send(bytes([0xB6, 2, 0x80, 0x80]))
     s.tx_edges.clear()
     n = len(play(b'00', b'TEMP \xb2\x33 NOW', 15000)) + 1
     tx = s.tx_bytes()
     r = [i for i in range(len(tx) - 6) if tx[i] == 0xB1 and tx[i + 3] == ord('S')]
     check('one status report per pass (%d reports, %d passes)' % (len(r), n), abs(len(r) - n) <= 1)
-    send(bytes([0xB6, 2, 0x03]))
+    send(bytes([0xB6, 2, 0x80, 0x00]))
     # loads while a field is drawn
     field = bytes(range(0x41, 0x5b)) * 2
     send(b'\x09\x39\x33\x0e' + field)
@@ -2118,8 +2118,8 @@ def cmd_field():
     keys('STOP', ms=1500)
     def idle_sp():
         sps = set()
-        for _ in range(40):
-            e.run_ms(5); sps.add(e.m.sp)
+        for _ in range(300):                        # every 1 ms: 5 ms steps alias with the display loop
+            e.run_ms(1); sps.add(e.m.sp)
         return max(sps)
     sp0, before, shown0 = idle_sp(), store(), len(label)
     keys('SHIFT', 'STOP', 'PROG')
@@ -2167,7 +2167,7 @@ def cmd_flush():
         for _ in range(ms):
             s.run_ms(1)
             cur = int.from_bytes(s.ram('STORE_CURSOR', 2), 'little')
-            if cur < prev: npass += 1
+            if cur + 2 < prev: npass += 1                   # a new pass, not the one-byte step back at a page's end
             prev = cur
             if npass == 3: break
             lit = any(b for b in panel(s) if not b & 0x80)
@@ -2248,11 +2248,11 @@ def cmd_lite():
                 i += 1
         return out
     s.send_frame(b'\x04\x35\x33', addr=1); s.rx_wait(); s.run_ms(300)
-    s.send_frame(bytes([0xB6, 2, 0x83]), addr=1); s.rx_wait(); s.run_ms(500)
+    s.send_frame(bytes([0xB6, 2, 0x80, 0x80]), addr=1); s.rx_wait(); s.run_ms(500)
     s.tx_edges.clear(); s.run_ms(12000)
     r = reports(s.tx_bytes())
     check('status reports at 300 baud: %s' % r, len(r) >= 4 and set(r) == {3, 5})
-    s.send_frame(bytes([0xB6, 2, 0x03]), addr=1); s.rx_wait(); s.run_ms(500)
+    s.send_frame(bytes([0xB6, 2, 0x80, 0x00]), addr=1); s.rx_wait(); s.run_ms(500)
     table = rom[syms['IR_KEY_TABLE']:syms['IR_KEY_TABLE'] + 62]
     code = lambda k: table[cc784_ir.key_index(k)]
     s.keypad = True
@@ -2293,8 +2293,8 @@ def cmd_config():
         return s.ram('CFG', 6)
     def valid(b):
         return b[0] == 0xA5 and (sum(b[:5]) - (b[2] & 0x40)) & 0xFF == b[5]
-    def setb(s, index, value, wait_ms=1500):
-        reply(s, bytes([0xB6, index, value]), wait_ms)
+    def setb(s, index, value, wait_ms=1500, mask=0xFF):
+        reply(s, bytes([0xB6, index, mask, value]), wait_ms)
     def passes(s, ms=1000):
         s.row_starts.clear(); s.run_ms(ms)
         first = sum(1 for t, p in s.row_starts if not p & 8)
@@ -2330,6 +2330,12 @@ def cmd_config():
     setb(s, 2, 0x02)
     b = cfg(s)
     check('B6 2 sets the flags, the wrapped bit outside the sum: flags %02x, sum valid' % b[2], b[2] & 0xBF == 0x02 and valid(b))
+    setb(s, 2, 0xFF, mask=0x30)
+    b1 = cfg(s)
+    setb(s, 2, 0x00, mask=0x20)
+    b2 = cfg(s)
+    check('the mask: B6 2 30 FF sets bits 4-5 only (%02x), B6 2 20 00 clears bit 5 only (%02x)' % (b1[2], b2[2]),
+          b1[2] & 0xBF == 0x32 and b2[2] & 0xBF == 0x12 and valid(b1) and valid(b2))
 
     # brightness: lit time, both passes still sent so no color loses a bit
     setb(s, 2, 0x03); d3 = duty(s); f3, s3 = passes(s)
@@ -2400,12 +2406,12 @@ def cmd_config():
     check('flash toggles %d times in 2 s at 5 frames, %d at 13 (want ~25 and ~9)' % (t5, t13), 20 <= t5 <= 30 and 7 <= t13 <= 12)
 
     # beeper off: a BEEP attribute does nothing
-    setb(s, 2, 0x13)
+    setb(s, 2, 0x10, mask=0x10)
     s.send_frame(b'\x09\x30\x30\x0e\x07BEEP\x04\x30\x30', addr=1, flag=0x80); s.rx_wait()
     beeped = False
     for _ in range(400):
         s.run_ms(10); beeped |= s.ram('BEEP_TICKS', 2) != b'\x00\x00'
-    setb(s, 2, 0x03)
+    setb(s, 2, 0x00, mask=0x10)
     s.send_frame(b'\x09\x30\x30\x0e\x07BEEP\x04\x30\x30', addr=1, flag=0x80); s.rx_wait()
     beeped_on = False
     for _ in range(400):
@@ -2413,13 +2419,22 @@ def cmd_config():
     check('beeper off: silent (%s); on: beeps (%s)' % (beeped, beeped_on), not beeped and beeped_on)
 
     # remote lock: STOP opens the editor only when unlocked
-    setb(s, 2, 0x23)
+    setb(s, 2, 0x20, mask=0x20)
     s.ir_key('STOP'); s.ir_wait(); s.run_ms(800)
     locked = s.ram('MENU_ACTIVE')[0]
-    setb(s, 2, 0x03)
+    setb(s, 2, 0x00, mask=0x20)
     s.ir_key('STOP'); s.ir_wait(); s.run_ms(800)
     opened = s.ram('MENU_ACTIVE')[0]
     check('remote lock: STOP ignored (%02x); unlocked: editor opens (%02x)' % (locked, opened), locked == 0 and opened == 0xFF)
+    # B6 is taken while the editor is open: ACKed and applied at once, the editor left open
+    s.tx_edges.clear()
+    s.send_frame(bytes([0xB6, 2, 0x10, 0x10]), addr=1, flag=0x80); s.rx_wait(); s.run_ms(1500)
+    ack = s.tx_bytes()[:1]
+    b = cfg(s)
+    s.send_frame(bytes([0xB6, 2, 0x10, 0x00]), addr=1, flag=0x80); s.rx_wait(); s.run_ms(1500)
+    b2 = cfg(s)
+    check('B6 in the editor: reply %s, beeper off (%02x) then on (%02x), sums valid, editor open (%02x)' % (ack.hex(), b[2], b2[2], s.ram('MENU_ACTIVE')[0]),
+          ack == b'\x06' and b[2] & 0x10 and not b2[2] & 0x10 and valid(b) and valid(b2) and s.ram('MENU_ACTIVE')[0] == 0xFF)
     s.send_frame(b'\xb7\x30', addr=1); s.rx_wait()  # leave the editor: B7 '0' (P45)
     for _ in range(50):
         if not s.ram('MENU_ACTIVE')[0]: break
@@ -2442,7 +2457,7 @@ def cmd_config():
     s.send_frame(b'\x04\x30\x30', addr=2, flag=0x80); s.rx_wait(); s.run_ms(2000)   # the sign now answers at 2
 
     # kept across a reset with RAM intact; defaults again when the sum is wrong
-    s.send_frame(bytes([0xB6, 2, 0x01]), addr=2, flag=0x80); s.rx_wait(); s.run_ms(2500)
+    s.send_frame(bytes([0xB6, 2, 0xFF, 0x01]), addr=2, flag=0x80); s.rx_wait(); s.run_ms(2500)
     kept = cfg(s)
     s2 = Sign(rom, syms, fresh_ram=True)
     s2.m.set_memory_block(0x4000, bytes(s.m.memory[0x4000:0x8000]))

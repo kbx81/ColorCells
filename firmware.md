@@ -157,7 +157,7 @@ The command bytes are named in the source (`CMD_*`); the docs use those names, w
 | COLOR_A0 | `1E n` | `cmd_1E_color_A0` | insert `A0 \| (n&15)` |
 | APPEND | `B3` | `cmd_B3_append` | insertion point → end of selected channel |
 | QUERY | `B4 c` | `cmd_B4_query` | `c` = ROMID `'0'`, MEMORY `'1'`, NOP `'2'`, DUMP `'3'` — **see bug B1** (patched: `'4'` timing and health counters, `'5'` configuration block, `'6'` sequence list, [patched.md](patched.md#2-patches) patches 30 and 35) |
-| CONFIG | `B6 i v` | — | *patched only*: writes byte `i` of the configuration block ([patched.md](patched.md#2-patches), patch 35) |
+| CONFIG | `B6 i m v` | — | *patched only*: writes the bits `m` selects in byte `i` of the configuration block ([patched.md](patched.md#2-patches), patch 35) |
 | (text) | other | `pkt_insert_text` | insert byte into the store at the cursor |
 
 The patched build adds more commands, listed in [protocol notes §7](protocol.md#7-the-signs-side).
