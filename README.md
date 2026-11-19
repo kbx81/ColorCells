@@ -96,7 +96,7 @@ Work happens on the **`wip`** branch; `main` is behind it. Check out `wip` for t
 The assembler is [sjasmplus](https://github.com/z00m128/sjasmplus); the tools run with `uv`.
 
 ```sh
-cd src/patched && sjasmplus cc784nir.asm                     # build
+(cd src/patched && sjasmplus cc784nir.asm)                   # build
 uv run tools/cc784_sim.py quiet                              # one regression; see ota.md §6 for the set
 uv run tools/cc784_ota.py pack src/patched/cc784nir_patched.bin -o src/patched/cc784nir_bank.bin
 uv run tools/cc784_ota.py push src/patched/cc784nir_bank.bin -p /dev/tty.usbserial-XXXX

@@ -13,7 +13,7 @@ What you need:
 
 ## 1. Hardware
 
-The ROM is an AT28C256 with three pins rewired: `/WE` to the Z80's `/WR` (with a pull-up), `/OE` to `/RD` because the socket ties `/OE` to `/CE` and that inhibits writes, and A14 to a bank register. The register is an added 74LS273 piggybacked on U5, written at `0xC000`: bit 0 is the EEPROM's A14, bits 1–2 are reserved for A15/A16 of a larger chip, the rest spare. Wiring, continuity checks and the first power-up are in [upgrades.md §2](upgrades.md#2-eeprom-and-bank-register).
+The ROM is an AT28C256 with three pins rewired: `/WE` to the Z80's `/WR` (with a pull-up), `/OE` to `/RD` because the socket ties `/OE` to `/CE` and that inhibits writes, and A14 to a bank register. The register is an added 74LS273 piggybacked on U5, written at `0xC000`: bit 0 is the EEPROM's A14, bits 1–2 are reserved for A15/A16 of a larger chip, bit 7 selects the clock source (`BANK_CLOCK_XTAL`, patch 31), the rest spare. Wiring, continuity checks and the first power-up are in [upgrades.md §2](upgrades.md#2-eeprom-and-bank-register).
 
 The register is separate from U5 because U5 is cleared by the board's watchdog whenever interrupts stop for 512 µs, which happens during every OTA command; a bank bit there would swap the ROM under the running code. The register's `/MR` is on the Z80's `/RESET`, so every reset, power-on included, starts in bank 0.
 
@@ -34,7 +34,7 @@ ROM `/CE` is gated by `/MREQ`, so only memory accesses to `0x0000–0x3FFF` reac
 
 **Stub rule:** the stub never changes over the air. The `W` command refuses pages 0–8, `push` refuses an image whose stub pages differ from the sign's, and the stub references nothing in the application except the jump table, so application changes never alter its bytes. A stub change needs the T48.
 
-**RAM used:** `7FFC–7FFF` (`NMI_VEC`, `NMI_MAGIC`, `ROM_BANK`) and `7FF0` (`NMI_SEEN`, set by every mains NMI since reset), which the stock 6264 mirrors from `5Fxx`. The page writer and the bank-touching routines run from `FRAMEBUF` (`4000`), which is idle while a packet is processed. The boot copy of the whole library is longer than `FRAMEBUF` and overwrites `RAM_VARS+00..81`, so nothing that must survive a reset may live there; an `ASSERT` in the source holds the line at `STORE_END`. No message-store space is used.
+**RAM used:** `7FFC–7FFF` (`NMI_VEC`, `NMI_MAGIC`, `ROM_BANK`) and `7FF0` (`NMI_SEEN`, set by every mains NMI since reset), which the stock 6264 mirrors from `5Fxx`. The page writer and the bank-touching routines run from `FRAMEBUF` (`4000`), which is idle while a packet is processed. The boot copy of the whole library is longer than `FRAMEBUF` and overwrites `RAM_VARS+00..81`, so nothing that must survive a reset may live there; an `ASSERT` in the source holds the line at `SEQ_LIST`. No message-store space is used.
 
 ## 3. Boot
 
@@ -76,7 +76,7 @@ Sent inside the normal packet frame (`B1 addr 81 len payload cksum`), addressed;
 **Build and pack** (`Build patched ROM` then `Pack OTA image`, or):
 
 ```
-cd src/patched && sjasmplus cc784nir.asm
+(cd src/patched && sjasmplus cc784nir.asm)
 uv run tools/cc784_ota.py pack src/patched/cc784nir_patched.bin \
     -o src/patched/cc784nir_bank.bin --t48 src/patched/cc784nir_chip.bin
 ```
@@ -98,7 +98,7 @@ uv run tools/cc784_ota.py push src/patched/cc784nir_bank.bin -p <port>          
 
 **`confirm`** marks the running image GOOD. **`rollback`** gives the running bank a lower sequence number than the other and reboots: the previous image is back in ten seconds with nothing transferred, as long as the next push hasn't overwritten it yet. **`info`** shows both banks.
 
-`--all` skips `C` and sends every page (about 12 min at 1200 baud). Use it when the sign runs a build older than the `ota_copy` fix of patch 35: on those, a mains NMI during `C` runs the idle image's NMI handler (§8), which is harmless only while the two images agree on `nmi_entry` and the clock variables.
+`--all` skips `C` and sends every page (about 12 min at 300 baud). Use it when the sign runs a build older than the `ota_copy` fix of patch 35: on those, a mains NMI during `C` runs the idle image's NMI handler (§8), which is harmless only while the two images agree on `nmi_entry` and the clock variables.
 
 **What a push costs:** the diff is against the idle bank, which holds the image from *two* pushes ago, so a push carries the union of the last two changes. An inserted byte shifts everything after it, so a code edit early in the file is typically a 100-page push (~5 min); an edit in the data at the end of the bank is one page. An interrupted push can simply be run again: `C` finds the pages already written.
 
@@ -128,7 +128,7 @@ Everything above is modeled in `tools/cc784_sim.py` (AT28C256 with banks, page t
 | `uv run tools/cc784_sim.py baud` | a cold sign follows the host at 300, 600, 1200 and 2560; replies come back at that rate; a rate change after a pause is followed; 1200 holds over interrupt periods from 126 to 134 µs thanks to the calibration and on a DC supply; 2560 holds within 0.5 % of the period, on a DC supply and on a skewed, jittered line; 300-baud bare bytes still work. `update 1200` and `push 1200` run those gates at a rate |
 | `uv run tools/cc784_sim.py fuzz [N]` | N power cuts at random instants of an update; every reboot must land in a verified bank |
 
-The `OTA: emulator regression` task runs the nine fast ones.
+The `OTA: emulator regression` task runs `eeprom`, `ota`, `update`, `push`, `ram`, `quiet`, `speed`, `baud`, `clock`, `config`, `keypad` and `seq`.
 
 ## 7. Not built
 

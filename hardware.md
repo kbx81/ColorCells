@@ -129,7 +129,7 @@ The pull-ups R6–R9 are 3.9 k on the `CC784-3A`, 3.3 k on the `CC784-4`.
 
 **Serial.** The factory cable is the crossover: sign 3 → PC 2, **sign 8 → PC 3**, and sign 2 and 5 → PC 5. Levels: TTL out of the LS244 on the outputs; pin 8 is the one input with a proper RS-232 clamp (negative swing shunted by D9, so bit 3 reads 1 during space). Polarity as the firmware sees it: `PORT_IN` bit 3 = 1 during space; `CTRL_LATCH` bit 4 = 1 drives space. 300 baud, 8 data, no parity; sign checks 1 stop bit, sends ~2.
 
-Working setups (both verified with live ACKs): USB-RS232 adapter + crossover; [ESPHome serial proxy](https://esphome.io/components/serial_proxy/) via `cc784_esphome.py` (aioesphomeapi 46.4.x). A MAX3232 is the faithful interface; direct 3.3 V TTL with software inversion would probably work through the 220 Ω but is unverified. On a `CC784-3A`, a 10-pin IDC socket to a DB9 male ([§5, step 3](#step-3-host-cable)) takes the same cable.
+Working setups (both verified with live ACKs): USB-RS232 adapter + crossover; [ESPHome serial proxy](https://esphome.io/components/serial_proxy/) via `cc784_esphome.py` (aioesphomeapi 46.4.x). A MAX3232 is the faithful interface; direct 3.3 V TTL with software inversion would probably work through the 270 Ω but is unverified. On a `CC784-3A`, a 10-pin IDC socket to a DB9 male ([§5, step 3](#step-3-host-cable)) takes the same cable.
 
 **The CC710's roles** differ, from [firmware notes §15](firmware.md#15-the-cc710-firmware-h--from-a-rom-dump-id-710):
 

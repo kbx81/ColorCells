@@ -33,7 +33,7 @@ TXBUF                equ RAM_VARS+0x009   ; the effect staging frame (86 columns
 STAGE_PTR            equ RAM_VARS+0x05f   ; next free column in TXBUF while an effect stages text
 STAGE_OFFSET         equ RAM_VARS+0x062   ; centering offset of the staged text (free columns / 2)
 ROW_PORT             equ RAM_VARS+0x064   ; port group for the row data: 40 first pass, 48 second
-BEEP_TICKS           equ RAM_VARS+0x065   ; beeper on while non-zero (port bit 5); beep_start loads BEEP_LEN
+BEEP_TICKS           equ RAM_VARS+0x065   ; beeper on while non-zero (port bit 5); fx_beep loads BEEP_LEN
 CLK_H10              equ RAM_VARS+0x067
 CLK_H1               equ RAM_VARS+0x068
 CLK_SEC              equ RAM_VARS+0x06b
@@ -47,13 +47,13 @@ SCROLLING            equ RAM_VARS+0x074   ; FF while the output window is catchi
 CUR_CHAR             equ RAM_VARS+0x075
 FB_OUT_PTR           equ RAM_VARS+0x079   ; first column sent to the panel (start of the output window)
 DISP_ON              equ RAM_VARS+0x07b   ; 0 suppresses row output (effects rewrite FRAMEBUF meanwhile)
-CLK_RENDER_STEP      equ RAM_VARS+0x07c   ; clock (5F) render step 0..8; FF = finished
+CLK_RENDER_STEP      equ RAM_VARS+0x07c   ; clock (5F) render step 0..8; 0 again when finished
 CLK_RENDER_PTR       equ RAM_VARS+0x07d   ; clock render: next CLK_ digit to emit
 MENU_ACTIVE          equ RAM_VARS+0x07f
 INS_PTR              equ RAM_VARS+0x080
 MAGIC_MODE           equ RAM_VARS+0x082   ; FF from MAGIC (1F) until a color byte or the next channel
 WINDOW_COLOR         equ RAM_VARS+0x083   ; last color byte at the output window start (bit 4 = flash)
-COL_COUNT            equ RAM_VARS+0x084   ; columns still free in the staging frame; 0 = no staging (LEFT)
+COL_COUNT            equ RAM_VARS+0x084   ; staged columns the effect copies (FRAME_COLS while staging); 0 = no staging (LEFT)
 FRAME_COUNT          equ RAM_VARS+0x085   ; frames since LATCH_BIT7 last toggled (mod 13)
 FLASH_BIT            equ RAM_VARS+0x086   ; 0x10 while the current word flashes; OR-ed into color bytes
 LATCH_BIT7           equ RAM_VARS+0x087   ; 00/80 toggled every 13 frames, OR-ed into CTRL_LATCH bit 7
@@ -67,7 +67,7 @@ PREV_KEY             equ RAM_VARS+0x08e   ; editor key history (written, never r
 PREV_KEY2            equ RAM_VARS+0x08f   ; editor key history (written, never read)
 RX_BYTE              equ RAM_VARS+0x090
 IR_KEY_CHAR          equ RAM_VARS+0x091   ; key being read; translated through the CHARSET_ tables
-KEY_TIMER            equ RAM_VARS+0x092   ; counts down each tick: keypad debounce pacing in editor_getkey and editor_exit
+KEY_TIMER            equ RAM_VARS+0x092   ; counts down each frame: keypad debounce pacing in editor_getkey and editor_exit
 CTRL_LATCH_SHADOW    equ RAM_VARS+0x095
 FB_OUT_LEN           equ RAM_VARS+0x098   ; bytes to send from FB_OUT_PTR before wrapping to FRAMEBUF
 FB_EXTRA_LEN         equ RAM_VARS+0x09a   ; bytes to send from FRAMEBUF after the wrap
@@ -101,7 +101,7 @@ SEQ_MENU_ACTIVE      equ RAM_VARS+0x14f   ; FF while the SEQ MSG? dialogue runs
 SHIFT_STATE          equ RAM_VARS+0x150   ; SHIFT latch, toggled by key code 19
 PREV_SPACE           equ RAM_VARS+0x151   ; 1 = previous char was a space (two in a row reset the background)
 FONT_MODE            equ RAM_VARS+0x152   ; bit 1 BOLD, bit 2 ITALIC, bit 3 BIG
-TINY_MODE            equ RAM_VARS+0x153   ; FF = glyphs go to the tiny buffer (menus, TINY)
+TINY_MODE            equ RAM_VARS+0x153   ; FF = glyphs drawn plain, no bold/big/italic (menus, editor labels)
 FORCE_BOLD           equ RAM_VARS+0x154   ; editor redraw: FF = effect text is drawn bold
 NMI_COUNT            equ RAM_VARS+0x155
 STORE_TMP            equ RAM_VARS+0x157
@@ -494,7 +494,7 @@ frame_bit7_set:
 frame_done:
         NOP
 
-; ---- rx_consume: input, once per tick. Serial mode (INPUT_MODE non-zero): pop RX_FIFO
+; ---- rx_consume: input, once per frame. Serial mode (INPUT_MODE non-zero): pop RX_FIFO
 ;      through rx_fifo_get, which translates the byte; keypad mode: rx_keypad
 rx_consume:
         LD A,(INPUT_MODE)
@@ -881,7 +881,7 @@ init_copy_tables:
         RET
 
 ; ---- INIT_DATA: three RAM images copied by init_vars: +0..+8 -> FB_COLPTR..BGRND_PENDING;
-;      +9..+0x68 (96 bytes) -> STAGE_PTR..RX_STATE+1; +0x6B..+0x86 (28 bytes) ->
+;      +9..+0x68 (96 bytes) -> STAGE_PTR..REDRAW_PTR+1; +0x6B..+0x86 (28 bytes) ->
 ;      SEQ_MENU_ACTIVE..ROW_OUT_PENDING. +0x69..+0x6A are copied nowhere. The frame geometry
 ;      is 86 columns (0x56)
 INIT_DATA:
@@ -1782,7 +1782,7 @@ fbcol_next:
         LD (COL_COUNT),A
         JP render_next_char
 
-; ---- fx_up: 1A: effect 2, fxv_wipe_updown reveals the stage row by row from the top
+; ---- fx_up: 1A: effect 2, fxv_wipe_updown reveals the stage row by row from the bottom
 fx_up:
         XOR A
         LD (SCROLLING),A
@@ -1792,7 +1792,7 @@ fx_up:
         LD HL,fxv_wipe_updown
         JP set_effect_vector
 
-; ---- fx_down: 1B: reveal the staged text row by row from the bottom
+; ---- fx_down: 1B: reveal the staged text row by row from the top
 fx_down:
         XOR A
         LD (SCROLLING),A
@@ -2291,9 +2291,9 @@ rx_byte_done:
         LD (RX_STATE),HL
         RET
 
-; ---- rx_fifo_get: pop one FIFO byte into RX_BYTE. A received 00 resets the sign. The editor
-;      takes bytes raw; outside it 01 -> 35 (STOP/START), 7E passes, everything else is
-;      popped and reported as 0
+; ---- rx_fifo_get: pop one FIFO byte into RX_BYTE. A 00 at the head would reset the sign, but
+;      rx_st_stop_bit queues none. The editor takes bytes raw; outside it 01 -> 35
+;      (STOP/START), 7E passes, everything else is popped and reported as 0
 rx_fifo_get:
         LD A,(RX_COUNT)
         AND A
@@ -2699,7 +2699,7 @@ editor_dispatch:
         JP z,editor_loop
         JP editor_insert
 
-; ---- store_finalize: Fix up MSG_STORE terminators after an edit
+; ---- store_finalize: STORE_END = address of the DA that ends the store (retries until found)
 store_finalize:
         LD A,MARK_HI
         LD HL,MSG_STORE
@@ -2739,7 +2739,7 @@ exit_echo_cr:
         JR nz,exit_echo_cr
         JP exit_to_display
 
-; ---- exit_wait_release: keypad: restart the two-tick no-key count
+; ---- exit_wait_release: keypad: restart the no-key wait (KEY_TIMER = 2)
 exit_wait_release:
         LD A,2
         LD C,A
@@ -3243,7 +3243,7 @@ seqmenu_clear:
         LD HL,SEQ_LIST
         LD (SEQ_PTR),HL
 
-; ---- seqmenu_check_full: 32 entries -> ' SEQ FULL ' and ignore
+; ---- seqmenu_check_full: 32 entries -> ' SEQUENCE FULL' and ignore
 seqmenu_check_full:
         LD A,(EDIT_KEY)
         LD (CUR_CHAR),A
@@ -3301,7 +3301,7 @@ seqmenu_other_key:
 
 ; ---- editor_getkey: serial mode: echo the previous key if KEY_ECHO_TX, then take RX_BYTE as
 ;      the key, raw ASCII, no charset lookup. Keypad mode: wait for release, then a code
-;      stable on two consecutive ticks (KEY_TIMER paces the samples), 19 toggles SHIFT, else
+;      stable on two consecutive frames (KEY_TIMER paces the samples), 19 toggles SHIFT, else
 ;      translate through CHARSET_LOWER/UPPER/UPPER2/LOWER2 by SHIFT_STATE and CAPS_LOCK
 editor_getkey:
         LD A,(INPUT_MODE)
@@ -3328,7 +3328,7 @@ getkey_serial:
         NOP
         JP getkey_history
 
-; ---- getkey_wait_release: keypad: two consecutive ticks with no key down
+; ---- getkey_wait_release: keypad: one frame's scan with no key down
 getkey_wait_release:
         LD A,2
         LD C,A
@@ -3351,7 +3351,7 @@ getkey_release_poll:
         JR getkey_wait_release
 
 ; ---- getkey_wait_key: then wait for a key code that reads the same on two consecutive
-;      ticks (debounce)
+;      frames (debounce)
 getkey_wait_key:
         XOR A
         LD (RX_BYTE),A
@@ -3430,7 +3430,7 @@ getkey_lookup:
         LD (SHIFT_STATE),A
 
 ; ---- getkey_history: PREV_KEY2/PREV_KEY shift, EDIT_KEY = key, KEY_ECHO_TX = key (echoed
-;      on the next call in serial modes)
+;      on the next call in serial mode)
 getkey_history:
         LD A,(PREV_KEY)
         LD (PREV_KEY2),A
@@ -4228,7 +4228,7 @@ STR_END:
 STR_CRAWL:
         db "<CRAWL>",0x00
 
-; ---- MSG_TOP_TABLE: 32 pointers indexed by channel, then zeros; show_top_of_msg puts the
+; ---- MSG_TOP_TABLE: 32 entries by channel, 11 pointers then zeros; show_top_of_msg puts the
 ;      entry into MENU_MSG_PTR. These are also ATTR_LABEL_TABLE entries D0-DF, so a marker in
 ;      the editor view shows the title of its channel
 MSG_TOP_TABLE:

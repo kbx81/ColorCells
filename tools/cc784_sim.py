@@ -78,7 +78,7 @@ on the patched build), a keypad's column code on bits 0-2 and GS on bit 3,
 CTRL_LATCH bit 4 = serial TX (1 = space). The stack watch counts only writes at
 SP, so store shuffles next to the stack do not register.
 
-The ROM is an AT28C256 with the OTA bodges (ota.md §2): /WE on Z80 /WR,
+The ROM is an AT28C256 with the OTA bodges (ota.md §1): /WE on Z80 /WR,
 /OE on /RD, A14..A16 from BANK_REG, a '273 written at C000 and zero at reset.
 Page writes, the 150 us byte-load timer, the 10 ms write cycle (every ROM read
 returns the status byte; an instruction fetch then is a fault) and software
@@ -1347,7 +1347,7 @@ def cmd_baud():
 
 def cmd_clock():
     """P31: the NMI source. With no mains NMI through the boot the firmware selects the
-    add-in board's 64 Hz through BANK_REG bit 1 and counts 64 a second; the bit is
+    add-in board's 64 Hz through BANK_REG bit 7 and counts 64 a second; the bit is
     put back after the OTA library drops it. P32: the 24-hour clock."""
     import cc784_ota
     rom, syms = assemble(HERE.parent / 'src' / 'patched')

@@ -206,7 +206,7 @@ def push(sign, bank, seq=None, dry_run=False, trial=False, all_pages=False):
     print('%d pages to send, ~%d s' % (len(pages), len(pages) * 3))
     if dry_run:
         return
-    ota.status(b'\xb5B', 'begin')          # from here the panel shows UPDATING
+    ota.status(b'\xb5B', 'begin')          # from here the panel shows >FW ^<
     try:
         _send_pages(ota, bank, pages, seq)
     except Exception:

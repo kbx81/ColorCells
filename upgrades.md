@@ -1,6 +1,6 @@
 # CC784 — upgrades and modifications
 
-Changes to the `CC784-4` controller board, each independent of the others. An earlier `CC784-3A` board (the CC710's) first needs the conversion in [hardware.md §5](hardware.md#5-converting-a-cc784-3a-board-to-a-cc784-4).
+Changes to the `CC784-4` controller board, each independent of the others. An earlier `CC784-3A` board (the CC710's and the original CC784's) first needs the conversion in [hardware.md §5](hardware.md#5-converting-a-cc784-3a-board-to-a-cc784-4).
 
 | Upgrade | Gives | Parts |
 |---|---|---|
@@ -77,7 +77,7 @@ A second 74LS273 piggybacked on U5, the `8000` control latch: same pinout, so D0
 - [ ] Pin 1 (`/MR`) → Z80 pin 26 (`/RESET`).
 - [ ] Pin 11 (clock) → U4 pin 9.
 - [ ] Pin 2 (Q0) → EEPROM socket pin 1, the wire above.
-- [ ] Pins 5, 6, 9, 12, 15, 16, 19 (Q1–Q7): free, insulated (Kapton) or at least bent well clear of the IC is sits on.
+- [ ] Pins 5, 6, 9, 12, 15, 16, 19 (Q1–Q7): free, insulated (Kapton) or at least bent well clear of the IC it sits on.
 
 **All**
 
@@ -121,9 +121,9 @@ Do the dry run even if you only ever intend to run the image from this repo: wit
       ```
       uv run tools/cc784_ota.py push src/patched/cc784nir_bank.bin -p <port> -n
       ```
-      Expect `running bank 0: {'seq': 1, 'state': 3, …}`, `idle bank 1: {'seq': 0, …}` and `0 pages to send`. The same seq for both banks means pin 1 never moved: both reads landed in bank 0.
-- [ ] The same command without `-n`: no error from `finish`, a pause, then `OK: running bank 1, {'seq': 2, …}`. The demo keeps playing.
-- [ ] Push again: `OK: running bank 0, {'seq': 3, …}`. Both banks have been written and booted.
+      Expect `bank 0 (running): seq 1, GOOD, …`, `bank 1 (idle   ): seq 0, …` and `0 pages to send`. The same seq for both banks means pin 1 never moved: both reads landed in bank 0.
+- [ ] The same command without `-n`: no error from `finish`, a pause, then `OK` and `bank 1 (running): seq 2, GOOD, …`. The demo keeps playing.
+- [ ] Push again: `OK` and `bank 0 (running): seq 3, GOOD, …`. Both banks have been written and booted.
 - [ ] Power-cycle. The sign comes back on bank 0, the newest sequence.
 
 ESPHome bridge: `-H <host> -k <key>` instead of `-p <port>`.
@@ -145,7 +145,7 @@ An AS6C62256 (32 K, 16 K reachable) in place of the HY6264. The firmware detects
 
 ## 4. NET to NIR
 
-The CC784NET is the same board with a 4 MHz crystal, the original interrupt gating, no IR parts and a keypad on the DB9 ([hardware.md §2.3](hardware.md#23-timebase-h) and §6). The NIR firmware, and the patched one, need the NIR timebase.
+The CC784NET is the same board with a 4 MHz crystal, the original interrupt gating, no IR parts and a keypad on the DB9 ([hardware.md §2.3](hardware.md#23-timebase-h) and §3.1). The NIR firmware, and the patched one, need the NIR timebase.
 
 - [ ] Crystal Y1: 4 MHz out, **8.000 MHz** in.
 - [ ] Cut the track from U14 pin 1 to U10 pin 12; bridge U10 pins 12 and 13. The interrupt is now Q11 of the HC4020 alone, the 7812.5 Hz tick.

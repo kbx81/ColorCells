@@ -51,7 +51,7 @@ Every transmission to the sign is one frame:
 |---|---|
 | `0xB1` | Start of frame (constant) |
 | `addr` | Sign address as a **binary byte** (as set in the sign's address menu/configuration). `0x2A` (`*`) is used as the broadcast "all signs" address; the program does not wait for an ACK when using it. |
-| `0x80` | Flag. Stock firmware processes the packet immediately if it is exactly `0x80`, else defers it to the main loop (see §7). The [patched firmware](patched.md) processes every packet at its next render step whatever bit 7 says, and bit 0 asks for DONE: with `0x81` the sign sends a `0x04` byte once the packet has been processed and its reply sent, which is the moment it will accept a new frame; a frame sent before that is parsed and ignored. |
+| `0x80` | Flag. Stock firmware processes the packet immediately if it is exactly `0x80`, else defers it to the main loop (see §7). The [patched firmware](patched.md) takes only `0x80` and `0x81` (any other value means the `B1` was no header), processes every packet at its next render step, and bit 0 asks for DONE: with `0x81` the sign sends a `0x04` byte once the packet has been processed and its reply sent, which is the moment it will accept a new frame; a frame sent before that is parsed and ignored. |
 | `len` | Number of payload bytes that follow (does **not** include the checksum) |
 | payload | 1–254 bytes, see §4 |
 | `cksum` | **8-bit additive checksum: sum of all payload bytes, modulo 256.** The 4 header bytes are excluded. No inversion, no two's-complement. |
@@ -115,7 +115,7 @@ Control bytes used by the CC784 build (the NC900 build uses different ones):
 | remark | `0xB0` | `0x13` | hidden comment delimiter |
 | clear-all | `0x03` | – | clear all channels |
 
-Channels are `00`–`99`, always written as **two ASCII digits** (the patched firmware also takes one digit after `09` when the next byte is not a digit, or when the pair is past the last channel; its LITE build has channels `0`–`9` and wants one digit each in a sequence, [patched.md](patched.md#2-patches) patch 51); the sign stores them as a two-byte marker `D0+tens D0+units`. Channel 100 is the read-only built-in demo. All channels share one 6625-byte pool (no per-channel limit). **A channel header (CHANNEL, `09 d d`) must be followed by DELETE_TEXT (`0E`, replace) or APPEND (`B3`) before any text** — on its own it leaves the insertion point on the channel marker and the text would corrupt it. The names are the firmware source's `CMD_*` constants; §7.3 lists them all.
+Channels are `00`–`99`, always written as **two ASCII digits** (the patched firmware also takes one digit after `09` when the next byte is not a digit, or when the pair is past the last channel; its LITE build has channels `0`–`9` and wants one digit each in a sequence, [patched.md](patched.md#2-patches) patch 51); the sign stores them as a two-byte marker `D0+tens D0+units`. Channel 100 is the read-only built-in demo. All channels share one 6625-byte pool (no per-channel limit). **A channel header (CHANNEL, `09 d d`) must be followed by DELETE_TEXT (`0E`, replace) or APPEND (`B3`) before any text** — on its own it leaves the insertion point on the channel marker and the text would corrupt it. The names are the firmware source's `CMD_*` constants; [firmware notes §6](firmware.md#6-packet-processing-and-command-set-pkt_process-2a68-h) lists them all.
 
 ### 4.1 Load a message into a channel
 
@@ -144,7 +144,7 @@ Trailer variants the program uses (after the body):
 Example (address 1, channel 0, text `HELLO`, no remark, display it):
 
 ```
-B1 01 80 0C | 09 30 30 0E 48 45 4C 4C 4F 04 30 30 | 9F
+B1 01 80 0C | 09 30 30 0E 48 45 4C 4C 4F 04 30 30 | 4F
 ```
 
 ### 4.2 Clear a channel
@@ -173,7 +173,7 @@ The patched firmware also takes `04 'M'`: the message channels 00–89, leaving 
 17  H H  M M  a
 ```
 
-`HH` = hour **1–12** (zero padded, ASCII), `MM` = minutes (ASCII), `a` = `'Y'` for AM, `'N'` for PM. Only the time is sent; the CC784 has no date command in this program (*the NC900 build sends a longer binary date/time record*).
+`HH` = hour **1–12** (zero padded, ASCII), `MM` = minutes (ASCII), `a` = `'Y'` for AM, `'N'` for PM (the stock NET firmware takes `'A'` for AM instead, as the CC710 does, §8). Only the time is sent; the CC784 has no date command in this program (*the NC900 build sends a longer binary date/time record*).
 
 Example 9:41 AM → `17 30 39 34 31 59` → frame `B1 01 80 06 17 30 39 34 31 59 <sum>`.
 
@@ -372,7 +372,7 @@ The ten-channel CC710 ([firmware notes §15](firmware.md#15-the-cc710-firmware-h
 - It must be put into packet mode at boot: the probe (data out on SK1 pin 5, clock on pin 4, sampled on pin 9) has to echo the `55` pattern (an inverting echo yields address `*`; other replies give `~D`, and the fallback path gives `D5`, a firmware bug); the NET cable's plain short of DB9 pins 2 and 5 (SK1 pins 9 and 2) gives serial *terminal* mode instead, where bytes are key codes. Without an adapter, holding `1`, `7` or `U` on the keypad at power-up also selects packet mode, with address `*`; holding `Z` + `1` takes the keep path instead, whose bug alternates the address between `D5` and `*` on successive boots [H].
 - The transmitter waits for SK1 pins 8 and 7 (DB9 pins 1 and 6) high and the receiver raises SK1 pin 4 (DB9 pin 4) as "ready", dropped while its 8-byte FIFO is full.
 - Query `0` returns six ID bytes (`71009l`); query `2` returns the first `B0` remark of each of channels 0–9, 20 bytes maximum each, separated by `19`; the checksum counts each `19` as `B0`, so a sign with no remarks replies `B1 2A 0A`, ten `19`, `E0` [H].
-- `09 c` takes one byte (`0`–`9`, `D` demo), `04` one byte per channel (ten at most), `17 hhmm a` takes `A`/`a` for AM, `03` clears ten channels. Channel markers in a dump are single bytes `D0`–`D9`.
+- `09 c` takes one byte (`0`–`9`, `D` demo), `04` one byte per channel (32 at most), `17 hhmm a` takes `A`/`a` for AM, `03` clears ten channels. Channel markers in a dump are single bytes `D0`–`D9`.
 - Attributes: HOLD `BB`, RAINBOW `BC`, MAGIC OFF `BD` and TINY `BE` do not exist; the sign names `06` PAUSE, `19` JUMP, `18` CRAWL and `0F` BCRAWL.
 - At address `*` (the keypad route) the sign never ACKs, since frames to `*` get no reply; queries still answer [H].
 - `cc784.py --channels 10` sends one-digit channel numbers and reads the one-byte markers in a dump [H]. With it, `time` sends `A`/`P` instead of the CC784's `Y`/`N`; `time24` is refused.

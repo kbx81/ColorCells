@@ -48,7 +48,7 @@ DISP_ON              equ RAM_VARS+0x07a   ; 0 suppresses row output (effects rew
 MENU_ACTIVE          equ RAM_VARS+0x07f
 INS_PTR              equ RAM_VARS+0x080
 MAGIC_MODE           equ RAM_VARS+0x082   ; FF between MAGIC (1F) and MAGIC OFF (BD)
-COL_COUNT            equ RAM_VARS+0x084   ; columns still free in the staging frame; 0 = no staging (LEFT)
+COL_COUNT            equ RAM_VARS+0x084   ; 86 while an effect stages text, the columns used once flushed; 0 = no staging (LEFT)
 ROW_COLOR            equ RAM_VARS+0x08a   ; color byte sent ahead of each row
 QUERIES_ENABLED      equ RAM_VARS+0x08b   ; FF = serial mode (mode_test saw the PC cable), 0 = keypad mode; gates the serial engines and the queries
 EDIT_KEY             equ RAM_VARS+0x08d   ; key/character the editor is processing (0 = none)
@@ -152,7 +152,7 @@ GLYPH_BUF            equ RAM_VARS+0x13e   ; working copy of the glyph (bold/plai
 GLYPH_BUF_ITALIC     equ RAM_VARS+0x15e   ; sheared copy for ITALIC, 32 bytes
 GLYPH_BUF_BIG        equ RAM_VARS+0x17e   ; widened copy for BIG, 32 bytes
 SEQ_MENU_ACTIVE      equ RAM_VARS+0x19e   ; FF while the SEQ MSG? dialogue runs
-SHIFT_STATE          equ RAM_VARS+0x19f   ; SHIFT latch, toggled by key 29 (see section 9)
+SHIFT_STATE          equ RAM_VARS+0x19f   ; SHIFT latch, toggled by key 19 (getkey_shift_check)
 PREV_SPACE           equ RAM_VARS+0x1a0   ; 1 = previous char was a space (two in a row reset the background)
 FORCE_BOLD           equ RAM_VARS+0x1a3   ; editor redraw: FF = effect text is drawn bold (unless THIN)
 REDRAW_FROM          equ RAM_VARS+0x1ac   ; editor redraw: first byte actually displayed (cursor-21, >= INS_PTR)
@@ -312,8 +312,8 @@ NMI_VECTOR:
 
 ; ---- main_loop: if PKT_READY process the packet, else init/render/effect step, then
 ;      loop. The PKT_READY test runs ONCE on entry: render_loop never falls back here.
-;      Re-entry only happens via fx_end_of_channel at the end of a display cycle, or the
-;      BA wait-for-key spin (pkt_restart). That is why NETCC sets PKT_FLAG=0x80: deferred
+;      Re-entry only happens via fx_end_of_channel at the end of a display cycle (the BA
+;      spin's pkt_restart exit is dead here). That is why NETCC sets PKT_FLAG=0x80: deferred
 ;      packets wait for the current channel to finish, which can be many seconds.
 main_loop:
         LD A,(PKT_READY)
@@ -860,7 +860,7 @@ clr_lock_loop:
         DJNZ clr_lock_loop
         RET
 
-; ---- chan_select: Select channel E: find/create its slot in MSG_STORE, set INS_PTR/STORE_CURSOR
+; ---- chan_select: Select channel A: find its slot in MSG_STORE; HL -> its text, A = 0 (FF if absent)
 chan_select:
         CP CHAN_DEMO
         JR nz,chan_marker
@@ -1769,8 +1769,8 @@ attr_wait_check:
 wait_for_key:
         CALL fb_colors_default
 
-; ---- wait_loop: spin until a packet arrives (serial mode, QUERIES_ENABLED=FE) or the
-;      SPACE key (code 8)
+; ---- wait_loop: spin until the SPACE key (code 8); the packet exit needs
+;      QUERIES_ENABLED=FE, which store_init never writes (FF or 0)
 wait_loop:
         LD A,(QUERIES_ENABLED)
         CP 0xfe
@@ -2607,7 +2607,7 @@ fx_pause:
         LD HL,fxv_pause
         JP set_effect_vector
 
-; ---- fx_up: 1A: reveal the staged text row by row from the top
+; ---- fx_up: 1A: reveal the staged text row by row from the bottom
 fx_up:
         XOR A
         LD (SCROLLING),A
@@ -2617,7 +2617,7 @@ fx_up:
         LD HL,fxv_wipe_updown
         JP set_effect_vector
 
-; ---- fx_down: 1B: reveal the staged text row by row from the bottom
+; ---- fx_down: 1B: reveal the staged text row by row from the top
 fx_down:
         XOR A
         LD (SCROLLING),A
@@ -3032,7 +3032,7 @@ tiny_row_out:
         LD (CTRL_LATCH_SHADOW),A
         LD (CTRL_LATCH),A
 
-; ---- disp_blank_row: Send 0x8F (all off) to the current row
+; ---- disp_blank_row: Send the color byte 0x8F and the TINY frame to the current row
 disp_blank_row:
         LD HL,FRAMEBUF_TINY+31
         LD B,FRAME_COLS
@@ -3386,7 +3386,7 @@ SENTINEL_AA:
 SENTINEL_55:
         db 0x55
 
-; ---- mode_test: PC-cable detect. HALT syncs to a tick with the ISR disarmed, then 16
+; ---- mode_test: PC-cable detect. HALT syncs to a tick with the ISR disarmed, then 15
 ;      clocks of the 0x55 pattern in C go out on CTRL_LATCH bit 6 (DB9 pin 7) with bit 5
 ;      (pin 4) as the clock, sampling PORT_IN bit 0 (pin 2) after each clock into DE.
 ;      Returns E = the last 8 samples: 0 means the cable's pin 2-5 short is present.
@@ -3417,8 +3417,8 @@ mode_sample0:
         RL E
         RL D
 
-; ---- mode_bit_loop: next pattern bit from C: 50 = data high, 10 = data low (bit 4 keeps
-;      TX at mark)
+; ---- mode_bit_loop: next pattern bit from C: 50 = data high, 10 = data low (bit 4 holds
+;      TX at space)
 mode_bit_loop:
         RLC C
         LD A,0x50
@@ -3465,7 +3465,7 @@ tx_try_queue:
         XOR A
         RET
 
-; ---- tx_bit_engine: Called every 6 ticks: shifts TX_SHIFT out on CTRL_LATCH bit 4 (1=start/space, 0=mark). Bit times from TX_TIMING table (4,4,5 ticks); state 9 = stop bits (10 ticks)
+; ---- tx_bit_engine: Called every tick (serial mode): shifts TX_SHIFT out on CTRL_LATCH bit 4 (1=start/space, 0=mark). Bit times from TX_TIMING table (4,4,5 ticks); state 9 = stop bits (10 ticks)
 tx_bit_engine:
         LD HL,TX_STATUS
         BIT 0,(HL)
@@ -3537,7 +3537,7 @@ tx_idle:
         RES 0,(HL)
         RET
 
-; ---- rx_bit_engine: Called every 6 ticks: bit-banged receiver state machine on PORT_IN bit 3 (1 = space). Uses RX_TIMING table; assembled bytes go to RX_FIFO (8 deep, RX_COUNT)
+; ---- rx_bit_engine: Called every tick (serial mode): bit-banged receiver state machine on PORT_IN bit 3 (1 = space). Uses RX_TIMING table; assembled bytes go to RX_FIFO (8 deep, RX_COUNT)
 rx_bit_engine:
         LD A,(RX_COUNT)
         CP 8
@@ -3577,11 +3577,11 @@ rx_st_wait_start:
         LD (RX_SHIFT),A
         RET
 
-; ---- data 164a-1653: ticks between RX bit samples (start,8 data,stop)
+; ---- data 14f5-14fe: ticks between RX bit samples (start,8 data,stop)
 RX_TIMING:
         db 0x06,0x04,0x05,0x04,0x04,0x05,0x04,0x04,0x05,0x04
 
-; ---- data 1654-165d: ticks per TX bit: start,8 data (4,4,5 pattern = 300 baud @ ~1300 Hz), stop = 10
+; ---- data 14ff-1508: ticks per TX bit: start,8 data (4,4,5 pattern = 300 baud @ ~1300 Hz), stop = 10
 TX_TIMING:
         db 0x04,0x04,0x05,0x04,0x04,0x05,0x04,0x04,0x05,0x0a
 
@@ -4023,7 +4023,7 @@ dec_digit_loop:
         INC IY
         JR bin_to_dec_iy
 
-; ---- data 18e8-18f3: 10000,1000,100,10,1,-1 for bin_to_dec5
+; ---- data 17b0-17bb: 10000,1000,100,10,1,-1 for bin_to_dec5
 DEC_TABLE:
         dw 0x2710
         dw 0x03e8
@@ -4033,7 +4033,7 @@ DEC_TABLE:
 
         ds 0x17bc-$,0xff
 
-; ---- clock_tick: NMI: NMI_COUNT to NMI_PER_SEC -> seconds -> minutes -> hours (12h, CLK_PM toggles)
+; ---- clock_tick: NMI: NMI_COUNT to 60 -> seconds -> minutes -> hours (12h, CLK_PM toggles)
 clock_tick:
         LD A,(CLK_RUN)
         AND A
@@ -4206,7 +4206,7 @@ clrglyph_loop:
         db 0x32,0xc7,0x43,0xf1,0x21,0xbb,0x43,0xbe,0x28,0x11,0xfe,0x2a,0x28,0x0d,0xc3,0x00
         db 0x00
 
-; ---- key_handler: Handle a key / IR code: menu navigation (ADDRESS?, TIME?, PROG MSG?, SEQ MSG? ...)
+; ---- key_handler: Handle STOP/START (35) from the keypad or serial: menu navigation (ADDRESS?, TIME?, PROG MSG?, SEQ MSG? ...)
 key_handler:
         LD A,0xff
         LD (CAPS_LOCK),A
@@ -4236,7 +4236,7 @@ editor_wait_release:
         AND A
         JR nz,editor_wait_release
 
-; ---- editor_start: leave the test message if it was showing, select the channel, clear
+; ---- editor_begin: leave the test message if it was showing, select the channel, clear
 ;      the lock
 editor_begin:
         LD A,(TEST_MODE)
@@ -4500,7 +4500,7 @@ newmsg_seq_loop:
         LD (MAGIC_MSG_CHAN),A
         RET
 
-; ---- store_finalize: Fix up MSG_STORE terminators after an edit
+; ---- store_finalize: STORE_END = the DA store terminator (restart if there is none)
 store_finalize:
         LD A,MARK_HI
         LD HL,MSG_STORE
@@ -5147,7 +5147,7 @@ editor_reshow:
         JP nz,editor_loop
         JP show_top_of_msg
 
-; ---- data 207b-2086:
+; ---- data 1ef3-1eff:
 STR_TOP_OF_MSG:
         db " TOP OF MSG "
         db 0x00
@@ -5740,7 +5740,7 @@ delete_do:
         JP show_top_of_msg
         db 0xc3,0x75,0x19
 
-; ---- cursor_right: 0E: one byte right, stepping over a channel marker
+; ---- cursor_right: 0A: one byte right, stepping over a channel marker
 cursor_right:
         LD HL,(STORE_CURSOR)
         LD A,(HL)
@@ -6045,11 +6045,11 @@ prefix_back_lookup:
         LD (BGRND_PENDING),A
         RET
 
-; ---- data 2718-2721: cmd 15 n: foreground color codes (Red,Orange,Yellow,Lime,Green,84,8E,Black,8B,81)
+; ---- data 24ee-24f7: cmd 15 n: foreground color codes (Red,Orange,Yellow,Lime,Green,84,8E,Black,8B,81)
 FG_IDX_TABLE:
         db 0x8c,0x8d,0x8f,0x87,0x83,0x84,0x8e,0x80,0x8b,0x81
 
-; ---- data 2722-2727: cmd 16 n: background color codes
+; ---- data 24f8-24fd: cmd 16 n: background color codes
 BG_IDX_TABLE:
         db 0x91,0x93,0x93,0x93,0x92,0x90
 
@@ -6118,7 +6118,7 @@ redraw_classify:
         JR z,redraw_attr
         JP redraw_char_check
 
-; ---- redraw_class_high: bytes 80-93 are color attributes; 9E-BF, C0-CF, E0-EF and GRAPH
+; ---- redraw_class_high: bytes 80-93 are color attributes; 94-9D, C0-CF, E0-EF and GRAPH
 ;      are characters
 redraw_class_high:
         LD A,(CUR_CHAR)
@@ -6364,7 +6364,7 @@ magicmsg_digits:
         DJNZ magicmsg_digits
         JR status_shift_msg
 
-; ---- data 2979-2987:
+; ---- data 2744-2752:
 STR_MAGIC_MSG:
         db "    MAGIC MSG ",0x00
 
@@ -6735,7 +6735,7 @@ cmd_0E_delete_text:
 ; ---- cmd_B4_query: B4 n: '0' rom id, '1' memory, '2' nop, '3' dump
 ;      B1: the EI below plus the query -> tx_send_frame -> tx_send_byte ->
 ;      tx_try_queue chain (~40 bytes deep) leaves too little of the stock
-;      64-byte stack for an interrupt frame + tick6_service + rx_consume.
+;      64-byte stack for an interrupt frame + int_timer + rx_consume.
 ;      Fixed by the relocated stack in the patched build.
 cmd_B4_query:
         CALL clear_framebuf
@@ -6788,12 +6788,12 @@ cmd_16_back_idx:
         LD (CUR_CHAR),A
         JP pkt_insert_text
 
-; ---- cmd_17_set_time: 17 h h m m a: 4 ASCII digits -> CLK_H10..CLK_M1, a=Y/y -> AM else PM.
-;      B2: CLK_RUN is cleared here but restored only at 0x2C59, and every
+; ---- cmd_17_set_time: 17 h h m m a: 4 ASCII digits -> CLK_H10..CLK_M1, a=A/a -> AM else PM.
+;      B2: CLK_RUN is cleared here but restored only at 0x2A1F, and every
 ;      pkt_next_byte below can jump straight to pkt_process_done on a short
 ;      packet - NETCC's "status query" 17 32 does exactly that and stops the
 ;      clock. Fixed in pkt_process_done in the patched build.
-;      Unlike the menu's time editor (0x1D14..0x1D8A) this path does not reset
+;      Unlike the menu's time editor (menu_time) this path does not reset
 ;      NMI_COUNT, so the new time starts up to one second out of phase.
 cmd_17_set_time:
         XOR A
@@ -6975,7 +6975,7 @@ is_ignored_byte:
         XOR A
         RET
 
-; ---- data 2d57-2d60: payload bytes silently ignored by the parser
+; ---- data 2b1a-2b23: payload bytes silently ignored by the parser
 IGNORE_TABLE:
         db 0x00,0x01,0x05,0x08,0x0a,0x0b,0x0c,0x1c,0x1d,0x7f
         db 0x00
@@ -7131,7 +7131,7 @@ MENU_STR_SEQ_FULL:
         db "E",0x16,0x00,0x15,"M-RED",0x16,0x00,0x15,"D-ORA",0x16,0x00,0x15,"M-YEL",0x16,0x00,0x15,"LEMON",0x16,0x00,0x15,"RED",0x16,0x00,0x15,"ORANGE",0x16,0x00,0x15,"GOLD",0x16,0x00,0x15,"YE"
         db "LLOW",0x16,0x00,0x15,"S0",0x16,0x00,0x15,"S1",0x16,0x00,0x15,"S2",0x16,0x00,0x15,"S3",0x16,0x00,0x15,"S4",0x16,0x00,0x15,"S5",0x16,0x00,0x15,"S6",0x16,0x00,0x15,"S7",0x16,0x00,0x15,"TINY",0x16,0x00
 
-; ---- data 3135-382c: 8 bytes per glyph: 7 column bytes + width byte (see glyph_lookup)
+; ---- data 2ef8-3467: 8 bytes per glyph: 7 column bytes + width byte (see glyph_lookup)
 FONT:
         db 0x1c,0x14,0x14,0x77,0x22,0x14,0x08,0x07   ; glyph   0 width 7
         db 0x08,0x14,0x22,0x77,0x14,0x14,0x1c,0x07   ; glyph   1 width 7
@@ -7312,7 +7312,7 @@ FONT:
 ;      store_fix_bad_bytes (substitutes 0x3F for the character), bit 1 by the message
 ;      scanners to decide whether a byte is printable text. Rendered as part
 ;      of FONT by the original disassembly, but it is not glyph data - FONT
-;      holds glyphs 0..190 and this table begins immediately after.
+;      holds glyphs 0..173 and this table begins immediately after.
 CHAR_FLAGS:
         db 0x07,0x07,0x07,0x02,0x07,0x07,0x02,0x02,0x07,0x07,0x07,0x07,0x07,0x07,0x07,0x02 ; char 00-0f
         db 0x02,0x02,0x02,0x02,0x02,0x00,0x00,0x00,0x02,0x02,0x02,0x02,0x07,0x07,0x07,0x02 ; char 10-1f
@@ -7375,10 +7375,10 @@ CHARSET_LOWER2:
         db "ojbce",0xb7,0x0f,0x16                    ; 30-37  o j b c e B7 RIGHT BGRND
         db 0x0b,0x0c,"1473ur"                        ; 38-3f  0B 0C 1 4 7 3 u r
 
-; ---- CHARSET_EURO: EUROPE modifier active. 47 accented Latin characters in
-;      94-9E, C0-CF, DC-DF, E0-EF - the demo text advertises "PROGRAMS 47
-;      EUROPEAN CHARACTERS" and the editor displays "EURO" while this layer is
-;      live (0x2928). Not graphics: built-in graphics are the 1E GRAPH
+; ---- CHARSET_EURO: EUROPE modifier active. 42 accented Latin characters in
+;      94-9D, C0-CF, E0-EF (this ROM's demo text does not mention them);
+;      the editor displays "EURO" while this layer is
+;      live (status_not_func). Not graphics: built-in graphics are the 1E GRAPH
 ;      attribute, user-drawn ones the B8 DRAW attribute.
 CHARSET_EURO:
         db 0xca,0xc5,0x12,0xcf,0xc0,0x0e,0x11,0x1e

@@ -11,7 +11,7 @@
     uv run tools/cc784_lint.py --field 3=72F "IT IS @{field 3}"  # a field's value for the widths
 
 The rules read the bytes; the page widths come from the patched firmware itself, run
-in the emulator at both panel widths (86 columns, and the CC710's 60). Each finding is
+in the emulator at both frame widths (86 columns, and the CC710's 60). Each finding is
 'error', 'warn' or 'info'; the exit status is 1 if any error was found. Rules are the
 functions in RULES: each takes the parsed message and yields findings."""
 import sys, argparse, pathlib, tempfile

@@ -45,12 +45,12 @@ DISP_ON              equ RAM_VARS+0x07a   ; 0 suppresses row output (effects rew
 MENU_ACTIVE          equ RAM_VARS+0x07f
 INS_PTR              equ RAM_VARS+0x080
 MAGIC_MODE           equ RAM_VARS+0x082   ; FF between MAGIC (1F) and MAGIC OFF (BD)
-COL_COUNT            equ RAM_VARS+0x084   ; columns still free in the staging frame; 0 = no staging (LEFT)
+COL_COUNT            equ RAM_VARS+0x084   ; 86 while an effect stages text, the columns used once flushed; 0 = no staging (LEFT)
 ROW_COLOR            equ RAM_VARS+0x08a   ; color byte sent ahead of each row
 QUERIES_ENABLED      equ RAM_VARS+0x08b   ; FF after boot; gates query_dispatch
 EDIT_KEY             equ RAM_VARS+0x08d   ; key/character the editor is processing (0 = none)
 RX_BYTE              equ RAM_VARS+0x090
-SPARE_TIMER          equ RAM_VARS+0x092   ; decremented in tick6_exit, never set: dead
+SPARE_TIMER          equ RAM_VARS+0x092   ; decremented in tick6_exit, only ever written 0: dead
 CTRL_LATCH_SHADOW    equ RAM_VARS+0x095
 FB_OUT_LEN           equ RAM_VARS+0x098   ; bytes to send from FB_OUT_PTR before wrapping to FRAMEBUF
 FB_EXTRA_LEN         equ RAM_VARS+0x09a   ; bytes to send from FRAMEBUF after the wrap
@@ -71,7 +71,7 @@ SEQ_LIST             equ RAM_VARS+0x0d3
 SEQ_PTR              equ RAM_VARS+0x13b
 SEQ_ALL_EMPTY        equ RAM_VARS+0x13d   ; 10 = every listed channel is empty, play the demo
 FONT_MODE            equ RAM_VARS+0x1a1   ; bit 1 BOLD, bit 2 ITALIC, bit 3 BIG
-TINY_MODE            equ RAM_VARS+0x1a2   ; FF = glyphs go to the tiny buffer (menus, TINY)
+TINY_MODE            equ RAM_VARS+0x1a2   ; FF = glyph drawn plain, no bold/big/italic (menu text, editor labels)
 NMI_COUNT            equ RAM_VARS+0x1a4
 STORE_TMP            equ RAM_VARS+0x1a6
 MOVE_DST             equ RAM_VARS+0x1a8
@@ -294,7 +294,7 @@ restart_display:
 ; ---- pad to 0x0038, the Z80's fixed IM 1 interrupt vector
         ds 0x0038-$,0xff
 
-; ---- INT_VECTOR: IM1 interrupt entry (periodic timer, ~1300 Hz)
+; ---- INT_VECTOR: IM1 interrupt entry (periodic timer, 7812.5 Hz)
 INT_VECTOR:
         JP int_timer
 
@@ -785,7 +785,7 @@ seq_all_empty:
 
 ; ---- seq_next_channel: pick the channel to display next: NEXT_CHAN once, else the
 ;      next SEQ_LIST entry (demo 100 when SEQ_ALL_EMPTY); seat STORE_CURSOR on its
-;      first printable byte, or on TEST_MSG_BUF in TEST_MODE
+;      first byte if it has printable text, or on TEST_MSG_BUF in TEST_MODE
 seq_next_channel:
         LD A,(TEST_MODE)
         INC A
@@ -903,7 +903,7 @@ clr_lock_loop:
         DJNZ clr_lock_loop
         RET
 
-; ---- chan_select: Select channel E: find/create its slot in MSG_STORE, set INS_PTR/STORE_CURSOR
+; ---- chan_select: Select channel A: find its slot in MSG_STORE; HL = its text, A = 0 (FF = not found)
 chan_select:
         CP CHAN_DEMO
         JR nz,chan_marker
@@ -1683,7 +1683,7 @@ stage_centre:
         RET
 
 ; ---- char_to_glyph: Map a character code to a font glyph index
-;      (CHARSET_LOWER..CHARSET_EURO select upper/lower/tiny fonts)
+;      (C0, D0, E0 and 90 rows index their own FONT blocks: glyphs 128, 175, 144, 160)
 char_to_glyph:
         PUSH AF
         AND 0xf0
@@ -2699,7 +2699,7 @@ fx_pause:
         LD HL,fxv_pause
         JP set_effect_vector
 
-; ---- fx_up: 1A: reveal the staged text row by row from the top
+; ---- fx_up: 1A: reveal the staged text row by row from the bottom
 fx_up:
         XOR A
         LD (SCROLLING),A
@@ -2709,7 +2709,7 @@ fx_up:
         LD HL,fxv_wipe_updown
         JP set_effect_vector
 
-; ---- fx_down: 1B: reveal the staged text row by row from the bottom
+; ---- fx_down: 1B: reveal the staged text row by row from the top
 fx_down:
         XOR A
         LD (SCROLLING),A
@@ -3123,7 +3123,7 @@ tiny_row_out:
         LD (CTRL_LATCH_SHADOW),A
         LD (CTRL_LATCH),A
 
-; ---- disp_blank_row: Send 0x8F (all off) to the current row
+; ---- disp_blank_row: Send the color byte 0x8F, then the tiny frame, to the current row
 disp_blank_row:
         LD HL,FRAMEBUF_TINY+31
         LD B,FRAME_COLS
@@ -3574,7 +3574,7 @@ ir_start_count:
         POP AF
         RET
 
-; ---- ir_st_bits: sample a data bit (port C0 bit1) into IR_SHIFT every 4 ticks
+; ---- ir_st_bits: sample a data bit (port C0 bit1) into IR_SHIFT every 8 ticks; complement checked 4 ticks later
 ir_st_bits:
         PUSH AF
         LD A,(IR_STATE_CNT)
@@ -4691,7 +4691,7 @@ newmsg_seq_loop:
         LD (MAGIC_MSG_CHAN),A
         RET
 
-; ---- store_finalize: Fix up MSG_STORE terminators after an edit
+; ---- store_finalize: STORE_END = address of the DA that ends the store
 store_finalize:
         LD A,MARK_HI
         LD HL,MSG_STORE
@@ -6687,7 +6687,7 @@ hold_wait_frames:
         JR nz,hold_wait_frames
         RET
 
-; ---- menu_show_text: Render the NUL-terminated string at MENU_TEXT_PTR in tiny font
+; ---- menu_show_text: Render the NUL-terminated string at MENU_TEXT_PTR in the plain font
 menu_show_text:
         LD HL,(MENU_TEXT_PTR)
         LD A,(TINY_MODE)
@@ -6889,7 +6889,7 @@ pkt_ins_check_full:
         LD HL,(STORE_TMP)
         LD (STORE_END),HL
         CALL store_make_room
-        ; B7: the tail is shifted from STORE_LIMIT rather than STORE_END, so
+        ; B8: the tail is shifted from STORE_LIMIT rather than STORE_END, so
         ; every inserted byte moves the whole remaining store (~6.9 KB) with
         ; interrupts off instead of just the live text. STORE_END was bumped
         ; at 0x2B37, so it is already the new end-of-store and everything
@@ -7234,7 +7234,7 @@ is_ignored_byte:
 IGNORE_TABLE:
         db 0x00,0x01,0x05,0x08,0x0a,0x0b,0x0c,0x1c,0x1d,0x7f
 
-; ---- data 2d61-2ff2: 16-bit pointers/data for big glyphs & graphics (0x2E00-0x2FF0)
+; ---- data 2d61-2ff2: editor label tables and their strings
 ; ============================================================================
 ;  Editor label tables (2D61-2FF2). Previously disassembled as an unnamed
 ;  "GLYPH_PTR_TABLE" of raw hex; it holds no glyph pointers. Each table maps
@@ -7540,7 +7540,7 @@ STR_SPEED_7:
 STR_TINY:
         db 0x15,"TINY",0x16,0x00
 
-; ---- data 3135-382c: 8 bytes per glyph: 7 column bytes + width byte (see glyph_lookup)
+; ---- data 3135-372c: 8 bytes per glyph: 7 column bytes + width byte (see glyph_lookup)
 FONT:
         db 0x1c,0x14,0x14,0x77,0x22,0x14,0x08,0x07           ; glyph   0 width 7
         db 0x08,0x14,0x22,0x77,0x14,0x14,0x1c,0x07           ; glyph   1 width 7

@@ -44,7 +44,7 @@ editor is open, however it was opened, every other frame but a config write
 (B6) is answered BUSY (18).
 Stock firmware takes a bare 01 and 0D instead.
 
-Wiring notes: the sign transmits on DB9 pin 3 and receives on pin 2 (DTE-like),
+Wiring notes: the sign transmits on DB9 pin 3 and receives on pin 8,
 so a PC needs a crossover. If 'sniff' shows nothing and 'id' gets no reply, swap
 TX/RX. The sign only ACKs frames sent to its own address; a broadcast ('*')
 frame is processed but never answered - except the B4 queries, which always reply.
@@ -548,7 +548,7 @@ def run(link, a, ap):
     elif c in ('time', 'time24'):
         # the protocol carries no seconds, and the sign starts the new minute at
         # :00 (patch 23), so the frame is timed to be processed on the minute:
-        # 7 bytes on the wire take 0.23 s
+        # 11 bytes on the wire take 0.4 s at 300 baud
         now = datetime.datetime.now()
         target = (now + datetime.timedelta(minutes=1)).replace(second=0, microsecond=0)
         wait = (target - now).total_seconds() - 0.3

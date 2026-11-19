@@ -42,7 +42,7 @@ FRAMEBUF_TINY        equ FRAMEBUF+2*FRAME_COLS-1   ; TINY line buffer inside the
 RAM_VARS             equ FRAMEBUF+FRAMEBUF_SIZE
 FRAMEBUF_END         equ RAM_VARS         ; the column ring ends where the variables begin
 TXBUF                equ RAM_VARS+0x000   ; reply frames, and the effect staging frame (86 columns)
-STAGE_END            equ TXBUF+FRAME_COLS ; end of the staging frame (STAGE_PTR itself on the CC784)
+STAGE_END            equ TXBUF+FRAME_COLS ; end of the staging frame (FB_COLPTR itself on the CC784)
 ; ---- IMAGE: the variables with a non-zero boot value; init_vars copies INIT_DATA over them
 IMAGE                equ RAM_VARS+0x056
 FB_COLPTR            equ RAM_VARS+0x056   ; frame-buffer write pointer (next glyph column)
@@ -53,11 +53,11 @@ STORE_CURSOR         equ RAM_VARS+0x05e
 CLK_RUN              equ RAM_VARS+0x060   ; set on every boot by the init image copy
 CUR_COLOR            equ RAM_VARS+0x061   ; a color byte's low 7 bits: COLOR_FG, COLOR_FLASH, COLOR_BG
 DISP_ON              equ RAM_VARS+0x062   ; 0 suppresses row output (effects rewrite FRAMEBUF meanwhile)
-COL_COUNT            equ RAM_VARS+0x063   ; columns still free in the staging frame; 0 = no staging (LEFT)
-LATCH_BIT7           equ RAM_VARS+0x064   ; 00/80 toggled every 13 frames, OR-ed into CTRL_LATCH bit 7
+COL_COUNT            equ RAM_VARS+0x063   ; FRAME_COLS while an effect stages text, the columns used once flushed; 0 = no staging (LEFT)
+LATCH_BIT7           equ RAM_VARS+0x064   ; 00/80 toggled every CFG_FLASH frames, OR-ed into CTRL_LATCH bit 7
 FLUSH_PENDING        equ RAM_VARS+0x065   ; FF = staged text must be shown before the next effect runs
 BAUD_T               equ RAM_VARS+0x066   ; P30: the 300-baud bit in fifths of an interrupt, calibrated from the NMI, 128 by default (was RX_TIMING_PTR)
-BAUD_STEP            equ RAM_VARS+0x067   ; P30: fifths of an interrupt per interrupt at the current rate: 5, 10 or 20 (was TX_TIMING_PTR)
+BAUD_STEP            equ RAM_VARS+0x067   ; P30: fifths of an interrupt per interrupt at the current rate: 5, 10, 20 or 40 (was TX_TIMING_PTR)
 BAUD_CAL_LAST        equ RAM_VARS+0x068   ; P30: the previous second's tick count, for the agreement test
 RX_IDLE              equ RAM_VARS+0x069   ; P30: frames since the last start bit, held at 255 (was TX_BITMASK)
 CAPS_LOCK            equ RAM_VARS+0x06a
@@ -81,7 +81,7 @@ MAGIC_COLOR_SET      equ RAM_VARS+0x077   ; magic mode: color set by an attribut
 REDRAW_MAGIC         equ RAM_VARS+0x078   ; editor redraw: MAGIC seen, font resets at each word
 MAGIC_FONT_SET       equ RAM_VARS+0x079   ; magic mode: font set by an attribute, skip the random pick
 RND_VAL              equ RAM_VARS+0x07a   ; magic mode: words until the next color change
-FRAME_DELAY          equ RAM_VARS+0x07b   ; frames to hold before the next column step (1, 3 or 0x50)
+FRAME_DELAY          equ RAM_VARS+0x07b   ; frames to hold before the next column step (1, 3, 4 or CFG_HOLD)
 FLASH_PENDING        equ RAM_VARS+0x07c   ; 0x10 after FLASH until the next printable char
 TEXT_DRAWN           equ RAM_VARS+0x07d   ; FF once a printable char has been drawn since init_render
 RAINBOW_IDX          equ RAM_VARS+0x07e   ; RAINBOW per-char color index 1..RAINBOW_N, 0 = off; bit 7 = P28 reverse
@@ -89,7 +89,7 @@ RAINBOW_REVERSE      equ 0x80
 RAINBOW_N            equ 5           ; RAINBOW's colors, at most 7
 SCROLL_SPEED         equ RAM_VARS+0x07f   ; 0..7 from F0-F7; blank ticks inserted after every frame
 FORCE_BOLD           equ RAM_VARS+0x080   ; editor redraw: FF = effect text is drawn bold (unless THIN)
-TINY_MODE            equ RAM_VARS+0x081   ; FF = glyphs go to the tiny buffer (menus, TINY)
+TINY_MODE            equ RAM_VARS+0x081   ; FF = menu text: glyphs drawn without bold/big/italic
 FONT_MODE            equ RAM_VARS+0x082   ; bit 1 BOLD, bit 2 ITALIC, bit 3 BIG
 THIN_MODE            equ RAM_VARS+0x083   ; non-zero after THIN (B9): no bold in effects
 RENDER_ZERO_LEN      equ BGRND_PENDING-RENDER_ZERO
@@ -107,7 +107,7 @@ CLK_RENDER_PTR       equ RAM_VARS+0x093   ; clock render: next CLK_ digit to emi
 MENU_ACTIVE          equ RAM_VARS+0x095
 INS_PTR              equ RAM_VARS+0x096
 WINDOW_COLOR         equ RAM_VARS+0x098   ; last color byte at the output window start (bit 4 = flash)
-FRAME_COUNT          equ RAM_VARS+0x099   ; frames since LATCH_BIT7 last toggled (mod 13)
+FRAME_COUNT          equ RAM_VARS+0x099   ; frames since LATCH_BIT7 last toggled (mod CFG_FLASH)
 COLOR_PENDING        equ RAM_VARS+0x09a   ; editor: COLOR key pressed, next key is the color digit
 GRAPH_PENDING        equ RAM_VARS+0x09b   ; editor: GRAPH key pressed, next key selects A0-AF
 ROW_COLOR            equ RAM_VARS+0x09c   ; color byte sent ahead of each row
@@ -265,7 +265,7 @@ PORT_IN              equ 0xc0
 ; Stock: SP=0x403F leaves only 64 bytes before 0x4000, which is ROM - pushes
 ; below it are swallowed and the matching pops read ROM back.  Worst observed
 ; demand is ~120 bytes (B4 query chain ~40 + tick6_service with rx_consume ~40
-; + int/NMI frames), hence bug B1.  Patched: 256-byte stack at 0x5DF0..0x5EEF,
+; + int/NMI frames), hence bug B1.  Patched: STACK_SIZE bytes below STACK_TOP,
 ; carved off the top of the message store so nothing else has to move.
 STACK_TOP_2K         equ RAM_TOP-0x10 ; P51: LITE on a 2 K chip: the stack in the buffer's top half
 PKT_MAX_FULL         equ 254         ; longest payload: PKT_BUF+255 is NMI_SEEN
@@ -452,7 +452,7 @@ FX_SCROLL            equ 4           ; added after B2: UP, DOWN, RIGHT scroll in
 FX_STEP_FRAMES       equ 3           ; frames each step of a wipe or scroll shows
 SCROLL_IN            equ 96          ; a scroll's incoming page: this far up the ring
 EURO_LO              equ 0x94        ; 94-9F: Euro characters after the four backgrounds
-EURO_ROW_C           equ 0xc0        ; Euro rows C0-CF, DB-DF (D0-DA are markers), E0-EF
+EURO_ROW_C           equ 0xc0        ; Euro rows C0-CF, DC-DF (D0-DA are markers), E0-EF
 EURO_ROW_D           equ 0xd0
 EURO_ROW_E           equ 0xe0
 EURO_ROW_9           equ 0x90        ; 94-9F, after the backgrounds
@@ -599,7 +599,7 @@ OTA_FEATURES         equ 0x05           ; 'I' reply byte 21: bit 0 = DONE handsh
         org 0x0000
 
 ; ============================================================================
-;  BOOT STUB 0000-00FF (ota.md §4). Byte-identical in both banks and
+;  BOOT STUB 0000-023F (ota.md §2). Byte-identical in both banks and
 ;  written by the T48 only: the OTA handler refuses its pages. It may reference
 ;  nothing in the app except the fixed jump table below, so that app changes
 ;  never change its bytes.
@@ -758,7 +758,7 @@ pw_load:
 pw_settle:
         DEC C
         JR nz,pw_settle
-        LD HL,0x1800            ; poll timeout, ~30 ms
+        LD HL,0x1800            ; poll timeout, ~40 ms
 
 pw_poll:
         LD A,(DE)
@@ -1134,7 +1134,7 @@ render_loop:
         CALL pkt_poll
         CALL render_next_char
         CALL crawl_step
-        ; LD A,(nn) sets no flags, so this JR tests effect_step's exit flags,
+        ; LD A,(nn) sets no flags, so this JR tests crawl_step's exit flags,
         ; not MAGIC_MODE. A is loaded for whatever runs after the branch.
         LD A,(MAGIC_MODE)
         JR nz,render_loop
@@ -1165,7 +1165,7 @@ pkt_poll:
         POP AF
         RET
 
-; ---- tick6_service: Runs every 6 timer ticks: serial RX/TX bit engines, countdowns, display column refresh & flashing, then the RX byte consumer.
+; ---- tick6_service: Runs every 6 timer ticks: countdowns, a waiting reply's start, display column refresh & flashing, then the RX byte consumer.
 tick6_service:                  ; nothing it runs touches IX or IY
         PUSH AF
         PUSH BC
@@ -1600,7 +1600,7 @@ rx_ir_stop_key:
 
 key_handler_jr1:
         LD A,(TEST_MODE)        ; P43: no editor while an update is under way:
-        INC A                   ; the remote, the keypad and a serial 01 all end here
+        INC A                   ; the remote and the keypad both end here
         JP nz,key_handler
         LD (IR_CODE),A          ; the key is used up
         LD (RX_BYTE),A
@@ -1747,7 +1747,7 @@ seq_one_loop:
 
 ; ---- seq_next_channel: pick the channel to display next: NEXT_CHAN once, else the
 ;      next SEQ_LIST entry (demo 100 when SEQ_ALL_EMPTY); seat STORE_CURSOR on its
-;      first printable byte, or on TEST_MSG_BUF in TEST_MODE
+;      text if any of it is printable, or on TEST_MSG_BUF in TEST_MODE
 seq_next_channel:
         CALL chan_boundary      ; P35: once per message; the retries below skip it
 
@@ -1854,7 +1854,7 @@ chan_lock_store:
         LD (CHAN_LOCK),A
         RET
 
-; ---- chan_open: select channel E for editing: INS_PTR after its marker, the
+; ---- chan_open: select channel A = E for editing: INS_PTR after its marker, the
 ;      cursor on the marker, the lock as the channel wants it
 chan_open:
         PUSH DE
@@ -1911,7 +1911,7 @@ status_send:
         LD (TX_ACTIVE),A
         RET
 
-; ---- chan_select: Select channel E: find/create its slot in MSG_STORE, set INS_PTR/STORE_CURSOR
+; ---- chan_select: find channel A's slot in MSG_STORE: HL = its first text byte, A = 0; A = FF if there is none
 chan_select:
         CP CHAN_DEMO
         JR nz,chan_marker
@@ -3145,7 +3145,7 @@ magic_pick_font:
         LD A,0
         LD (MAGIC_FONT_SET),A
         JR nz,magic_count_words
-        LD B,8                  ; a word of 8 letters or more stays plain
+        LD B,8                  ; 8 letters or more after the first character: the word stays plain
         LD HL,(STORE_CURSOR)
 
 magic_scan_word:
@@ -3161,7 +3161,7 @@ magic_scan_word:
 
 magic_short_word:
         LD A,B
-        CP 6                    ; and one of 1 or 2: 3-7 letters may be bold or italic
+        CP 6                    ; and 2 or fewer: 3-7 after the first may be bold or italic
         JR nc,magic_font_normal
         LD A,(RND_SEED)
         ADD A,(HL)
@@ -3838,7 +3838,7 @@ attr_magic_off:
         LD (CUR_COLOR),A
         JR render_next_char_jr5
 
-; ---- fx_halt: 06: hold 0x50 frames (~1.3 s) with the colors reset
+; ---- fx_halt: 06: hold CFG_HOLD frames with the colors reset
 fx_halt:
         XOR A
         LD (SCROLLING),A
@@ -4146,7 +4146,7 @@ tiny_row_out:
         CP CFG_MUTED-1
         JR nc,tiny_row_done
 
-; ---- disp_blank_row: Send 0x8F (all off) to the current row
+; ---- disp_blank_row: send the color byte 8F and the TINY frame's columns to the current row
 disp_blank_row:
         LD HL,ROW_INDEX
         LD A,ROWS-1
@@ -4268,7 +4268,7 @@ hold_wait_row:
         DJNZ hold_wait_row
         JR fx_hold_done
 
-; ---- fxv_pause: effect 1: copy the whole stage, then FRAME_DELAY 0x50
+; ---- fxv_pause: effect 1: copy the whole stage, then FRAME_DELAY CFG_HOLD
 fxv_pause:
         CALL fxv_prepare
         CALL copy_cols
@@ -5853,7 +5853,7 @@ pkt_data_last:
         LD (PKT_VECTOR),HL
         RET
 
-; ---- pkt_st_cksum: E = computed - received. Broadcast (0x2A): no reply. Own address: send ACK 06 / NAK 15. If OK and len>0 set PKT_READY (PKT_FLAG==0x80 -> process immediately)
+; ---- pkt_st_cksum: E = computed - received. Broadcast (0x2A): no reply. Own address: send ACK 06 / NAK 15. If OK and len>0 set PKT_READY (the render loop processes it)
 pkt_st_cksum:
         LD E,A
         LD A,(PKT_DISCARD)
@@ -6451,7 +6451,7 @@ newmsg_set_seq:
         LD (MAGIC_MSG_CHAN),A
         RET
 
-; ---- store_finalize: Fix up MSG_STORE terminators after an edit
+; ---- store_finalize: STORE_END = address of the DA that ends the store
 store_finalize:
         LD A,MARK_HI
         LD HL,MSG_STORE
@@ -7748,7 +7748,7 @@ apply_field_prefix:
         RET
 
 field_prefix_cancel:
-        POP HL                  ; editor_translate_key's return, then ours
+        POP HL                  ; our return, then editor_translate_key's
         POP HL
         JP editor_reshow
     ENDIF
@@ -8219,7 +8219,7 @@ redraw_in_window:
         SBC HL,DE
         RET
 
-; ---- redraw_hold: let one frame out, then hold 0x50 frames
+; ---- redraw_hold: let one frame out, then hold CFG_HOLD frames
 redraw_hold:
         LD A,0xff
         LD (DISP_ON),A
@@ -8294,7 +8294,7 @@ rewind_set:
         LD (FB_COL),HL
         RET
 
-; ---- dispatch: A against the table that follows the CALL (DISP key, target;
+; ---- dispatch: A against the table that follows the CALL (DKEY key, target;
 ;      FF ends it). A match jumps to its target with A kept and Z set; with no
 ;      match the code after the table runs. B is lost.
 dispatch:
@@ -8926,7 +8926,7 @@ pq_canary_end:
         JP pq_reply
 
     IFNDEF LITE
-; ---- cmd_B5_ota: OTA commands (ota.md §6). B5 must be the first payload
+; ---- cmd_B5_ota: OTA commands (ota.md §4). B5 must be the first payload
 ;      byte and the frame ends with the command. Takes its own DI once the ACK
 ;      is out; interrupts come back only for the reply. Replies are tx_send_frame
 ;      frames: one status byte (0 ok, 1 verify failed, 2 chip timeout, 3 page
@@ -9108,7 +9108,7 @@ ota_confirm:
         JR ota_seal_write
 
 ; ---- ota_begin: 'B' -> the idle bank's trailer page becomes FF, and the panel
-;      shows UPDATING (held, not scrolled) through every restart until the
+;      shows ota_updating_msg (held, not scrolled) through every restart until the
 ;      reboot: TEST_MODE makes seq_next_channel display TEST_MSG_BUF instead of
 ;      the sequence, and init_vars clears it on boot.
 ota_begin:
@@ -9592,7 +9592,7 @@ MAGIC_COLOR_CYCLE:
         db 0x07,0x0c,0x0f,0x03,0x0c,0x03,0x0d,0x03,0x0f,0x03
         db 0x0c,0x03,0x03,0x0c,0x0f,0x0c
 
-; ---- data 18e8-18f3: 10000,1000,100,10,1,-1 for bin_to_dec5
+; ---- DEC_TABLE: 10000,1000,100,10,1,-1 for bin_to_dec5
 DEC_TABLE:
         dw 0x2710
         dw 0x03e8
@@ -9601,7 +9601,7 @@ DEC_TABLE:
         dw 0x0001
         dw 0xffff
 
-; ---- data 2427-2464: IR/keypad code -> character map
+; ---- IR_KEY_TABLE: IR/keypad code -> character map
 IR_KEY_TABLE:
         db 0x0f,0x33,0x0c,0x0b,0x0d,0x09,0x0a,0x0e,0x03,0x3f,0x3c,0x3b,0x3d,0x39,0x3a,0x3e
         db 0x2f,0x13,0x2c,0x2b,0x2d,0x29,0x2a,0x2e,0x24,0x23,0x1c,0x1b,0x1d,0x19,0x1a,0x22   ; P36: 1D is SHIFT, caught before the table: its entry finds the keypad's SHIFT
@@ -9648,13 +9648,13 @@ FUNC2_TABLE:
 ; ---- RAINBOW_COLORS: per-character cycle red, orange, yellow, lime, green: entries
 ;      1-RAINBOW_N are FG_IDX_TABLE's first entries, and entry 0 (off) is never read
 RAINBOW_COLORS       equ FG_IDX_TABLE-1
-; ---- data 2718-2721: cmd 15 n: foreground color codes (Red,Orange,Yellow,Lime,Green,Dark red,Gold,Black,Lemon,Dark green)
+; ---- FG_IDX_TABLE: cmd 15 n: foreground color codes (Red,Orange,Yellow,Lime,Green,Dark red,Gold,Black,Lemon,Dark green)
 FG_IDX_TABLE:
         db ATTR_COLOR_RED,ATTR_COLOR_ORANGE,ATTR_COLOR_YELLOW,ATTR_COLOR_LIME,ATTR_COLOR_GREEN
         db ATTR_COLOR_DARK_RED,ATTR_COLOR_GOLD,ATTR_COLOR_BLACK,ATTR_COLOR_LEMON,ATTR_COLOR_DARK_GREEN
 FG_COLORS            equ $-FG_IDX_TABLE
 
-; ---- data 2722-2727: cmd 16 n: background color codes
+; ---- BG_IDX_TABLE: cmd 16 n: background color codes
 BG_IDX_TABLE:
         db ATTR_BGRND_RED,ATTR_BGRND_YELLOW,ATTR_BGRND_YELLOW,ATTR_BGRND_YELLOW,ATTR_BGRND_GREEN,ATTR_BGRND_BLACK
 BG_COLORS            equ $-BG_IDX_TABLE
@@ -9672,7 +9672,7 @@ STATUS_FLAGS:
     ENDIF
 STATUS_FLAGS_END:
 
-; ---- data 2d57-2d60: payload bytes silently ignored by the parser
+; ---- IGNORE_TABLE: payload bytes silently ignored by the parser
 IGNORE_TABLE:
         db 0x00,0x01,0x05,0x08,0x0a,0x0b,0x0c,0x1c,0x1d,0x7f
 ; ---- COMMAND_TABLE: the bytes pkt_byte_loop dispatches; follows IGNORE_TABLE
@@ -10084,7 +10084,7 @@ WIDE_SPACE_GLYPH:
 ; ============================================================================
 ;  Key-position -> character/attribute tables, one per input layer. Indexed by
 ;  the key number that IR_KEY_TABLE yields, 64 keys laid out as the 8x8 matrix
-;  keypad_scan walks. Layer chosen at 0x23C1:
+;  kp_scan walks. Layer chosen:
 ;
 ;      EURO_STATE  set      -> CHARSET_EURO
 ;      SHIFT_STATE clear    -> CHARSET_LOWER
@@ -10094,13 +10094,13 @@ WIDE_SPACE_GLYPH:
 ;  when exactly one of SHIFT_STATE and CAPS_LOCK is on (stock kept four tables).
 ;
 ;  On the remote these are one key labeled UPPER/LOWER, whose shifted
-;  function is EUROPE: unshifted it toggles CAPS_LOCK (0x216C), shifted it
-;  toggles EURO_STATE (0x2184).
+;  function is EUROPE: unshifted it toggles CAPS_LOCK, shifted it
+;  toggles EURO_STATE.
 ;
 ;  So SHIFT selects the alternate function layer and flips case; CAPS_LOCK
 ;  flips case on its own. Both SHIFT_STATE and EURO_STATE are cleared after
 ;  every key. Entries below 0x20 and 0xB0-0xBF are attribute bytes - the
-;  glosses are the editor's own names, from ATTR_LABEL_TABLE.
+;  glosses are the editor's own names, from LABELS.
 ; ============================================================================
 
 ; ---- CHARSET_LOWER: unshifted (upper case when CAPS_LOCK is on)
@@ -10128,7 +10128,7 @@ CHARSET_LOWER2:
 ; ---- CHARSET_EURO: EUROPE modifier active. 47 accented Latin characters in
 ;      94-9E, C0-CF, DC-DF, E0-EF - the demo text advertises "PROGRAMS 47
 ;      EUROPEAN CHARACTERS" and the editor displays "EURO" while this layer is
-;      live (0x2928). Not graphics: built-in graphics are the 1E GRAPH
+;      live. Not graphics: built-in graphics are the 1E GRAPH
 ;      attribute, user-drawn ones the B8 DRAW attribute.
 CHARSET_EURO:
         db 0xca,0xc5,0x12,0xcf,0xc0,0xde,0x11,0x1e    ; 00-07  CA C5 BOLD CF C0 DE NORM GRAPH
@@ -10161,7 +10161,7 @@ DEMO_MESSAGE:                   ; P57: hand-colored italic, MAGIC, the model in 
 ota_updating_msg:
         db 0x19,0xb9,">FW ^<",0xba,0x03     ; ^ is the up-arrow glyph; fits 59 columns
 
-; ---- trailer page 3FC0-3FFF (ota.md §3): magic, sequence number, state
+; ---- trailer page 3FC0-3FFF (ota.md §2): magic, sequence number, state
 ;      and image CRC, filled in by tools/cc784_ota.py pack. Erased in the build.
         ds 0x3fc0-$,0xff
 TRAILER:

@@ -64,7 +64,7 @@ The four ROMs are one code base, revised in one sequence. The letter after the `
 | `41A2–41F7` |  | `TXBUF` — reply frame buffer (len byte + up to 0x55 data) |
 | `41F8–43E1` |  | variables (the `equ` block in the source names each from its use; the handful the firmware writes but never reads are marked "never read") |
 | `43CB/43CC` |  | `MY_ADDRESS` / its complement (RAM-validity check at boot) |
-| `43E2–5EF0` |  | `MSG_STORE` — message store (see §7); `STORE_LIMIT` at `43D8` |
+| `43E2–5EEF` |  | `MSG_STORE` — message store (see §7); `STORE_LIMIT` at `43D8` |
 | `5EF0` |  | `PKT_READY` flag |
 | `5EF1–5FF0` |  | `PKT_BUF` — received payload (≤255 bytes) |
 | `5FF1–5FFB` |  | packet-parser state (`PKT_STATE`, `PKT_CKSUM`, `PKT_FLAG`, `PKT_LEN`, `PKT_VECTOR`, `PKT_ADDR`, `PKT_PTR`, `PKT_REMAIN`) |
@@ -103,7 +103,7 @@ Data blocks in ROM:
 
 - **Reset** (`0000`): `LD SP,403F`, init routines, `IM 1`, `EI`, jump to `main_loop`.
 - **/INT** (`0038` → `int_timer`): 7812.5 Hz (8 MHz crystal ÷1024 via 74HC4020). Swaps register banks, increments `TICK6_COUNT`/`TICK1_COUNT`, and *pushes the addresses* of `tick6_service` (every 6th tick) and the handler in `TICK_VECTOR` (every tick, = IR decoder) so they execute as the ISR "returns" (`EI; RETI`). The ISR itself is ~180–200 cycles, the acknowledge included; the scheduled routines run with interrupts enabled.
-- **`tick6_service`** (1302 Hz): serial RX bit engine, serial TX bit engine, countdowns, display row refresh, flashing, then `rx_consume` (pop RX FIFO → packet parser). Has a re-entrancy guard testing `(IX)==AA && (IY)==55` that is effectively dead code (never true in shipped code).
+- **`tick6_service`** (1302 Hz): serial RX bit engine, serial TX bit engine, countdowns, display row refresh, flashing, then `rx_consume` (pop RX FIFO → packet parser). Has a guard testing `(IX)==AA && (IY)==55`, the NET's mode-test sentinel (§14), that is effectively dead code (never true in shipped code).
 - **/NMI** (`0066` → `clock_tick`): 60 Hz mains zero-cross. Counts `NMI_COUNT` to `NMI_PER_SEC`(=60) → seconds → minutes → 12-hour clock with `CLK_PM`.
 - **`main_loop`** (`009A`): if `PKT_READY` → `pkt_process`; else render/effect step; loop. The rendering engine (`render_next_char`, `attr_dispatch`, `fx_*`) runs here. Note the `PKT_READY` test runs **once, on entry** — the inner loop at `00A7` never falls back to `009A`. Re-entry is via `fx_end_of_channel` (`0F5E`, end of a display cycle) or `JP RESET`/`restart_display`. The `JR nz` at `00B0` tests `effect_step`'s flags, not `MAGIC_MODE`: `LD A,(nn)` sets no flags.
 
@@ -180,7 +180,7 @@ QUERY DUMP cannot use that path — the store exceeds 255 bytes — so it sends 
 
 ## 7. Message store format [H]
 
-One contiguous byte stream at `MSG_STORE` (`43E2`) up to `STORE_LIMIT` (`5EEF`), 6925 bytes:
+One contiguous byte stream at `MSG_STORE` (`43E2`) up to `STORE_LIMIT` (`5EEF`), 6926 bytes:
 
 ```
 D0 D0 <text ch 0> 03   D0 D1 <text ch 1> 03  …  D9 D9 <text ch 99> 03   DA
@@ -189,7 +189,7 @@ D0 D0 <text ch 0> 03   D0 D1 <text ch 1> 03  …  D9 D9 <text ch 99> 03   DA
 - Channel marker = **two bytes `D0+tens`, `D0+units`** (channel 42 → `D4 D2`). `03` terminates a channel's text, `DA` the store.
 - `store_clear_all` writes 100 empty channels + `DA` = 301 bytes of framing, leaving **6625 bytes of text shared by all channels** (`0x19E1`); there is no per-channel limit. `STORE_SIZE` (`0x1B0E` = 6926) is what `B4 '1'` reports; `0x5E8B` = limit − 100 triggers the "100 KEYS LEFT" warning.
 - Attribute/color bytes are stored inline exactly as received.
-- **Channel 100 (`0x64`) is the ROM demo message**: `chan_select` returns `DEMO_MESSAGE` and `cmd_09` sets `CHAN_LOCK` so inserts are refused. The default sequence plays channel 100, hence the demo after a clear.
+- **Channel 100 (`0x64`) is the ROM demo message**: `chan_select` returns `DEMO_MESSAGE` and `cmd_09` sets `CHAN_LOCK` so inserts are refused. A sequence whose channels are all empty plays channel 100 (`SEQ_ALL_EMPTY`), hence the demo after a clear.
 - `store_finalize` (`1C38`) is what maintains `STORE_END`: it `CPIR`s from `MSG_STORE` for the `DA` and stores its address. `STORE_END` is therefore the position of the store terminator, not one past the last text byte.
 - `pkt_insert_text`: `store_make_room` advances `STORE_CURSOR`, then `LDDR` shifts everything from the cursor **up to `STORE_LIMIT`** (not just to `STORE_END`) by one byte and writes the character. ~6900 byte moves per inserted byte with interrupts off (≈20–40 ms); a 250-byte chunk takes seconds. See bug B8 — fixed by a two-byte operand change.
 - **Cursor seating quirk:** CHANNEL alone leaves the cursor on the marker's first byte, so a following insert would split the marker. DELETE_TEXT (re-seats at the marker's last byte and deletes old text) or APPEND (seats before the `03`) must follow CHANNEL before any text. NETCC always sends DELETE_TEXT.
@@ -249,7 +249,7 @@ Glyphs: `char_to_glyph` → index → `FONT + 8*idx`. Movement effects are state
 - **Effects stage through `TXBUF`.** With any `EFFECT_ID` other than 0 (LEFT), glyphs are staged into `TXBUF` via `STAGE_PTR` instead of the frame buffer. When the stage fills (`COL_COUNT` reaches 0) or a movement attribute arrives, the handler in `EFFECT_VECTOR` moves the staged frame onto the panel: `fxv_pause` (19) copies it at once and holds `FRAME_DELAY` = 0x50 frames (~1.3 s); `fxv_right` (0F) copies one column per frame left to right; `fxv_hold` (BB) blanks and copies right to left; `fxv_wipe_updown` (1A/1B) makes eight passes through a growing row mask. The text is centered by `STAGE_OFFSET` = free columns / 2. `FLUSH_PENDING` defers an attribute until the stage has been shown. `06` HALT is `fx_halt`: hold `HOLD_FRAMES` frames with every frame-buffer color byte reset to `8F` by `fb_colors_default`, so held text turns yellow and loses its background; WAIT does the same [H — watched on the sign].
 - **Holds and wipes.** `BB` HOLD blanks the display and wipes the held text in from right to left; `18` LEFT is the plain scroll, the effect to name after a PAUSE, HOLD, UP, DOWN or RIGHT section to get scrolling text back. `BD` MAGIC OFF ends MAGIC's automatic coloring and fonts; `B9` THIN goes with PAUSE, UP, DOWN, LEFT or RIGHT to keep text that stops on the display in the normal font, since held text is otherwise drawn bold [H — watched on the sign].
 - **FLASH is per word.** `14` sets `FLASH_PENDING`; the next printable byte moves it into `FLASH_BIT` (0x10), which is OR-ed into the color bytes until the next space. Two spaces in a row clear the background color bits.
-- **MAGIC mode** (`MAGIC_MODE`, 1F…BD) is `magic_preprocess`: each word gets a random font (words of six or more letters stay NORM), the color changes every 2–5 words or at `. ! ? : ,`, walking `MAGIC_COLOR_CYCLE` while skipping the too-similar pairs in `MAGIC_CLASH_PAIRS`; spaces are 9 columns wide (`WIDE_SPACE_GLYPH`); a word starting with `$` flashes; text is pushed off (`scroll_off_text`) before each movement attribute.
+- **MAGIC mode** (`MAGIC_MODE`, 1F…BD) is `magic_preprocess`: each word gets a random font (words of up to three letters, or of nine or more, stay NORM), the color changes every 2–5 words or at `. ! ? : ,`, walking `MAGIC_COLOR_CYCLE` while skipping the too-similar pairs in `MAGIC_CLASH_PAIRS`; spaces are 9 columns wide (`WIDE_SPACE_GLYPH`); a word starting with `$` flashes; text is pushed off (`magic_push_off`) before each movement attribute.
 - **RAINBOW** (`BC`) cycles red, orange, yellow, lime, green per character (`RAINBOW_COLORS`, `RAINBOW_IDX`) until a color attribute.
 - **DRAW** (`B8`): hex digit pairs are packed by `RRD` into `DRAW_BUF`, up to 16 columns, ended by the first non-hex byte (a `03` there is pushed back). Consecutive DRAW items butt together with no gap column (`DRAW_NO_GAP`).
 - **Glyphs `00`–`0F` are 14-column pairs:** `glyph_lookup` doubles their width so the second glyph slot is read as the right half.
@@ -257,7 +257,7 @@ Glyphs: `char_to_glyph` → index → `FONT + 8*idx`. Movement effects are state
 - **`BE` TINY** renders into `FRAMEBUF_TINY` with `TINY_FRAME_READY` handshaking the copy to the panel, and ends at the first attribute byte.
 - **`1D` SHIFT** is only a key: as a message byte it is ignored by `attr_dispatch` and dropped from packets by `IGNORE_TABLE`.
 
-## 9. IR remote decoder (`ir_*`, `1482–1571`) [H — verified against a capture of the sign's own receiver]
+## 9. IR remote decoder (`ir_*`, `1482–1570`) [H — verified against a capture of the sign's own receiver]
 
 Runs every tick (128 µs) on `PORT_IN` bit 1 (1 = burst present; the receiver module is active-low and the HC14 inverts it). The remote is a Motorola MC14497 PCM transmitter ([hardware notes §6](hardware.md#6-open-questions)). State machine:
 
@@ -269,9 +269,9 @@ Runs every tick (128 µs) on `PORT_IN` bit 1 (1 = burst present; the receiver mo
 
 Measured at the receiver output: leader burst ≈ 810 µs, start burst begins ≈ 3060 µs after the leader starts, half-bit 512 µs; bursts come out ~250 µs longer than transmitted (receiver stretch) and the firmware's sample points sit where that stretch is harmless. Frames repeat every ~90 ms while a key is held, one `0xBE` frame on release.
 
-Consumer (`editor_getkey 233F`): `code & 0x3F` → **`IR_KEY_TABLE` gives a glyph index**, which is looked up in `CHARSET_UPPER`/`CHARSET_UPPER2` (shifted) / `CHARSET_LOWER*` (case) / `CHARSET_EURO` (the EUROPE layer) to get the character or control byte. Key 29 is SHIFT (toggles `4337`, intercepted before the table). A key is accepted on its *second* consecutive frame (debounce), auto-repeats after ~1 s (`GEN_COUNTDOWN 0x514`) at ~0.23 s (`0x12C`); key 36 (STOP/START, code `0xA4`, glyph CR) never repeats and, in display mode, stops the display and enters the editor (`rx_consume`). Key 44 = CLEAR (`0x0E`); SHIFT+CLEAR = CLEAR ALL (`0x03`). Code `0xA5` (key 37) is SPACE. The full 62-key map, an encoder and ESPHome `remote_transmitter` output are in `cc784_ir.py`; the encoder round-trips through a simulation of this decoder for all 64 codes at every sampling phase with 100–350 µs of receiver stretch. Capture used (labels read off the remote): SHIFT, CLEAR, Y, STOP/START — the "clear all" sequence.
+Consumer (`getkey_ir 233F`, in `editor_getkey`): `code & 0x3F` → **`IR_KEY_TABLE` gives a glyph index**, which is looked up in `CHARSET_UPPER`/`CHARSET_UPPER2` (shifted) / `CHARSET_LOWER*` (case) / `CHARSET_EURO` (the EUROPE layer) to get the character or control byte. Key 29 is SHIFT (toggles `4337`, intercepted before the table). A key is accepted on its *second* consecutive frame (debounce), auto-repeats after ~1 s (`GEN_COUNTDOWN 0x514`) at ~0.23 s (`0x12C`); key 36 (STOP/START, code `0xA4`, glyph CR) never repeats and, in display mode, stops the display and enters the editor (`rx_consume`). Key 44 = CLEAR (`0x0E`); SHIFT+CLEAR = CLEAR ALL (`0x03`). Code `0xA5` (key 37) is SPACE. The full 62-key map, an encoder and ESPHome `remote_transmitter` output are in `cc784_ir.py`; the encoder round-trips through a simulation of this decoder for all 64 codes at every sampling phase with 100–350 µs of receiver stretch. Capture used (labels read off the remote): SHIFT, CLEAR, Y, STOP/START — the "clear all" sequence.
 
-## 10. On-sign editor / menu (`19CA–2A60`) [M]
+## 10. On-sign editor / menu (`19CA–2A67`) [M]
 
 `key_handler` → `editor_loop` (serial `01` or the STOP/START key; the `menu_enter` address-login gate in the ROM is unreachable). `editor_getkey` (`2313`) takes keys from the serial RX FIFO *or* the IR decoder and **echoes the previous key on serial TX**, so the menu (ADDRESS?, TIME?, PROG MSG?, SEQ MSG? … in `MENU_STRINGS`) can be driven from a terminal. `editor_key_to_attr` (`2675`) maps function keys `10–1F` to message bytes. `keypad_scan` (`196A`) walks an 8×8 matrix via the latch upper nibble and the input port, but nothing calls it: the CC784NET firmware (§14) uses it for the keypad on the DB9.
 
@@ -309,7 +309,9 @@ Consumer (`editor_getkey 233F`): `code & 0x3F` → **`IR_KEY_TABLE` gives a glyp
 | BIG | `BE` TINY |
 | MAGIC | the ADDRESS? menu |
 | Q | `?` |
-| X | `!` | The editor shows FUNC/COLOR/BGRND/GRAPH/SPEED/EURO while a prefix is pending (`*_PENDING`). MAGIC as the *first* key after entering the editor (or on the demo channel) is `magic_new_message`: it takes the first empty channel (asking "FULL!! MSG# ?" if none), makes it the whole sequence and announces "MAGIC MSG nn". Leaving the editor adds the edited channel to `SEQ_LIST` if it is not there and shows it first (`NEXT_CHAN`), unless the sequence was set by hand (`SEQ_SET`).
+| X | `!` |
+
+The editor shows FUNC/COLOR/BGRND/GRAPH/SPEED/EURO while a prefix is pending (`*_PENDING`). MAGIC as the *first* key after entering the editor (or on the demo channel) is `magic_new_message`: it takes the first empty channel (asking "FULL!! MSG# ?" if none), makes it the whole sequence and announces "MAGIC MSG nn". Leaving the editor adds the edited channel to `SEQ_LIST` if it is not there and shows it first (`NEXT_CHAN`), unless the sequence was set by hand (`SEQ_SET`).
 
 > [!NOTE]
 > **Did you know?...**
@@ -360,7 +362,7 @@ NETCC's default is address 1; a sign with dead/absent battery answers only to 0 
 `init_vars` (`05C4`) writes `00` to *both* `MY_ADDRESS` and `MY_ADDRESS_INV`, but the validity test is `CPL(MY_ADDRESS_INV) == MY_ADDRESS` — and `CPL(00)` is `FF`, not `00`. The pair therefore never validates, so this path re-runs on every boot. Harmless in the stock ROM (it rewrites the same 0), but it means the "RAM is intact" check is permanently failing after a battery loss. The menu path (`1FF2`) does it correctly: `LD (MY_ADDRESS),A / CPL / LD (…INV),A`. *Fixed by patch 4.*
 
 ### B8 — every inserted byte shifts the whole store, not just the live text **[H]**
-`pkt_insert_text` sets `MOVE_DST` from `STORE_LIMIT` (`2B3D`) although `STORE_END` was just updated at `2B37` and everything above it is dead space. The `LDDR` therefore moves ~6.9 KB per inserted character with interrupts off, so a 250-byte message takes seconds. Shifting to `STORE_END` instead moves only `STORE_END − STORE_CURSOR + 1` bytes — 174 for channel 42 in an empty store, about 39× fewer; for channel 0 it is ~6900× fewer. Verified by simulating both loops: the resulting store is byte-identical. *Fixed by patch 5.*
+`pkt_insert_text` sets `MOVE_DST` from `STORE_LIMIT` (`2B3D`) although `STORE_END` was just updated at `2B37` and everything above it is dead space. The `LDDR` therefore moves ~6.9 KB per inserted character with interrupts off, so a 250-byte message takes seconds. Shifting to `STORE_END` instead moves only `STORE_END − STORE_CURSOR + 1` bytes — 174 for channel 42 in an empty store, about 39× fewer; for channel 99 it is ~2200× fewer. Verified by simulating both loops: the resulting store is byte-identical. *Fixed by patch 5.*
 
 ### B9 — a pending deferred packet turns the next frame into an editor session **[H]**
 While a packet accepted with `PKT_FLAG != 80` waits for `main_loop` to get round to it, `rx_idle_byte` ignores the next `B1` but not the bytes after it: the address byte goes through `rx_not_start`, and `CP 1 → key_handler` opens the on-sign editor if it is `01`. With address 1 as the default, every frame to a sign that still has a deferred packet pending drops it into the editor, which then echoes every following byte on TX. Harmless with NETCC (always `80`) and with `cc784.py`. *Fixed by patch 45: no byte outside a frame is a key unless the host opens a terminal with `B7 '1'`; `B7 '0'` closes it.*
@@ -409,17 +411,17 @@ Same code base, built 14-01-92, 13 months before the NIR's. Read from a CC784NET
 | ROM ID (`0048`) | `78409n1401920145` | `78409O1702930205` |
 | Code end | `398E` | `3C20` |
 | IR decoder | none | `ir_*` |
-| `keypad_scan` | called from `tick6` and the editor | unreferenced |
+| `keypad_scan` | called from `rx_consume` and the editor | unreferenced |
 | Input mode | chosen at boot (below) | always serial |
 | Timer ISR | runs the serial bit engines and the row scan every interrupt, at 1302 Hz (4 MHz crystal, [hardware notes §2.3](hardware.md#23-timebase-h)) | 7812.5 Hz tick, ÷6 for the same work |
-| Packet commands and `B4` queries `0`–`3` | same | same |
+| Packet commands and `B4` queries `0`–`3` | same, except that SET_TIME takes `A`/`a` for AM | same, with `Y`/`y` for AM |
 | Demo message | "CC700 SERIES MULTI COLOR DISPLAY ... NETWORKABLE FROM YOUR PC" | "ULTIMATE INFRARED REMOTE CONTROL ..." |
 
-**Boot-time mode test** (`13CB`, called from the store/serial init at `1376`): sync to a tick with `HALT`, interrupts off, then 16 clocks of a `55 55` pattern out on `CTRL_LATCH` bits 6 (data, DB9 pin 7) and 5 (clock, DB9 pin 4), sampling `PORT_IN` bit 0 (DB9 pin 2) after each clock. If the last 8 samples are all 0 the flag at `4223` is set: serial mode, the RX/TX bit engines run from the timer ISR and `rx_consume` feeds the packet parser, while a lone `35` (the keypad's STOP/START code) opens the editor, where `editor_getkey` takes serial bytes as keys and echoes them on TX: the CC710's terminal typing, without its playback-time `7E` and `20`. Otherwise keypad mode: `tick6` calls `keypad_scan` instead, code `35` (STOP/START) enters the editor, and the serial engines never run. The factory cable's pin 2–5 short is what makes the test pass; a plain crossover leaves a NET sign deaf.
+**Boot-time mode test** (`13CB`, called from the store/serial init at `1376`): sync to a tick with `HALT`, interrupts off, then 15 clocks of a `55 55` pattern out on `CTRL_LATCH` bits 6 (data, DB9 pin 7) and 5 (clock, DB9 pin 4), sampling `PORT_IN` bit 0 (DB9 pin 2) before the first clock and after each one. If the last 8 samples are all 0 the flag at `4223` is set: serial mode, the RX/TX bit engines run from the timer ISR and `rx_consume` feeds the packet parser, while a lone `35` (the keypad's STOP/START code) opens the editor, where `editor_getkey` takes serial bytes as keys and echoes them on TX: the CC710's terminal typing, without its playback-time `7E` and `20`. Otherwise keypad mode: `rx_consume` calls `keypad_scan` instead, code `35` (STOP/START) enters the editor, and the serial engines never run. The factory cable's pin 2–5 short is what makes the test pass; a plain crossover leaves a NET sign deaf.
 
 **Editor keys** are the raw key codes (`00`–`3F`, see [hardware notes §2.4](hardware.md#24-host-port-serial-and-keypad-h)): `19` toggles SHIFT, and the charsets are indexed by the code directly, with no `IR_KEY_TABLE`.
 
-The timer ISR starts with a check that `(IX)=AA` and `(IY)=55`, the sentinel the mode test sets so that its `HALT` returns without running the tick machinery. The NIR's firmware has no cable test and no such check: its `int_timer` goes straight to the tick counters.
+The timer ISR starts with a check that `(IX)=AA` and `(IY)=55`, the sentinel the mode test sets so that its `HALT` returns without running the tick machinery. The NIR's firmware has no cable test, and its `int_timer` goes straight to the tick counters; the check survives as dead code at the top of `tick6_service` (§3).
 
 The annotated source is [src/stock/cc784net.asm](src/stock/cc784net.asm) (`mode_test`, `store_init`, `int_timer`); 4554 of its 4921 instructions are the NIR's, label for label.
 
@@ -472,7 +474,7 @@ The original CC784's code base ([§16](#16-the-original-cc784-firmware-h--from-a
 
 **FUNC** (`B7`, `editor_key_to_attr`) is SHIFT + the key at code `25` (SEQ unshifted); SHIFT + STOP/START stays `0D`, unlike the CC784. Its only second functions: GRAPH → `B8` DRAW, NORM → `B9` THIN, BOLD → `BA` WAIT, FLASH → `B0` REM. No HALT, RAINBOW, TINY, ADDRESS or `?`/`!`.
 
-**Equate caveats.** The RAM layout differs enough that a few NIR names would have landed on other variables; the source drops or aliases them (`GEN_COUNTDOWN` → `MENU_MSG_PTR`, `SPARE_TIMER` → `KEY_TIMER`, which is live here and in the NET, `QUERIES_ENABLED` → `INPUT_MODE`).
+**Equate caveats.** The RAM layout differs enough that a few NIR names would have landed on other variables; the source uses this ROM's names for them (`GEN_COUNTDOWN` → `MENU_MSG_PTR`, `SPARE_TIMER` → `KEY_TIMER`, which is live here and in the NET, `QUERIES_ENABLED` → `INPUT_MODE`).
 
 ## 16. The original CC784 firmware [H — from a ROM dump, ID `9g`]
 
@@ -491,7 +493,7 @@ The ancestor of the CC710 code base, read from the original keypad CC784 (a `CC7
 
 **Boot input mode** (`store_init`). One pin decides: `PORT_IN` bit 0 low at boot sets `INPUT_MODE` `FF` (serial), high sets `00` (keypad). There is no probe pattern, sentinel `HALT` or address derivation, and the timer ISR has no `(IX)=AA`/`(IY)=55` check. `boot_clear_check` is the CC710's: keypad mode with `PORT_IN` bit 1 low at power-up clears the store and the sequence. Which keys do that depends on the keypad row selected at reset, which this ROM does not set first; not tried.
 
-**Serial mode** is the CC710's terminal mode with the same bit engines (300 baud at a 1302 Hz tick, so a 4 MHz crystal as in the CC710 [M]), the same handshake (`PORT_IN` bits 1 and 2 gate the transmitter; `CTRL_LATCH` bit 5 is "ready", dropped while the 8-byte FIFO is full) and the same key translation outside the editor: `01` opens the editor with echo, `7E` opens `menu_enter`. Two differences: a received `00` jumps to `RESET` at once, and `menu_enter` has no `*`: it opens the editor only if the next byte equals `MY_ADDRESS`, a RAM byte that nothing initialises and only the editor key `5E` sets (`menu_address`: the next key becomes the address, with no prompt). In the editor, bytes are keys, raw ASCII, echoed on TX.
+**Serial mode** is the CC710's terminal mode with the same bit engines (300 baud at a 1302 Hz tick, so a 4 MHz crystal as in the CC710 [M]), the same handshake (`PORT_IN` bits 1 and 2 gate the transmitter; `CTRL_LATCH` bit 5 is "ready", dropped while the 8-byte FIFO is full) and the same key translation outside the editor: `01` opens the editor with echo, `7E` opens `menu_enter`. Two differences: `rx_fifo_get` jumps to `RESET` on a `00` at the FIFO's head, which never happens because the receiver drops `00` bytes, and `menu_enter` has no `*`: it opens the editor only if the next byte equals `MY_ADDRESS`, a RAM byte that nothing initialises and only the editor key `5E` sets (`menu_address`: the next key becomes the address, with no prompt). In the editor, bytes are keys, raw ASCII, echoed on TX.
 
 **Editor** [M]. The CC710's editor without CLR ALL (`03`), FUNC (`B7`), the `B3` end key or the magic-message dialogue. Keys: `05` top of message, `7F` delete, `1D` shift, `0A`/`08` and `0C`/`0B` cursor, `0E` clear the message (or the list inside SEQ?), `1C` caps, `1E` GRAPH, `15` FORE, `16` BACK, `02` SPEED, `17` TIME?, `09` PROG MSG?, `04` SEQ MSG?, `0D` exit, `5E` address. The prompts are the NIR's long wordings (`TOP OF MSG  n`, `PROG MSG?`, `MEMORY FULL`, `100 KEYS LEFT`, `SEQUENCE FULL`), drawn on the 84-column panel. `redraw_show_label` indexes `ATTR_LABEL_TABLE` with the whole byte, so the tables after it are laid out to serve as entries `80`–`9F` (color names), `D0`–`DF` (`MSG_TOP_TABLE`, so a marker shows its channel's title) and `F0`–`F7` (speed names).
 

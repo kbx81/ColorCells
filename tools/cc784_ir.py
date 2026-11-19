@@ -2,13 +2,13 @@
 """
 cc784_ir.py - Color Cells CC784NIR infrared remote protocol: key map and frame encoder.
 
-Derived from the firmware decoder (ir_st_* at ROM 0x1482) and a logic-analyzer capture
+Derived from the firmware decoder (ir_* at ROM 0x1482) and a logic-analyzer capture
 of the sign's own IR receiver output; encoder verified by simulating the firmware
 decoder over every code and sampling phase.
 
     cc784_ir.py map                       # print the 62-key table
     cc784_ir.py raw Y STOP                # remote_transmitter raw code lists (ESPHome)
-    cc784_ir.py raw 7 36                  # ...by key index
+    cc784_ir.py raw 07 36                 # ...by key index
     cc784_ir.py yaml Y                    # a ready-to-paste ESPHome button action
 
 FRAME (times as TRANSMITTED, i.e. carrier on/off; the sign's receiver stretches every
