@@ -265,8 +265,7 @@ restart_no_render:
 
         ds 0x001f-$,0xff
 
-; ---- FILL_001F: 0xFF fill up to the IM 1 vector (25 bytes, not code). The one reference,
-;      LD BC,ATTR_MAGIC in exit_seq_insert, is the LDDR count 31 = SEQ_LIST length - 1
+; ---- FILL_001F: 0xFF fill up to the IM 1 vector (25 bytes, not code)
 FILL_001F:
 
         ds 0x0038-$,0xff
@@ -3377,11 +3376,11 @@ query_0_romid:
         LD HL,TXBUF
         LD (HL),6
         INC HL
-        LD DE,HOLD_FRAMES
+        LD DE,ROM_ID
         LD BC,3
         EX DE,HL
         LDIR
-        LD HL,0x0060
+        LD HL,ROM_REV
         LD BC,3
         LDIR
         LD HL,TXBUF
@@ -4236,7 +4235,7 @@ exit_seq_insert:
         LD HL,0x4186
         LD (HL),0xff
         LD DE,0x4187
-        LD BC,ATTR_MAGIC
+        LD BC,31
         LDDR
 
 exit_seq_first:

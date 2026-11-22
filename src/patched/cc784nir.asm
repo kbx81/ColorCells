@@ -483,7 +483,7 @@ PKT_DISCARD          equ STREAM_AREA+25    ; FF = the frame being parsed arrived
 PKT_DONE_WANT        equ STREAM_AREA+26    ; the DONE decision, latched at pkt_process entry
 PKT_SAVE_LOCK        equ STREAM_AREA+27    ; P27: the renderer's CHAN_LOCK at entry
 PKT_SEQ_CHANGED      equ STREAM_AREA+28    ; P27: FF once the packet has rewritten SEQ_LIST
-DISP_STRETCH         equ STREAM_AREA+29    ; P26: sevenths of an interrupt added to every display tick: 2 x speed
+DISP_STRETCH         equ STREAM_AREA+29    ; P26: sevenths of an interrupt added to every display tick: 2 x speed; LITE: dark ticks left
 SVC_DUE              equ STREAM_AREA+30    ; P26: bit 0 = tick6 engines due, bit 1 = display tick due
 SVC_ACTIVE           equ STREAM_AREA+31    ; P26: FF while tick6_service runs; it drains SVC_DUE, so it never nests
 IR_MASK              equ STREAM_AREA+32    ; PORT_IR; 0 from a start bit to the next frame end, which with IR_QUIET 0 skips the decoder
@@ -1231,7 +1231,7 @@ tick6_display:
         AND A
         JP nz,tiny_refresh
         ; P26: no blanked ticks; the scroll speed stretches the display tick
-        ; instead (DISP_STRETCH, set at the end of the frame)
+        ; instead (DISP_STRETCH, set at the end of the frame); LITE keeps them
 
 row_output:
     IFDEF LITE                  ; the frame's dark ticks: every row keeps its speed-0 lit
@@ -3562,9 +3562,9 @@ crawl_wait:
 crawl_peek:                     ; colors (80-93), BIG..FLASH, MAGIC, THIN and MAGIC OFF act
         INC HL                  ; in the same render step: judge the byte after them
         LD A,(HL)
-        AND 0xe0
-        CP COLOR_BASE
-        JR z,crawl_peek
+        SUB COLOR_BASE
+        CP EURO_LO-COLOR_BASE
+        JR c,crawl_peek
         LD A,(HL)
         CP ATTR_MAGIC
         JR z,crawl_peek
@@ -6740,14 +6740,20 @@ time_get_ampm:
         CALL menu_getchar
         RES 5,A
         CP 'Y'
-        JR nz,time_check_n
-        XOR A
-        JR time_store_pm
-
-time_check_n:
+        JR z,time_am
+        CP 'A'
+        JR z,time_am
+        CP 'P'
+        JR z,time_pm
         CP 'N'
         JR nz,time_get_ampm
+
+time_pm:
         LD A,1                  ; P32: PM; the editor sets the 12-hour mode
+        JR time_store_pm
+
+time_am:
+        XOR A
 
 time_store_pm:
         LD (CLK_PM),A
@@ -9349,7 +9355,7 @@ idx_store:
 pkt_insert_one_jr23:
         JP pkt_insert_one
 
-; ---- cmd_17_set_time: 17 h h m m a: 4 ASCII digits -> CLK_H10..CLK_M1, a=Y/y -> AM else PM.
+; ---- cmd_17_set_time: 17 h h m m a: 4 ASCII digits -> CLK_H10..CLK_M1, a=Y or A -> AM, H 24-hour, else PM.
 ;      B2: a short packet (NETCC's "status query" 17 32) leaves through
 ;      pkt_next_byte with CLK_RUN clear; pkt_process_done sets it again.
 cmd_17_set_time:
@@ -9370,8 +9376,10 @@ settime_digits:
         LD C,CLK_24H
         CP 'H'                  ; P32: 24-hour, hours 00..23
         JR z,settime_store_pm
-        LD C,0                  ; 'Y': AM
+        LD C,0                  ; 'Y' or 'A': AM
         CP 'Y'
+        JR z,settime_store_pm
+        CP 'A'
         JR z,settime_store_pm
         LD C,1                  ; anything else: PM
 

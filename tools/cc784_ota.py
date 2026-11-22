@@ -190,7 +190,7 @@ def push(sign, bank, seq=None, dry_run=False, trial=False, all_pages=False):
     if seq is None:
         seq = (max(t['seq'] for t in (t0, t1) if t) + 1) & 0xFF if (t0 or t1) else 1
     if all_pages:
-        # no C command: a sign running patch 35 or older crashes when a mains
+        # no C command: a sign running a build older than patch 35's ota_copy crashes when a mains
         # NMI lands while C has the idle bank mapped in and the two images
         # differ at nmi_entry
         print('new sequence number %d; sending every page' % seq)
@@ -264,7 +264,7 @@ def main():
     u.add_argument('bank'); u.add_argument('-s', '--seq', type=int)
     u.add_argument('-n', '--dry-run', action='store_true')
     u.add_argument('--trial', action='store_true', help='leave the new image unconfirmed: a power cycle reverts it until `confirm`')
-    u.add_argument('--all', action='store_true', help='send every page without reading the idle bank first (a sign on patch 35 or older can crash on the C command)')
+    u.add_argument('--all', action='store_true', help='send every page without reading the idle bank first (a build older than patch 35\'s ota_copy fix can crash on the C command)')
     i = sub.add_parser('info')
     c = sub.add_parser('confirm'); r = sub.add_parser('rollback')
     for x in (u, i, c, r):

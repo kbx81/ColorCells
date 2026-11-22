@@ -26,7 +26,7 @@ The four ROMs are one code base, revised in one sequence. The letter after the `
 **Evidence for the order:**
 
 - The revision letters rise along the chain: `g`, `l`, `n`, `O`.
-- The code itself. Each ROM was disassembled and compared with each of the others, instruction by instruction. Two instructions count as the same when they have the same operation and the same 8-bit constants; 16-bit addresses are ignored, since routines move from one build to the next. Each cell in the table below is the number of instructions two ROMs have in common, in the same order (the matching runs found by Python's `difflib`), and in brackets that number as a share of the older ROM's instructions. The figure after each name is that ROM's total instruction count. Each ROM shares the most with its neighbors, and what is left of the original CC784 shrinks at each step. The counts in §14–§16 were made another way, so they differ a little.
+- The code itself. Each ROM was disassembled and compared with each of the others, instruction by instruction. Two instructions count as the same when they have the same operation and the same 8-bit constants; 16-bit addresses are ignored, since routines move from one build to the next. Each cell in the table below is the number of instructions two ROMs have in common, in the same order (the matching runs found by Python's `difflib`), and in brackets that number as a share of the older ROM's instructions. The figure after each name is that ROM's total instruction count. Each ROM shares the most with its neighbors, and what is left of the original CC784 shrinks at each step.
 
 | Instructions in common | CC710 (4263) | NET (4991) | NIR (5239) |
 |---|---|---|---|
@@ -153,7 +153,7 @@ The command bytes are named in the source (`CMD_*`); the docs use those names, w
 | DELETE_TEXT | `0E` | `cmd_0E_delete_text` | delete the selected channel's existing text |
 | FORE_IDX | `15 n` | `cmd_15_fore_idx` | insert `FG_IDX_TABLE[n]` (`8C 8D 8F 87 83 84 8E 80 8B 81`) |
 | BACK_IDX | `16 n` | `cmd_16_back_idx` | insert `BG_IDX_TABLE[n]` (`91 93 93 93 92 90`) |
-| SET_TIME | `17 hhmm a` | `cmd_17_set_time` | 4 ASCII digits → `CLK_H10..CLK_M1`; `a`=`Y`/`y` AM else PM (patched: `H` = 24-hour, [patched.md](patched.md#2-patches) patch 32) |
+| SET_TIME | `17 hhmm a` | `cmd_17_set_time` | 4 ASCII digits → `CLK_H10..CLK_M1`; `a`=`Y`/`y` AM else PM (patched: `A`/`a` is AM too, `H` = 24-hour, [patched.md](patched.md#2-patches) patch 32) |
 | COLOR_A0 | `1E n` | `cmd_1E_color_A0` | insert `A0 \| (n&15)` |
 | APPEND | `B3` | `cmd_B3_append` | insertion point → end of selected channel |
 | QUERY | `B4 c` | `cmd_B4_query` | `c` = ROMID `'0'`, MEMORY `'1'`, NOP `'2'`, DUMP `'3'` — **see bug B1** (patched: `'4'` timing and health counters, `'5'` configuration block, `'6'` sequence list, [patched.md](patched.md#2-patches) patches 30 and 35) |
@@ -423,11 +423,11 @@ Same code base, built 14-01-92, 13 months before the NIR's. Read from a CC784NET
 
 The timer ISR starts with a check that `(IX)=AA` and `(IY)=55`, the sentinel the mode test sets so that its `HALT` returns without running the tick machinery. The NIR's firmware has no cable test, and its `int_timer` goes straight to the tick counters; the check survives as dead code at the top of `tick6_service` (§3).
 
-The annotated source is [src/stock/cc784net.asm](src/stock/cc784net.asm) (`mode_test`, `store_init`, `int_timer`); 4554 of its 4921 instructions are the NIR's, label for label.
+The annotated source is [src/stock/cc784net.asm](src/stock/cc784net.asm) (`mode_test`, `store_init`, `int_timer`); 4780 of its 4991 instructions line up with the NIR's in order ([§1](#1-lineage-of-the-stock-firmware-m--from-the-four-roms-their-labels-and-the-boards)), label for label.
 
 ## 15. The CC710 firmware [H — from a ROM dump, ID `710`]
 
-The original CC784's code base ([§16](#16-the-original-cc784-firmware-h--from-a-rom-dump-id-9g)) with the packet protocol added, the step before the NET's ([§1](#1-lineage-of-the-stock-firmware-m--from-the-four-roms-their-labels-and-the-boards)), for the ten-channel sign on the `CC784-3A` board ([hardware notes §4](hardware.md#4-the-cc784-3a-board-original-cc784-and-cc710-h)): 16 KB with code to `307A`, 4 MHz, the 1302 Hz ISR doing everything per interrupt, keypad input through the 10-pin header. Source: [src/stock/cc710.asm](src/stock/cc710.asm); 2959 of 5419 instructions are the NIR's, and the NIR names apply.
+The original CC784's code base ([§16](#16-the-original-cc784-firmware-h--from-a-rom-dump-id-9g)) with the packet protocol added, the step before the NET's ([§1](#1-lineage-of-the-stock-firmware-m--from-the-four-roms-their-labels-and-the-boards)), for the ten-channel sign on the `CC784-3A` board ([hardware notes §4](hardware.md#4-the-cc784-3a-board-original-cc784-and-cc710-h)): 16 KB with code to `307A`, 4 MHz, the 1302 Hz ISR doing everything per interrupt, keypad input through the 10-pin header. Source: [src/stock/cc710.asm](src/stock/cc710.asm); 3469 of its 4263 instructions line up with the NIR's in order (§1), and the NIR names apply.
 
 | | CC710 | CC784 (NET/NIR) |
 |---|---|---|
@@ -478,7 +478,7 @@ The original CC784's code base ([§16](#16-the-original-cc784-firmware-h--from-a
 
 ## 16. The original CC784 firmware [H — from a ROM dump, ID `9g`]
 
-The ancestor of the CC710 code base, read from the original keypad CC784 (a `CC784-3A` board, ROM labelled `CC784-9E-USA`, [hardware notes §4.4](hardware.md#44-the-original-cc784s-board-h)): 16 KB image with code to `234C`, everything after it `FF`. Source: [src/stock/cc784.asm](src/stock/cc784.asm). 2673 of its 2800 instructions line up with the CC710's in order (2310 with the NIR's). The CC710 names apply, and where they differ the source uses this ROM's meaning.
+The ancestor of the CC710 code base, read from the original keypad CC784 (a `CC784-3A` board, ROM labelled `CC784-9E-USA`, [hardware notes §4.4](hardware.md#44-the-original-cc784s-board-h)): 16 KB image with code to `234C`, everything after it `FF`. Source: [src/stock/cc784.asm](src/stock/cc784.asm). 2673 of its 2800 instructions line up with the CC710's in order (2312 with the NIR's). The CC710 names apply, and where they differ the source uses this ROM's meaning.
 
 | | Original CC784 | CC710 |
 |---|---|---|

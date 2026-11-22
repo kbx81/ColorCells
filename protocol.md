@@ -173,7 +173,7 @@ The patched firmware also takes `04 'M'`: the message channels 00–89, leaving 
 17  H H  M M  a
 ```
 
-`HH` = hour **1–12** (zero padded, ASCII), `MM` = minutes (ASCII), `a` = `'Y'` for AM, `'N'` for PM (the stock NET firmware takes `'A'` for AM instead, as the CC710 does, §8). Only the time is sent; the CC784 has no date command in this program (*the NC900 build sends a longer binary date/time record*).
+`HH` = hour **1–12** (zero padded, ASCII), `MM` = minutes (ASCII), `a` = `'Y'` for AM, `'N'` for PM (the stock NET firmware takes `'A'` for AM instead, as the CC710 does, §8; the patched firmware takes either, and `cc784.py --ampm AP` sends `A`/`P`). Only the time is sent; the CC784 has no date command in this program (*the NC900 build sends a longer binary date/time record*).
 
 Example 9:41 AM → `17 30 39 34 31 59` → frame `B1 01 80 06 17 30 39 34 31 59 <sum>`.
 
@@ -217,7 +217,7 @@ NETCC's names for these are not the sign's. The sign's own editor labels each by
 | — | not in NETCC | `0xBB` (187) | **HOLD** |
 | M | Magic | `0x1F` (31) | MAGIC |
 | P | Pause 1 s | `0x06` (6) | **HALT** |
-| X | Wait for key | `0xBA` (186) |
+| X | Wait for key | `0xBA` (186) | **WAIT** |
 
 ### 5.3 Speed
 
@@ -231,6 +231,8 @@ NETCC's names for these are not the sign's. The sign's own editor labels each by
 | 5 | `0xF5` |
 | 6 | `0xF6` |
 | 7 (slowest) | `0xF7` (247) |
+
+The labels are NETCC's. The firmware keeps `byte & 7` as the speed, so `0xF8` (speed 0) is the fastest and `0xF1` the next.
 
 ### 5.4 Miscellaneous
 

@@ -25,6 +25,7 @@ Examples
     cc784.py --channels 10 msg 1 "HI"   # stock ten-channel firmware: channels 0-9, one digit
     cc784.py --lite seq 1 3             # patched LITE build (stock 3A board): one-digit channels, else as patched
     cc784.py time                       # set clock from the PC (12-hour)
+    cc784.py --ampm AP time             # stock NET: AM/PM sent as A/P (stock NIR: Y/N; patched takes both)
     cc784.py time24                     # patched firmware: 24-hour clock, no AM/PM
     cc784.py raw 09 30 30 0e 48 49      # send an arbitrary payload
     cc784.py stop                       # patched firmware: B7 '1', open the editor as a serial terminal
@@ -443,6 +444,9 @@ def add_common_args(ap):
     ap.add_argument('--lite', action='store_true',
                     help='the patched LITE build: channels 0-9 sent as one digit, long messages split to '
                          'the frame limit B4 \'1\' reports; markers and time as patched')
+    ap.add_argument('--ampm', choices=('YN', 'AP'),
+                    help='how time sends AM/PM: YN for the stock NIR, AP for the stock NET and ten-channel '
+                         'firmware; the patched firmware takes both. Default: AP with --channels 10, else YN')
     ap.add_argument('--done', action='store_true',
                     help='patched firmware (patch 16+): wait for its DONE byte after each frame instead of pausing')
     ap.add_argument('--unsafe', action='store_true',
@@ -562,7 +566,8 @@ def run(link, a, ap):
         else:
             h = target.hour % 12 or 12
             am = target.hour < 12
-            ampm = (b'A' if am else b'P') if ten else (b'Y' if am else b'N')   # ten-channel: A = AM, else PM
+            pair = (a.ampm or ('AP' if ten else 'YN')).encode()
+            ampm = pair[0:1] if am else pair[1:2]
             s.send_frame(b'\x17' + b'%02d%02d' % (h, target.minute) + ampm)
             print("  set to %02d:%02d %s" % (h, target.minute, 'AM' if target.hour < 12 else 'PM'))
     elif c == 'raw':
