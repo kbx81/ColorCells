@@ -336,6 +336,7 @@ The essential part is the `CC784-4`'s lockout, watching the regulated 5 V instea
 - [ ] U13 pin 8 to U13 pin 5, and to RAM pin 26 if a 6264 is fitted (step 1).
 - [ ] The trip point: at this sub-milliamp current the zener conducts a few hundred millivolts below its rating, so Q9 releases somewhere around 4.6–4.8 V on the 5 V rail [M]: the RAM is locked out as soon as the supply sags. Check afterwards that the 5 V rail sits above that with the sign warm, or the store will refuse writes.
 - [ ] Check before inserting chips: with power on, U13 pin 8 reads about 5 V; with the mains off and the 5 V rail below the trip point, it falls to 0 V while `+5VP` stays up.
+- [ ] Check the backup draw: with the mains off and the RAM fitted, the voltage across R4 must be a few millivolts. A volt or more (about 4.5 mA) means the RAM is still selected and drains the backup in under an hour: U13 pins 9 and 10 must sit at `+5VP`. A leaky Q9 holds them near 1 V; on one board studied here, a Q9 corroded by battery electrolyte did exactly that.
 
 ### Step 3: Host cable
 
@@ -368,6 +369,7 @@ Converting the board does not convert the CC710's display. The CC784 firmware sh
 
 - [ ] Power up with the NET firmware: the demo scrolls; [upgrades.md §5](upgrades.md#5-checks-after-any-upgrade--5-min) for the rest.
 - [ ] Load a short message, then switch the mains off and on twenty times: the message must survive every cycle. The fault is intermittent, so more cycles make a pass more convincing. This is the test the stock lockout fails.
+- [ ] If every cycle comes back empty (demo running, address 1, clock at 12:00 AM) rather than damaged, the RAM lost its backup supply, not its contents to stray writes: run step 2's backup-draw check.
 
 ## 6. Open questions
 
