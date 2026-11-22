@@ -2218,7 +2218,8 @@ def cmd_flush():
 def cmd_lite():
     """LITE (an unmodified 3A board: 4 MHz, 2 K RAM, no IR, 300 baud): a 16 K image; the
     store fills the 2 K; channels by one digit or two; one-digit sequences; B5 refused;
-    status reports at 300 baud; TWINKLE and GLIMMER from the wired keypad's editor.
+    status reports at 300 baud; TWINKLE and GLIMMER from the wired keypad's editor; speed
+    as dark interrupts after each frame, held ones too; brightness off or full only.
     Run without CC784_LITE it re-runs itself under it."""
     if not LITE:
         return subprocess.run([sys.executable, __file__, 'lite'], env=dict(os.environ, CC784_LITE='1')).returncode == 0
@@ -2274,6 +2275,47 @@ def cmd_lite():
           b'\xb2\x19' in store() and b'\xb2\xbb' in store())
     check('no faults, stack high-water %d of %d' % (s.stack_top - s.min_stack, syms['STACK_SIZE']),
           not s.faults and s.stack_top - s.min_stack < syms['STACK_SIZE'])
+
+    # P51: speed is dark interrupts after each frame, held frames too; every row keeps its
+    # speed-0 lit time. Brightness is off or full: a pass under one interrupt can't be cut.
+    def scan(s, ms=2000):
+        """per refresh, in interrupts: dark time, and lit time by latch row code"""
+        s.refreshes = 0; s.frames.clear()
+        step, n, dark, lit = CPU_HZ // 15625, 0, 0, {}
+        for _ in range(ms * 1000 // 64):
+            s.run(step); n += 1
+            r = s.latch & 0x0F
+            if r == 0x0F: dark += 1
+            else: lit[r] = lit.get(r, 0) + 1
+        per = step / s.tick_t / max(s.refreshes, 1)              # a sample, in interrupts per refresh
+        return dark * per, {r: c * per for r, c in lit.items()}, len(s.frames)
+    def play(body, n, hold=None):
+        s = Sign(rom, syms, fresh_ram=True); s.run_ms(2500)
+        if hold:
+            s.send_frame(bytes([0xB6, 3, 0xFF, hold]), addr=1); s.rx_wait(); s.run_ms(300)
+        s.send_frame(b'\x09\x30\x0e' + bytes([0xF0 + n]) + body + b'\x04\x30', addr=1); s.rx_wait()
+        s.run_ms(1500)
+        return s
+    crawl, held = b'THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG ' * 2, b'\x1aHI'
+    res = {}
+    for name, body, hold in (('crawl', crawl, None), ('held', held, 250)):
+        for n in (0, 7):
+            s = play(body, n, hold)
+            res[name, n] = scan(s) + (s.faults,)
+    for name in ('crawl', 'held'):
+        (d0, l0, f0, x0), (d7, l7, f7, x7) = res[name, 0], res[name, 7]
+        spread = max(abs(l7.get(r, 0) / l0[r] - 1) for r in l0)
+        check('%s: speed 7 adds %.2f dark interrupts a refresh (%.2f -> %.2f), rows lit the same (%.1f %% apart), %d/%d distinct frames'
+              % (name, d7 - d0, d0, d7, spread * 100, f0, f7),
+              abs(d7 - d0 - 7) < 0.3 and len(l0) >= 7 and spread < 0.03 and not x0 and not x7
+              and ((f0 > 50 and f7 > 50) if name == 'crawl' else (f0 <= 2 and f7 <= 2)))
+    s = play(crawl, 0)
+    lit = []
+    for level in (3, 2, 1, 0):
+        s.send_frame(bytes([0xB6, 2, 0x03, level]), addr=1); s.rx_wait(); s.run_ms(500)
+        lit.append(sum(scan(s, 1000)[1].values()))
+    check('brightness full/medium/low/off: %s interrupts lit a refresh (off or full only)' % ' '.join('%.2f' % v for v in lit),
+          lit[0] > 1 and all(abs(v / lit[0] - 1) < 0.05 for v in lit[1:3]) and lit[3] == 0 and not s.faults)
     print('lite: %d/%d checks pass' % (sum(checks), len(checks)))
     return all(checks)
 
