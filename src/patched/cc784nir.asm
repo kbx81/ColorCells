@@ -282,7 +282,6 @@ FRAME_COLS           equ 86          ; columns sent per row: the panel's 84 plus
     IFDEF LITE
 CHANNELS             equ 10          ; message channels 0-9
 TICK6_DIV            equ 1           ; 4 MHz: 1302 interrupts a second, the tick service on each
-DISP_FRAC            equ 42          ; DISP_STRETCH counts sevenths of six interrupts: 42nds of one
 BAUD_STEP_300        equ 30          ; BAUD_T fifths of a 1/6 interrupt, so 30 an interrupt;
 BAUD_STEP_600        equ 30          ; 300 baud only
 BAUD_STEP_1200       equ 30
@@ -984,12 +983,14 @@ int_rx_active:
         CALL rx_phase_run
         JR int_tx
 
+    IFNDEF LITE                 ; LITE: no dimming, a pass under one interrupt can't be cut
 int_lit_only:                   ; a dimmed row and nothing else
         LD A,(LIT_LIMIT)
         AND A
         JR nz,int_lit_run
         RES WORK_LIT_BIT,(HL)   ; stale: cfg_write zeroed the limit
         JR int_lit_on
+    ENDIF
 
 int_timer:
         EX AF,AF'
@@ -1001,8 +1002,10 @@ int_timer:
         LD HL,ISR_WORK          ; a keypad's rest) or an engine with work: else none of the
         XOR (HL)                ; tests down to int_lit_on is needed
         JR z,int_lit_on
+    IFNDEF LITE
         CP 1<<WORK_LIT_BIT
         JR z,int_lit_only
+    ENDIF
         LD A,(RX_PHASE)         ; P30: the serial bit engines, every interrupt,
         AND A                   ; so 1200 baud fits
         JR nz,int_rx_active
@@ -1013,6 +1016,7 @@ int_tx:
         LD A,(TX_STATUS)
         AND 3
         CALL nz,tx_isr
+    IFNDEF LITE
         LD A,(LIT_LIMIT)        ; P35: brightness by lit time (see latch_row_dim):
         AND A                   ; 0 at full brightness, the cheap way out
         JR z,int_lit_on
@@ -1045,6 +1049,7 @@ int_lit_count:
         LD (LIT_LIMIT),A
         LD HL,ISR_WORK
         RES WORK_LIT_BIT,(HL)
+    ENDIF
 
 int_lit_on:
         LD HL,DISP_COUNT
@@ -1092,6 +1097,9 @@ int_vector_done:
         RET                     ; RETI only matters to Z80 peripherals; the board has none
 
 int_disp_due:
+    IFDEF LITE
+        LD B,TICK6_DIV          ; no stretch: the speed is dark ticks after the frame (row_output)
+    ELSE
         LD A,(DISP_STRETCH)
         LD C,A
         LD A,(DISP_ACC)
@@ -1107,6 +1115,7 @@ int_disp_carry:
 
 int_disp_reload:
         LD (DISP_ACC),A
+    ENDIF
         LD (HL),B
         LD HL,SVC_DUE
         BIT 1,(HL)              ; P40: the last tick still due: this one merges with it
@@ -1225,6 +1234,17 @@ tick6_display:
         ; instead (DISP_STRETCH, set at the end of the frame)
 
 row_output:
+    IFDEF LITE                  ; the frame's dark ticks: every row keeps its speed-0 lit
+        LD A,(DISP_STRETCH)     ; times, so the passes' ratio holds at any speed
+        AND A
+        JR z,row_lit
+        DEC A
+        LD (DISP_STRETCH),A
+        CALL latch_blank
+        JP tick6_restore
+
+row_lit:
+    ENDIF
         LD A,(ROW_OUT_PENDING)
         AND A
         JP z,row_advance
@@ -1365,24 +1385,35 @@ frame_poll_done:
         JR z,frame_speed
         DEC A
         LD (FRAME_DELAY),A
+    IFDEF LITE
+        CALL frame_stretch      ; a held frame gets its dark ticks too
+    ENDIF
         JP frame_bit7_tick
 
-; ---- frame_speed (P26): where stock queued SCROLL_SPEED dark ticks after the
+; ---- frame_stretch (P26): where stock queued SCROLL_SPEED dark ticks after the
 ;      frame, the next frame's 21 display ticks are stretched by the same total
 ;      (2 x speed sevenths each), so the rows stay lit and evenly so.
 ;      Effects, the editor and TINY run at the full rate, as before.
-frame_speed:
+frame_stretch:
         LD A,(MENU_ACTIVE)
         LD HL,EFFECT_ID
         OR (HL)
         LD HL,TINY_RENDER
         OR (HL)
-        JR nz,frame_scroll
+        RET nz
         LD A,(SCROLL_SPEED)
+    IFDEF LITE                  ; whole-interrupt ticks: speed dark ticks after the frame
+        LD (DISP_STRETCH),A
+    ELSE
         ADD A,A
         LD (DISP_STRETCH),A
         LD HL,DISP_ACC          ; 21 ticks is a multiple of 7: rotate the carry
         INC (HL)                ; pattern a seventh per frame so every row averages the same
+    ENDIF
+        RET
+
+frame_speed:
+        CALL frame_stretch
 
 frame_scroll:
         LD A,(SCROLLING)
@@ -3512,7 +3543,8 @@ effect_none:
 ; ---- crawl_step (P42): effect_step for the render loop. The plain crawl draws the
 ;      next character once CRAWL_LEAD columns or fewer are left to scroll in, so a
 ;      packet processed meanwhile does not stop the scroll. Anything but a plain
-;      character next, after any colors, waits for the full catch-up.
+;      character next, after any colors and font or MAGIC attributes, waits for the
+;      full catch-up.
 crawl_step:
         CALL wait_frame_delay
 
@@ -3522,21 +3554,28 @@ crawl_wait:
         AND A
         JR z,fx_scroll_done
         LD A,(EFFECT_ID)
-        LD HL,MAGIC_MODE
-        OR (HL)
+        AND A
         JR nz,crawl_wait
         LD HL,(STORE_CURSOR)
         DEC HL
 
-crawl_peek:                     ; colors (80-93) go into the next glyph's column in the
-        INC HL                  ; same render step: judge the byte after them
+crawl_peek:                     ; colors (80-93), BIG..FLASH, MAGIC, THIN and MAGIC OFF act
+        INC HL                  ; in the same render step: judge the byte after them
         LD A,(HL)
         AND 0xe0
         CP COLOR_BASE
         JR z,crawl_peek
         LD A,(HL)
-        CP ATTR_TIME
-        JR z,crawl_wait
+        CP ATTR_MAGIC
+        JR z,crawl_peek
+        CP ATTR_THIN
+        JR z,crawl_peek
+        CP ATTR_MAGIC_OFF
+        JR z,crawl_peek
+        SUB ATTR_BIG
+        CP ATTR_FLASH-ATTR_BIG+1
+        JR c,crawl_peek
+        LD A,(HL)
         CALL char_flags
         JR nz,crawl_wait
         LD HL,(FB_COLPTR)       ; columns still to scroll in: FB_COLPTR - FB_COL
@@ -3717,6 +3756,8 @@ beep_start:
 ; ---- fx_end_of_channel
 fx_end_of_channel:
         CALL effect_none
+        XOR A                   ; MAGIC would make the push-off's spaces bold: wider and
+        LD (MAGIC_MODE),A       ; slower to draw, a stall at 4 MHz (init_render clears it next)
         CALL scroll_off_text
         LD SP,(STACK_INIT)
         JP main_loop
@@ -5645,8 +5686,10 @@ latch_blank:
         OR LATCH_PARK
         LD (CTRL_LATCH_SHADOW),A
         LD (CTRL_LATCH),A
+    IFNDEF LITE
         XOR A                   ; P35: a row code still waiting for the ISR goes with the
         LD (LATCH_PENDING),A    ; row, or a late service's next pass would light it mid-shift
+    ENDIF
         EI
         RET
 
@@ -5671,6 +5714,10 @@ latch_row:
 ;      carried a 0-128 us remainder that drifted and pulsed at dim levels.
 ;      Every pixel loses the same share, so no color shifts. TINY rows last two
 ;      ticks, like the double-tick pass.
+    IFDEF LITE                  ; full or off only: no dimming
+latch_row_dim       equ latch_row
+latch_row_dim_tiny  equ latch_row
+    ELSE
 latch_row_dim:
         LD A,(ROW_PORT)
         AND 8
@@ -5685,22 +5732,11 @@ latch_dim:
         AND CFG_BRIGHT
         CP CFG_BRIGHT
         JR z,latch_row          ; full: LIT_LIMIT is 0 (cfg_write clears it)
-    IFDEF LITE                  ; a tick per interrupt: the single pass dark, the double lit
-        BIT 3,B                 ; strobe to interrupt (level 2) or interrupt to blank (1)
-        RET z
-        CP 2
-        LD A,1
-        JR nz,lit_set
-        LD (LIT_COUNT),A
-        CALL lit_arm
-        JR latch_row
-    ELSE
         BIT 3,B
         JR z,lit_set
         LD B,A
         ADD A,A
         ADD A,B
-    ENDIF
 
 lit_set:
         CALL lit_arm
@@ -5717,6 +5753,7 @@ lit_arm:
         SET WORK_LIT_BIT,(HL)
         EI
         RET
+    ENDIF
 
 ; ---- rx_fifo_get: Pop one byte from RX_FIFO into RX_BYTE. Returns NC with A=byte, or C if empty
 rx_fifo_get:
@@ -9389,9 +9426,11 @@ cfg_write:
         AND A
         JR nz,cfg_merge
         RES CFG_WRAPPED_BIT,C
+    IFNDEF LITE
         XOR A
         LD (LIT_LIMIT),A        ; a brightness change: latch_row_dim re-arms, or not at full
         LD (LATCH_PENDING),A
+    ENDIF
 
 cfg_merge:
         LD A,(HL)

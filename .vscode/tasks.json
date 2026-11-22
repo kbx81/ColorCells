@@ -128,7 +128,7 @@
     },
     {
       "label": "AT28C256-15PU -- program",
-      "detail": "Burns the packed 32 K chip image (both banks). -u disables software data protection before writing, -P re-enables it after: with /WE on /WR, an unprotected chip gets written by any crash. Bodges per ota.md §2: pin 27 (/WE) to Z80 /WR with a 10 k pull-up, pin 22 (/OE) to Z80 /RD, pin 1 (A14) to the added '273's Q0.",
+      "detail": "Burns the packed 32 K chip image (both banks). -u disables software data protection before writing, -P re-enables it after: with /WE on /WR, an unprotected chip gets written by any crash. Bodges per upgrades.md §2: pin 27 (/WE) to Z80 /WR with a 10 k pull-up, pin 22 (/OE) to Z80 /RD, pin 1 (A14) to the added '273's Q0.",
       "type": "shell",
       "command": "minipro",
       "args": [
@@ -151,7 +151,7 @@
     },
     {
       "label": "Build patched ROM (CC710)",
-      "detail": "The same source for the CC710's 59-column panel (-DCC710), on a CC784-3A board converted per hardware.md §12.",
+      "detail": "The same source for the CC710's 59-column panel (-DCC710), on a CC784-3A board converted per hardware.md §5.",
       "type": "shell",
       "command": "sjasmplus",
       "args": [
@@ -206,6 +206,38 @@
         "cwd": "${workspaceFolder}/src/patched"
       },
       "dependsOn": "Pack OTA image (CC710)",
+      "presentation": {
+        "reveal": "always",
+        "clear": true
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Build LITE ROM (27C256)",
+      "detail": "The LITE build (-DLITE) for a CC784-3A board, doubled to 32 K: R32 holds pin 27 (A14 on a 27C256) high, so the chip reads its upper half.",
+      "type": "shell",
+      "command": "sjasmplus --fullpath -DLITE --lst=cc784lite.lst cc784nir.asm && cat cc784lite.bin cc784lite.bin > cc784lite_27c256.bin",
+      "options": {
+        "cwd": "${workspaceFolder}/src/patched"
+      },
+      "group": "build",
+      "problemMatcher": "$zx-macroasm-sjasmplus"
+    },
+    {
+      "label": "M27C256 -- program (LITE)",
+      "detail": "Writes the doubled LITE image and verifies. Requires a UV-erased chip (M27C256 -- verify erased).",
+      "type": "shell",
+      "command": "minipro",
+      "args": [
+        "-p",
+        "M27C256B@DIP28",
+        "-w",
+        "cc784lite_27c256.bin"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}/src/patched"
+      },
+      "dependsOn": "Build LITE ROM (27C256)",
       "presentation": {
         "reveal": "always",
         "clear": true

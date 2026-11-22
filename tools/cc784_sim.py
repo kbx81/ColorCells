@@ -2347,7 +2347,7 @@ def cmd_config():
     setb(s, 2, 0x01); d1 = duty(s); f1, s1 = passes(s)
     setb(s, 2, 0x00); d0 = duty(s); f0, s0 = passes(s)
     check('brightness 3: duty %.2f (%d+%d passes/s), 2: %.2f (%d+%d), 1: %.2f (%d+%d), 0: %.2f (%d+%d)' % (d3, f3, s3, d2, f2, s2, d1, f1, s1, d0, f0, s0),
-          (d3 > 0.4 and abs(d2 / d3 - 0.6) < 0.12 and abs(d1 / d3 - 0.2) < 0.1 if LITE else   # LITE: a pass's tail, the advance tick
+          (d3 > 0.4 and abs(d2 / d3 - 1) < 0.05 and abs(d1 / d3 - 1) < 0.05 if LITE else   # LITE: off or full only
            d3 > 0.5 and abs(d2 / d3 - 2 / 3) < 0.08 and abs(d1 / d3 - 1 / 3) < 0.08) and d0 == 0
           and min(f3, s3, f2, s2, f1, s1) > 300 and f0 == 0 and s0 == 0)
     # the lit time must be the same every pass: lit from the latch it carried a
@@ -2358,13 +2358,8 @@ def cmd_config():
         s.run(256)
         if (s.latch & 0x0F) != 0x0F: lit += 1
         elif lit: runs.append(lit); lit = 0
-    from collections import Counter
-    hist = Counter(runs); top = hist.most_common(2)
     near = lambda want: sum(1 for l in runs if abs(l - want) <= 1)       # 32 us samples: a run lands on 4 or 5, 12 or 13
-    if LITE:
-        check('level 1: lit runs are one length: %d of %d near %s samples' % (sum(near(top[0][0]) for _ in [0]), len(runs), top[0][0]),
-              len(runs) > 300 and near(top[0][0]) > 0.95 * len(runs))
-    else:
+    if not LITE:
         check('level 1: lit runs are two exact lengths, 1 and 3 interrupts: %d near 128 us, %d near 384 us (of %d)' % (near(4), near(12), len(runs)),
               len(runs) > 300 and near(4) + near(12) > 0.95 * len(runs) and near(4) > 100 and near(12) > 100)
 

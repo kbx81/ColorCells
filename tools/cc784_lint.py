@@ -182,20 +182,26 @@ def measure(data, cc710, fields={}):
     s.send_frame(bytes([0xB6, 3, 0xFF, 1]), addr=1); s.rx_wait(); s.run_ms(300)    # holds of one frame: a quick pass
     for n, v in fields.items():
         s.send_frame(b'\x09\x39%c\x0e' % (0x30 + n) + v, addr=1); s.rx_wait(); s.run_ms(300)
+    for i in range(0, max(len(data), 1), 250):                  # long messages as cc784.py msg splits them
+        s.send_frame(b'\x09\x30\x30' + (b'\x0e' if i == 0 else b'\xb3') + data[i:i + 250], addr=1, flag=0x81)
+        s.rx_wait(); s.run_ms(1500)
+    ram = bytes(s.m.memory[0x4000:0x8000])                      # reboot with the store kept: measuring starts
+    s = S.Sign(rom, syms, fresh_ram=True)                       # at page 1, not mid-demo or mid-load
+    s.m.set_memory_block(0x4000, ram)
     col, ptr, txbuf = syms['COL_COUNT'], syms['STAGE_PTR'], syms['TXBUF']
-    flush = (syms['fx_flush_stage'], syms['fx_dispatch'])
-    res = []
+    flush, fx_set = (syms['fx_flush_stage'], syms['fx_dispatch']), (syms['fx_set'], syms['fx_left'])
+    res, staging = [], [False]
     ow = s._on_write
     def wr(addr, value):
-        if addr == col and flush[0] <= s.m.pc < flush[1]:
+        if addr == col and fx_set[0] <= s.m.pc < fx_set[1]:
+            staging[0] = True                                   # a page opened: the next flush is its width
+        elif addr == col and flush[0] <= s.m.pc < flush[1] and staging[0]:
+            staging[0] = False
             used = int.from_bytes(s.ram('STAGE_PTR', 2), 'little') - txbuf
             c = s.ram('CUR_CHAR')[0]
             res.append((used, is_text(c), c))
         return ow(addr, value)
     s.m.set_write_callback(wr); s.m.mark_addrs(col, 1, s.m.WRITE_MARK)
-    for i in range(0, max(len(data), 1), 250):                  # long messages as cc784.py msg splits them
-        s.send_frame(b'\x09\x30\x30' + (b'\x0e' if i == 0 else b'\xb3') + data[i:i + 250], addr=1, flag=0x81)
-        s.rx_wait(); s.run_ms(1500)
     want = sum(1 for t in tokenize(data) if t.kind == 'effect')
     for _ in range(1200):                      # up to 120 s of sign time
         s.run_ms(100)
