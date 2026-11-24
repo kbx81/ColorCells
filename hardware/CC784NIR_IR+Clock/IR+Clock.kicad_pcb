@@ -121,9 +121,9 @@
 			(subtractmaskfromsilk no)
 			(outputformat 1)
 			(mirror no)
-			(drillshape 1)
+			(drillshape 0)
 			(scaleselection 1)
-			(outputdirectory "")
+			(outputdirectory "gerber")
 		)
 	)
 	(footprint "Capacitor_SMD:C_0805_2012Metric_Pad1.18x1.45mm_HandSolder"
@@ -144,7 +144,7 @@
 				)
 			)
 		)
-		(property "Value" "22p"
+		(property "Value" "18p"
 			(at 0 1.68 90)
 			(unlocked yes)
 			(layer "F.Fab")
@@ -195,7 +195,7 @@
 				)
 			)
 		)
-		(property "MPN1" "885012007002"
+		(property "MPN1" "C0805C180J5GACTU"
 			(at 0 0 90)
 			(unlocked yes)
 			(layer "F.Fab")
@@ -312,7 +312,7 @@
 		(descr "IR Receiver Vishay TSOP-xxxx, MINICAST package, see https://www.vishay.com/docs/82669/tsop32s40f.pdf")
 		(tags "IR Receiver Vishay TSOP-xxxx MINICAST")
 		(property "Reference" "U1"
-			(at 2.5 -2.4 90)
+			(at 2.5 2.4 90)
 			(unlocked yes)
 			(layer "F.SilkS")
 			(uuid "6c557cc9-74c2-4422-adc3-03bf438d3993")
@@ -795,14 +795,15 @@
 			)
 		)
 		(property "Value" "74HC151"
-			(at 3.81 20.11 0)
+			(at 3.81 8.89 90)
 			(unlocked yes)
-			(layer "F.Fab")
+			(layer "F.SilkS")
 			(uuid "bc44e9c0-b88a-41ed-ba22-98f00cff1956")
 			(effects
 				(font
 					(size 1 1)
-					(thickness 0.15)
+					(thickness 0.2)
+					(bold yes)
 				)
 			)
 		)
@@ -1400,14 +1401,15 @@
 			)
 		)
 		(property "Value" "74HC4060"
-			(at 3.81 20.11 0)
+			(at 3.81 8.89 90)
 			(unlocked yes)
-			(layer "F.Fab")
+			(layer "F.SilkS")
 			(uuid "ff30443d-a319-4126-95d0-45989ac8539e")
 			(effects
 				(font
 					(size 1 1)
-					(thickness 0.15)
+					(thickness 0.2)
+					(bold yes)
 				)
 			)
 		)
@@ -1993,7 +1995,6 @@
 		(descr "C26-LF, Crystal, length 6.5mm, width 2.1mm, THT")
 		(property "Reference" "Y1"
 			(at 0.95 9.8 180)
-			(unlocked yes)
 			(layer "F.SilkS")
 			(uuid "3f1adc60-03db-42e3-a9d1-8459c509ada4")
 			(effects
@@ -2973,7 +2974,7 @@
 				)
 			)
 		)
-		(property "Value" "22p"
+		(property "Value" "18p"
 			(at 0 1.68 90)
 			(unlocked yes)
 			(layer "F.Fab")
@@ -3024,7 +3025,7 @@
 				)
 			)
 		)
-		(property "MPN1" "885012007002"
+		(property "MPN1" "C0805C180J5GACTU"
 			(at 0 0 270)
 			(unlocked yes)
 			(layer "F.Fab")
@@ -3203,7 +3204,7 @@
 				)
 			)
 		)
-		(property "MPN1" "RC0805JR-07120RL"
+		(property "MPN1" "RC0805JR-07100RL"
 			(at 0 0 0)
 			(unlocked yes)
 			(layer "F.Fab")

@@ -17,7 +17,7 @@ The ROM is an AT28C256 with three pins rewired: `/WE` to the Z80's `/WR` (with a
 
 The register is separate from U5 because U5 is cleared by the board's watchdog whenever interrupts stop for 512 µs, which happens during every OTA command; a bank bit there would swap the ROM under the running code. The register's `/MR` is on the Z80's `/RESET`, so every reset, power-on included, starts in bank 0.
 
-ROM `/CE` is gated by `/MREQ`, so only memory accesses to `0x0000–0x3FFF` reach the chip; I/O and refresh cycles never do.
+ROM `/CE` is decoded from `/MREQ`, so I/O cycles never reach the chip. Refresh cycles do: they assert `/MREQ` with `I` on the upper address lines, and the firmware leaves `I` at 0, so every refresh selects the ROM. That is harmless: the CPU ignores the data bus during a refresh, and a write needs `/WR`; but the same decode is why `I` must stay below `C0` (§8).
 
 ## 2. ROM layout (each bank)
 
