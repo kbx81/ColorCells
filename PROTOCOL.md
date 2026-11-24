@@ -31,7 +31,7 @@ The program sends **one byte at a time with a ~50 ms pause after each byte**. Th
 | Ground | ground | 5 | 2 |
 | Stock firmware serial detect (excluding NIR) | tie to ground | 2 | 9 |
 
-- **Levels:** the sign expects RS-232 polarity; a MAX3232-class driver is the faithful interface, and the [hardware notes §2.4](hardware.md#24-host-port-serial-and-keypad-h) explain why plain TTL may do.
+- **Levels:** the sign expects RS-232 polarity; a MAX3232-class driver is the faithful interface, and the [hardware notes §2.4](HARDWARE.md#24-host-port-serial-and-keypad-h) explain why plain TTL may do.
 - **The NIR and the patched firmware** need only the first three lines.
 - **The serial-detect tie** is read at boot by the other stock firmwares; without it they run in keypad mode and ignore serial. With it, the NET talks packets, the CC710 opens terminal mode (packet mode needs more, [§8](#8-the-cc710-on-the-wire)) and the original CC784 takes bytes as keys with its `9g` firmware and acts as the CC710 with `9k` ([§9](#9-the-original-cc784-on-the-wire)).
 
@@ -51,7 +51,7 @@ Every transmission to the sign is one frame:
 |---|---|
 | `0xB1` | Start of frame (constant) |
 | `addr` | Sign address as a **binary byte** (as set in the sign's address menu/configuration). `0x2A` (`*`) is used as the broadcast "all signs" address; the program does not wait for an ACK when using it. |
-| `0x80` | Flag. Stock firmware processes the packet immediately if it is exactly `0x80`, else defers it to the main loop (see §7). The [patched firmware](patched.md) takes only `0x80` and `0x81` (any other value means the `B1` was no header), processes every packet at its next render step, and bit 0 asks for DONE: with `0x81` the sign sends a `0x04` byte once the packet has been processed and its reply sent, which is the moment it will accept a new frame; a frame sent before that is parsed and ignored. |
+| `0x80` | Flag. Stock firmware processes the packet immediately if it is exactly `0x80`, else defers it to the main loop (see §7). The [patched firmware](PATCHED.md) takes only `0x80` and `0x81` (any other value means the `B1` was no header), processes every packet at its next render step, and bit 0 asks for DONE: with `0x81` the sign sends a `0x04` byte once the packet has been processed and its reply sent, which is the moment it will accept a new frame; a frame sent before that is parsed and ignored. |
 | `len` | Number of payload bytes that follow (does **not** include the checksum) |
 | payload | 1–254 bytes, see §4 |
 | `cksum` | **8-bit additive checksum: sum of all payload bytes, modulo 256.** The 4 header bytes are excluded. No inversion, no two's-complement. |
@@ -115,7 +115,7 @@ Control bytes used by the CC784 build (the NC900 build uses different ones):
 | remark | `0xB0` | `0x13` | hidden comment delimiter |
 | clear-all | `0x03` | – | clear all channels |
 
-Channels are `00`–`99`, always written as **two ASCII digits** (the patched firmware also takes one digit after `09` when the next byte is not a digit, or when the pair is past the last channel; its LITE build has channels `0`–`9` and wants one digit each in a sequence, [patched.md](patched.md#2-patches) patch 51); the sign stores them as a two-byte marker `D0+tens D0+units`. Channel 100 is the read-only built-in demo. All channels share one 6625-byte pool (no per-channel limit). **A channel header (CHANNEL, `09 d d`) must be followed by DELETE_TEXT (`0E`, replace) or APPEND (`B3`) before any text** — on its own it leaves the insertion point on the channel marker and the text would corrupt it. The names are the firmware source's `CMD_*` constants; [firmware notes §6](firmware.md#6-packet-processing-and-command-set-pkt_process-2a68-h) lists them all.
+Channels are `00`–`99`, always written as **two ASCII digits** (the patched firmware also takes one digit after `09` when the next byte is not a digit, or when the pair is past the last channel; its LITE build has channels `0`–`9` and wants one digit each in a sequence, [PATCHED.md](PATCHED.md#2-patches) patch 51); the sign stores them as a two-byte marker `D0+tens D0+units`. Channel 100 is the read-only built-in demo. All channels share one 6625-byte pool (no per-channel limit). **A channel header (CHANNEL, `09 d d`) must be followed by DELETE_TEXT (`0E`, replace) or APPEND (`B3`) before any text** — on its own it leaves the insertion point on the channel marker and the text would corrupt it. The names are the firmware source's `CMD_*` constants; [firmware notes §6](FIRMWARE.md#6-packet-processing-and-command-set-pkt_process-2a68-h) lists them all.
 
 ### 4.1 Load a message into a channel
 
@@ -165,7 +165,7 @@ Clear **all** channels (`'A'` in the menu): payload is the single byte `03`.
 
 NETCC sends `"A"` (all) as every channel, `04 30 30 30 31 30 32 … 30 39`, but the firmware lays the full 0–99 sequence down before it parses the digits and stops at the first byte that is not one, so a bare `04`, or `04 41` (`'A'`), means all as well; `cc784.py seq a` sends the bare form.
 
-The patched firmware also takes `04 'M'`: the message channels 00–89, leaving out 90–99, which a message can show inside itself as fields ([patched.md](patched.md#2-patches), patch 54); `cc784.py seq m`.
+The patched firmware also takes `04 'M'`: the message channels 00–89, leaving out 90–99, which a message can show inside itself as fields ([PATCHED.md](PATCHED.md#2-patches), patch 54); `cc784.py seq m`.
 
 ### 4.4 Set the clock
 
@@ -243,13 +243,13 @@ The labels are NETCC's. The firmware keeps `byte & 7` as the speed, so `0xF8` (s
 | R | Remark / comment (hidden text, terminated by another `0xB0`) | `0xB0` |
 | G | User-drawn graphic follows | `0xB8` (184) |
 | A | Rainbow | `0xBC` (188) |
-| — | Scroll up / scroll down, the patched firmware's variants of the UP and DOWN wipes: the page pushes the one on the panel out ([patched.md](patched.md#2-patches), patch 48; `@{scroll up}`, `@{scroll down}`) | `0xB2 0x1A` / `0xB2 0x1B` |
+| — | Scroll up / scroll down, the patched firmware's variants of the UP and DOWN wipes: the page pushes the one on the panel out ([PATCHED.md](PATCHED.md#2-patches), patch 48; `@{scroll up}`, `@{scroll down}`) | `0xB2 0x1A` / `0xB2 0x1B` |
 | — | Scroll right, the variant of the RIGHT wipe: the page slides in from the left a column a frame and pushes the one on the panel off to the right (patch 53; `@{scroll right}`) | `0xB2 0x0F` |
-| — | Glimmer, a patched-firmware modifier for the hold after Pause, a wipe, Hold or a scroll: dark diagonal stripes roll up or down through the page; it goes after the effect ([patched.md](patched.md#2-patches), patch 50; `@{glimmer}`) | `0xB2 0xBB` |
-| — | Twinkle, a patched-firmware modifier for the hold after Pause, a wipe, Hold or a scroll: random pixels go dark while the page holds; it goes after the effect ([patched.md](patched.md#2-patches), patch 49; `@{twinkle}`) | `0xB2 0x19` |
-| — | Field, the patched firmware's channel inside a message: `B2 '0'`–`B2 '9'` renders channel 90–99 at that point, so the host changes a value by loading that channel ([patched.md](patched.md#2-patches), patch 54; `@{field 0}`–`@{field 9}`) | `0xB2 0x30`–`0xB2 0x39` |
-| — | Flush, the patched firmware's push of the crawl's text off the panel mid-message, as at a message's end and in the font in force after it; nothing on a staged page ([patched.md](patched.md#2-patches), patch 57; `@{flush}`) | `0xB2 0x20` |
-| — | Randbow, the patched firmware's variant of Rainbow: the five colors in a shuffled order ([patched.md](patched.md#2-patches), patch 46; `@{randbow}`) | `0xB2 0xBC` |
+| — | Glimmer, a patched-firmware modifier for the hold after Pause, a wipe, Hold or a scroll: dark diagonal stripes roll up or down through the page; it goes after the effect ([PATCHED.md](PATCHED.md#2-patches), patch 50; `@{glimmer}`) | `0xB2 0xBB` |
+| — | Twinkle, a patched-firmware modifier for the hold after Pause, a wipe, Hold or a scroll: random pixels go dark while the page holds; it goes after the effect ([PATCHED.md](PATCHED.md#2-patches), patch 49; `@{twinkle}`) | `0xB2 0x19` |
+| — | Field, the patched firmware's channel inside a message: `B2 '0'`–`B2 '9'` renders channel 90–99 at that point, so the host changes a value by loading that channel ([PATCHED.md](PATCHED.md#2-patches), patch 54; `@{field 0}`–`@{field 9}`) | `0xB2 0x30`–`0xB2 0x39` |
+| — | Flush, the patched firmware's push of the crawl's text off the panel mid-message, as at a message's end and in the font in force after it; nothing on a staged page ([PATCHED.md](PATCHED.md#2-patches), patch 57; `@{flush}`) | `0xB2 0x20` |
+| — | Randbow, the patched firmware's variant of Rainbow: the five colors in a shuffled order ([PATCHED.md](PATCHED.md#2-patches), patch 46; `@{randbow}`) | `0xB2 0xBC` |
 | E, K, O, Q, V | Sync, sync&crawl, var. space, blank, date | **not supported on CC6x7** (listed "(LK)" = later models only) |
 
 ### 5.5 Colors
@@ -276,7 +276,7 @@ Background `0x90 | n`:
 | g | Green | `0x92` |
 | y | Yellow | `0x93` |
 
-The other foreground codes in `0x80`–`0x8F` are the dimmer and mixed shades; all sixteen are named in [firmware.md §8](firmware.md#8-rendering-h).
+The other foreground codes in `0x80`–`0x8F` are the dimmer and mixed shades; all sixteen are named in [FIRMWARE.md §8](FIRMWARE.md#8-rendering-h).
 
 ### 5.6 Built-in graphics (CC600/700 list; editor `G` then letter)
 
@@ -295,7 +295,7 @@ Note several graphic bytes collide with attribute bytes (`0x1B` is both "left ar
 
 *(NC900/CC900 graphics differ: 3 heart, 2 muncher, 227 phone, 248 wheel, 249 ball, 27 plane, 23 ship, 127 house, 232 car.)*
 
-The patched firmware draws `0x9F` as a degree sign ([patched.md](patched.md#2-patches), patch 55); `cc784.py` sends `°` as that byte, since Latin-1's `0xB0` is REMARK and would hide the text after it. `tools/cc784_font.py` draws every glyph with the codes that reach it.
+The patched firmware draws `0x9F` as a degree sign ([PATCHED.md](PATCHED.md#2-patches), patch 55); `cc784.py` sends `°` as that byte, since Latin-1's `0xB0` is REMARK and would hide the text after it. `tools/cc784_font.py` draws every glyph with the codes that reach it.
 
 ---
 
@@ -337,23 +337,23 @@ The sign's side of this protocol is read from the firmware itself, and lives in 
 
 | Topic | Where |
 |---|---|
-| The fixed 300 baud, the bit-banged receiver and transmitter | [firmware notes §4](firmware.md#4-serial-link-h) |
-| The frame parser state by state, ACK, NAK and the silent discard of other addresses | [firmware notes §5](firmware.md#5-packet-parser-pkt_st_-16ef178c-h) |
-| The complete command list, including the ones NETCC never sends, and the exact reply and dump frame formats | [firmware notes §6](firmware.md#6-packet-processing-and-command-set-pkt_process-2a68-h) |
-| Every attribute byte with the sign's own name for it, the color codes, the graphics and the European characters | [firmware notes §8](firmware.md#8-rendering-h) |
-| The board, the DB9 and the serial levels | [hardware notes §2.4](hardware.md#24-host-port-serial-and-keypad-h) |
+| The fixed 300 baud, the bit-banged receiver and transmitter | [firmware notes §4](FIRMWARE.md#4-serial-link-h) |
+| The frame parser state by state, ACK, NAK and the silent discard of other addresses | [firmware notes §5](FIRMWARE.md#5-packet-parser-pkt_st_-16ef178c-h) |
+| The complete command list, including the ones NETCC never sends, and the exact reply and dump frame formats | [firmware notes §6](FIRMWARE.md#6-packet-processing-and-command-set-pkt_process-2a68-h) |
+| Every attribute byte with the sign's own name for it, the color codes, the graphics and the European characters | [firmware notes §8](FIRMWARE.md#8-rendering-h) |
+| The board, the DB9 and the serial levels | [hardware notes §2.4](HARDWARE.md#24-host-port-serial-and-keypad-h) |
 
 **Added by the patched firmware:**
 
 | Topic | Where |
 |---|---|
-| 300 to 1200 baud, and 2560, set by the first frame after a second of silence | [patched.md](patched.md#2-patches), patches 30 and 52 |
-| The configuration block: `B6 index mask value` writes the masked bits of a byte, `B4 '5'` reads the block, `B4 '6'` the sequence list; `cc784.py config` | [patched.md](patched.md#2-patches), patch 35 |
-| Health counters in the `B4 '4'` reply; `cc784.py stats` | [patched.md](patched.md#2-patches), patches 40 and 44 |
-| The `B4 '1'` reply adds a third five-digit figure, the longest payload a frame may carry: 254, or 128 on a LITE build with 2 K of RAM. A longer frame is dropped unanswered. `cc784.py mem` | [patched.md](patched.md#2-patches), patches 13 and 51 |
-| Unsolicited status reports, `B1 addr 03 'S' channel flags sum`; `cc784.py watch` | [patched.md](patched.md#2-patches), patch 41 |
-| Frames only on the serial line: a flag byte of `80` or `81` and no gap of a second inside a frame; `18` (BUSY) while the editor is open, except for `B6`; `B7 '1'` opens the editor as a serial terminal, `B7 '0'` closes it; `cc784.py stop` and `start` | [patched.md](patched.md#2-patches), patch 45 |
-| Over-the-air updates, `B5` | [ota.md](ota.md) |
+| 300 to 1200 baud, and 2560, set by the first frame after a second of silence | [PATCHED.md](PATCHED.md#2-patches), patches 30 and 52 |
+| The configuration block: `B6 index mask value` writes the masked bits of a byte, `B4 '5'` reads the block, `B4 '6'` the sequence list; `cc784.py config` | [PATCHED.md](PATCHED.md#2-patches), patch 35 |
+| Health counters in the `B4 '4'` reply; `cc784.py stats` | [PATCHED.md](PATCHED.md#2-patches), patches 40 and 44 |
+| The `B4 '1'` reply adds a third five-digit figure, the longest payload a frame may carry: 254, or 128 on a LITE build with 2 K of RAM. A longer frame is dropped unanswered. `cc784.py mem` | [PATCHED.md](PATCHED.md#2-patches), patches 13 and 51 |
+| Unsolicited status reports, `B1 addr 03 'S' channel flags sum`; `cc784.py watch` | [PATCHED.md](PATCHED.md#2-patches), patch 41 |
+| Frames only on the serial line: a flag byte of `80` or `81` and no gap of a second inside a frame; `18` (BUSY) while the editor is open, except for `B6`; `B7 '1'` opens the editor as a serial terminal, `B7 '0'` closes it; `cc784.py stop` and `start` | [PATCHED.md](PATCHED.md#2-patches), patch 45 |
+| Over-the-air updates, `B5` | [OTA.md](OTA.md) |
 
 Two consequences for a host, both covered in detail there: the NETCC-style status query (`17 32`) is a truncated set-time that does nothing useful (and stops the stock firmware's clock), so use QUERY MEMORY and QUERY DUMP instead; and after a RAM loss the stock firmware answers only at address 0 (the patched firmware at 1) until an address is set, so `0x2A` broadcast is the way to reach an unknown sign.
 
@@ -369,7 +369,7 @@ B1 2A 80 03  04 30 30  64                        (sequence: channel 00)
 
 ## 8. The CC710 on the wire
 
-The ten-channel CC710 ([firmware notes §15](firmware.md#15-the-cc710-firmware-h--from-a-rom-dump-id-710)) speaks the same frames through its 10-pin header, with these differences:
+The ten-channel CC710 ([firmware notes §15](FIRMWARE.md#15-the-cc710-firmware-h--from-a-rom-dump-id-710)) speaks the same frames through its 10-pin header, with these differences:
 
 - It must be put into packet mode at boot: the probe (data out on SK1 pin 5, clock on pin 4, sampled on pin 9) has to echo the `55` pattern (an inverting echo yields address `*`; other replies give `~D`, and the fallback path gives `D5`, a firmware bug); the NET cable's plain short of DB9 pins 2 and 5 (SK1 pins 9 and 2) gives serial *terminal* mode instead, where bytes are key codes. Without an adapter, holding `1`, `7` or `U` on the keypad at power-up also selects packet mode, with address `*`; holding `Z` + `1` takes the keep path instead, whose bug alternates the address between `D5` and `*` on successive boots [H].
 - The transmitter waits for SK1 pins 8 and 7 (DB9 pins 1 and 6) high and the receiver raises SK1 pin 4 (DB9 pin 4) as "ready", dropped while its 8-byte FIFO is full.
@@ -379,12 +379,12 @@ The ten-channel CC710 ([firmware notes §15](firmware.md#15-the-cc710-firmware-h
 - At address `*` (the keypad route) the sign never ACKs, since frames to `*` get no reply; queries still answer [H].
 - `cc784.py --channels 10` sends one-digit channel numbers and reads the one-byte markers in a dump [H]. With it, `time` sends `A`/`P` instead of the CC784's `Y`/`N`; `time24` is refused.
 
-Verified on a CC710 [H]: terminal mode through the host cable ([hardware notes §5, step 3](hardware.md#step-3-host-cable)); packet mode by holding `1`, then queries `0`–`3` (query `2` with a remark), `09 c` loads including a 314-byte message split over `0E` and `B3` frames, `04`, `17` and `03`; ACK and NAK at address `D5` after a `Z` + `1` boot; terminal-mode `7E` then `*` opens the editor, and `20` releases a WAIT loaded by packet.
+Verified on a CC710 [H]: terminal mode through the host cable ([hardware notes §5, step 3](HARDWARE.md#step-3-host-cable)); packet mode by holding `1`, then queries `0`–`3` (query `2` with a remark), `09 c` loads including a 314-byte message split over `0E` and `B3` frames, `04`, `17` and `03`; ACK and NAK at address `D5` after a `Z` + `1` boot; terminal-mode `7E` then `*` opens the editor, and `20` releases a WAIT loaded by packet.
 
 ## 9. The original CC784 on the wire
 
 The original keypad CC784 has two firmware revisions.
 
-**`9g`** ([firmware notes §16](firmware.md#16-the-original-cc784-firmware-h--from-a-rom-dump-id-9g)) has no packet protocol: none of the frames above reach it. With `PORT_IN` bit 0 low at boot it takes bytes as keys, like the CC710's terminal mode: `01` opens the editor, where bytes are raw ASCII keys echoed on TX and `0D` leaves it; `7E` followed by the byte `MY_ADDRESS` opens the editor, any other byte resets the sign; a `00` resets the sign at any time. Same 300 baud and handshake lines as the CC710. Not tried on the sign.
+**`9g`** ([firmware notes §16](FIRMWARE.md#16-the-original-cc784-firmware-h--from-a-rom-dump-id-9g)) has no packet protocol: none of the frames above reach it. With `PORT_IN` bit 0 low at boot it takes bytes as keys, like the CC710's terminal mode: `01` opens the editor, where bytes are raw ASCII keys echoed on TX and `0D` leaves it; `7E` followed by the byte `MY_ADDRESS` opens the editor, any other byte resets the sign; a `00` resets the sign at any time. Same 300 baud and handshake lines as the CC710. Not tried on the sign.
 
-**`9k`** ([firmware notes §17](firmware.md#17-the-original-cc784-firmware-revision-9k-h--from-a-rom-dump-78409k0111900019)) speaks the CC710's protocol (§8), with the same boot probe, modes and frames. Two replies differ: query `0` returns `78409k`, and query `1` reports a store of `01127` bytes in packet mode. Not tried on the sign.
+**`9k`** ([firmware notes §17](FIRMWARE.md#17-the-original-cc784-firmware-revision-9k-h--from-a-rom-dump-78409k0111900019)) speaks the CC710's protocol (§8), with the same boot probe, modes and frames. Two replies differ: query `0` returns `78409k`, and query `1` reports a store of `01127` bytes in packet mode. Not tried on the sign.

@@ -196,7 +196,7 @@ KEY_ECHO_TX          equ RAM_VARS+0x23f   ; non-zero = echo accepted keys on ser
 STORE_TEXT_LIMIT     equ RAM_VARS+0x244   ; free text bytes; scan bound for store_repair
 STORE_WARN_LIMIT     equ RAM_VARS+0x246   ; STORE_END here trips the 100 KEYS LEFT warning
 
-; ---- Wire protocol bytes (protocol.md) ---------------------------------
+; ---- Wire protocol bytes (PROTOCOL.md) ---------------------------------
 FRAME_START          equ 0xb1
 ADDR_BROADCAST       equ 0x2a        ; '*': processed, never answered
 REPLY_ACK            equ 0x06
@@ -234,7 +234,7 @@ CHANNELS             equ 100         ; message channels 0-99
 CHAN_DEMO            equ 100         ; the pseudo-channel that plays DEMO_MESSAGE
 SEQ_LIST_LEN         equ 104         ; SEQ_LIST: up to 100 entries plus FF terminators
 
-; ---- Message attribute bytes (the sign's own names, firmware.md §8) --------
+; ---- Message attribute bytes (the sign's own names, FIRMWARE.md §8) --------
 ATTR_BIG             equ 0x10
 ATTR_NORM            equ 0x11
 ATTR_BOLD            equ 0x12

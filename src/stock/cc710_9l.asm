@@ -13,7 +13,7 @@
 ;  header instead of a DB9, 2 KB RAM, 7x59 panel driven as 60 columns). Same code
 ;  base as the NET: labels shared with the NIR source mean the same routine. The
 ;  firmware picks keypad, serial-terminal or packet mode at boot (store_init,
-;  mode_test). See firmware.md section 15.
+;  mode_test). See FIRMWARE.md section 15.
 ; ============================================================================
         DEVICE NONE
         OUTPUT "cc710_9l.bin"
@@ -167,7 +167,7 @@ KEY_ECHO_TX          equ RAM_VARS+0x179   ; non-zero = echo accepted keys on ser
 STORE_TEXT_LIMIT     equ RAM_VARS+0x17e   ; free text bytes; scan bound for store_repair
 STORE_WARN_LIMIT     equ RAM_VARS+0x180   ; STORE_END here trips the ' 100 LEFT ' warning
 
-; ---- Wire protocol bytes (protocol.md) ---------------------------------
+; ---- Wire protocol bytes (PROTOCOL.md) ---------------------------------
 FRAME_START          equ 0xb1
 ADDR_BROADCAST       equ 0x2a   ; '*': processed, never answered
 REPLY_ACK            equ 0x06
@@ -203,7 +203,7 @@ CHANNELS             equ 100   ; the NIR's count (this ROM has ten, 0-9); here o
 CHAN_DEMO            equ 100   ; the NIR's value, unused: the demo pseudo-channel is 10 here
 SEQ_LIST_LEN         equ 104   ; the NIR's value, unused: SEQ_LIST is 32 bytes here
 
-; ---- Message attribute bytes (the sign's own names, firmware.md §8) --------
+; ---- Message attribute bytes (the sign's own names, FIRMWARE.md §8) --------
 ATTR_BIG             equ 0x10
 ATTR_NORM            equ 0x11
 ATTR_BOLD            equ 0x12

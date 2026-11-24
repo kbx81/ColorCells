@@ -13,7 +13,7 @@
 ;  same CC784-4 board as the NIR with a 4 MHz crystal and no IR hardware.
 ;  The timer ISR runs at 1302 Hz and does per interrupt what the NIR's
 ;  tick6_service does every sixth tick; input mode (serial or keypad) is
-;  chosen once at boot by mode_test. See firmware.md section 14.
+;  chosen once at boot by mode_test. See FIRMWARE.md section 14.
 ; ============================================================================
         DEVICE NONE
         OUTPUT "cc784net_9n.bin"
@@ -189,7 +189,7 @@ STORE_WARN_LIMIT     equ RAM_VARS+0x236   ; STORE_END here trips the 100 KEYS LE
 ; ---- RAM cells this firmware uses that the NIR does not name -------------------
 KEY_DEBOUNCE         equ RAM_VARS+0x1e3   ; keypad: raw key code being debounced by getkey_debounce
 
-; ---- Wire protocol bytes (protocol.md) ---------------------------------
+; ---- Wire protocol bytes (PROTOCOL.md) ---------------------------------
 FRAME_START          equ 0xb1
 ADDR_BROADCAST       equ 0x2a   ; '*': processed, never answered
 REPLY_ACK            equ 0x06
@@ -225,7 +225,7 @@ CHANNELS             equ 100   ; message channels 0-99
 CHAN_DEMO            equ 100   ; the pseudo-channel that plays DEMO_MESSAGE
 SEQ_LIST_LEN         equ 104   ; SEQ_LIST: up to 100 entries plus FF terminators
 
-; ---- Message attribute bytes (the sign's own names, firmware.md §8) --------
+; ---- Message attribute bytes (the sign's own names, FIRMWARE.md §8) --------
 ATTR_BIG             equ 0x10
 ATTR_NORM            equ 0x11
 ATTR_BOLD            equ 0x12

@@ -4,7 +4,7 @@ The patched firmware can be replaced over the sign's own serial link. The ROM is
 
 What you need:
 
-- the AT28C256 and the bank register fitted per [upgrades.md](upgrades.md)
+- the AT28C256 and the bank register fitted per [UPGRADES.md](UPGRADES.md)
 - the patched firmware from `src/patched/`
 - `tools/cc784_ota.py`
 - a serial path to the sign: a USB adapter, or an [ESPHome serial proxy](https://esphome.io/components/serial_proxy/)
@@ -13,7 +13,7 @@ What you need:
 
 ## 1. Hardware
 
-The ROM is an AT28C256 with three pins rewired: `/WE` to the Z80's `/WR` (with a pull-up), `/OE` to `/RD` because the socket ties `/OE` to `/CE` and that inhibits writes, and A14 to a bank register. The register is an added 74LS273 piggybacked on U5, written at `0xC000`: bit 0 is the EEPROM's A14, bits 1–2 are reserved for A15/A16 of a larger chip, bit 7 selects the clock source (`BANK_CLOCK_XTAL`, patch 31), the rest spare. Wiring, continuity checks and the first power-up are in [upgrades.md §2](upgrades.md#2-eeprom-and-bank-register).
+The ROM is an AT28C256 with three pins rewired: `/WE` to the Z80's `/WR` (with a pull-up), `/OE` to `/RD` because the socket ties `/OE` to `/CE` and that inhibits writes, and A14 to a bank register. The register is an added 74LS273 piggybacked on U5, written at `0xC000`: bit 0 is the EEPROM's A14, bits 1–2 are reserved for A15/A16 of a larger chip, bit 7 selects the clock source (`BANK_CLOCK_XTAL`, patch 31), the rest spare. Wiring, continuity checks and the first power-up are in [UPGRADES.md §2](UPGRADES.md#2-eeprom-and-bank-register).
 
 The register is separate from U5 because U5 is cleared by the board's watchdog whenever interrupts stop for 512 µs, which happens during every OTA command; a bank bit there would swap the ROM under the running code. The register's `/MR` is on the Z80's `/RESET`, so every reset, power-on included, starts in bank 0.
 
@@ -132,7 +132,7 @@ The `OTA: emulator regression` task runs `eeprom`, `ota`, `update`, `push`, `ram
 
 ## 7. Not built
 
-- **Layout pinning** (`ALIGN 64` slack between modules, fixed `ORG`s for the tables) so that small code edits stay small pushes. The free space is the `FF` run before the trailer ([patched notes §1](patched.md#1-memory-map)).
+- **Layout pinning** (`ALIGN 64` slack between modules, fixed `ORG`s for the tables) so that small code edits stay small pushes. The free space is the `FF` run before the trailer ([patched notes §1](PATCHED.md#1-memory-map)).
 
 ## 8. Gotchas
 
