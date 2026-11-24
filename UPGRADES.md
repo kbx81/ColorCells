@@ -135,11 +135,18 @@ ESPHome bridge: `-H <host> -k <key>` instead of `-p <port>`.
 An AS6C62256 (32 K, 16 K reachable) in place of the HY6264. The firmware detects which chip is fitted at boot, so the same image runs on either.
 
 - [ ] Replace the 24-pin socket with a 28-pin one; the 6264's pins 1, 2, 27 and 28 hang outside the 24-pin footprint.
+- [ ] Optional, unless you don't mind soldering wires directly to socketed IC pins: drill a small hole in the bare board in the middle of the footprint, **clear of the tracks**, to bring the wires for the overhanging pins up inside the socket.
 - [ ] Remove the factory wire from U13 pin 8 to pin 26 (CS2 on the 6264, A13 on the 62256) and wire pin 26 to **Z80 pin 3**. Left floating, the boot hangs at once: the stub runs from RAM.
 - [ ] Pin 1 (NC on the 6264, A14 on the 62256) to **Z80 pin 4**. A14 is always 1 while RAM is selected, so the chip's upper half is used; GND would use the lower half equally well.
 - [ ] Check: pin 26 ↔ Z80 pin 3 and pin 1 ↔ Z80 pin 4 beep; pin 26 ↔ U13 pin 8 must **not** beep.
 - [ ] The power-fail deselect still works: U13 gates the RAM's `/CE` with the same signal that drove CS2, so nothing is lost with pin 26 ([hardware notes §2.7](HARDWARE.md#27-power-and-battery)).
 - [ ] After power-up, `B4 '1'` reports a total of about 15 K (about 7 K with the 6264). A total near 7 K with the 62256 fitted means an address line is not landing.
+
+Shown on a `CC784-3A` board, whose RAM footprint is the same; its bottom side also carries two track cuts that the `CC784-4` does not need ([hardware notes §5, step 1](HARDWARE.md#step-1-ram)).
+
+| Socket out, with the hole | 28-pin socket fitted |
+|---|---|
+| [![RAM footprint with the socket removed, top](images/thumbs/3A/cc784-ram-socket-removed-top.jpg)](images/3A/cc784-ram-socket-removed-top.jpeg) | [![28-pin RAM socket fitted, top](images/thumbs/3A/cc784-ram-socket-28pin-top.jpg)](images/3A/cc784-ram-socket-28pin-top.jpeg) |
 
 ---
 

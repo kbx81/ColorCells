@@ -10,6 +10,19 @@ Photos of the signs studied here: the controller boards as shipped and after mod
 |---|---|---|
 | [![Original CC784 board, top](images/thumbs/3A/cc784-top.jpg)](images/3A/cc784-top.jpeg) | [![Original CC784 board, bottom](images/thumbs/3A/cc784-bottom.jpg)](images/3A/cc784-bottom.jpeg) | [![Original CC784 rating label](images/thumbs/3A/cc784-label.jpg)](images/3A/cc784-label.jpeg) |
 
+RAM refit ([hardware notes §5, step 1](HARDWARE.md#step-1-ram)):
+
+| | Top | Bottom |
+|---|---|---|
+| Socket out, with the hole | [![RAM footprint with the socket removed, top](images/thumbs/3A/cc784-ram-socket-removed-top.jpg)](images/3A/cc784-ram-socket-removed-top.jpeg) | [![RAM footprint with the socket removed, bottom](images/thumbs/3A/cc784-ram-socket-removed-bottom.jpg)](images/3A/cc784-ram-socket-removed-bottom.jpeg) |
+| 28-pin socket fitted, with the two cuts | [![28-pin RAM socket fitted, top](images/thumbs/3A/cc784-ram-socket-28pin-top.jpg)](images/3A/cc784-ram-socket-28pin-top.jpeg) | [![28-pin RAM socket wiring and track cuts, bottom](images/thumbs/3A/cc784-ram-socket-28pin-bottom.jpg)](images/3A/cc784-ram-socket-28pin-bottom.jpeg) |
+
+Power-fail lockout ([hardware notes §5, step 2](HARDWARE.md#step-2-power-fail-detect-and-reset)):
+
+| Q9 over U17, its collector wired to U13 pins 9 and 10, and the cut at U13 pin 5 |
+|---|
+| [![Q9 fitted for the power-fail lockout, top](images/thumbs/3A/cc784-power-fail-q9-top.jpg)](images/3A/cc784-power-fail-q9-top.jpeg) |
+
 ### CC710
 
 | | Top | Bottom |

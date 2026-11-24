@@ -304,6 +304,7 @@ The footprint is for a 24-pin 6116, at positions 3–26 of a 28-pin chip; pins 1
 
 - [ ] Cut the track at pad 21: `/WR` from Z80 pin 22, the only other part on that net. RAM pin 23 (A11) lands here.
 - [ ] Cut the track at pad 24: `+5VP`. RAM pin 26 lands here: CS2 on a 6264, A13 on a 62256.
+- [ ] Optional, unless you don't mind soldering wires directly to socketed IC pins: drill a small hole in the bare board in the middle of the footprint, **clear of the tracks**, to bring the wires for the overhanging pins up inside the socket.
 - [ ] Fit a 28-pin socket in place of the 24-pin one, as in [UPGRADES.md §3](UPGRADES.md#3-ram), and wire:
 
 | RAM pin | 6264 | 62256 | Wire to |
@@ -316,6 +317,11 @@ The footprint is for a 24-pin 6116, at positions 3–26 of a 28-pin chip; pins 1
 | 28 | VCC | VCC | **`+5VP`**: U13 pin 14 |
 
 - [ ] Check: each wire beeps to its end; pad 21 ↔ Z80 pin 22 and pad 24 ↔ U13 pin 14 must **not** beep.
+
+| | Top | Bottom |
+|---|---|---|
+| Socket out, with the hole | [![RAM footprint with the socket removed, top](images/thumbs/3A/cc784-ram-socket-removed-top.jpg)](images/3A/cc784-ram-socket-removed-top.jpeg) | [![RAM footprint with the socket removed, bottom](images/thumbs/3A/cc784-ram-socket-removed-bottom.jpg)](images/3A/cc784-ram-socket-removed-bottom.jpeg) |
+| 28-pin socket fitted, with the two cuts | [![28-pin RAM socket fitted, top](images/thumbs/3A/cc784-ram-socket-28pin-top.jpg)](images/3A/cc784-ram-socket-28pin-top.jpeg) | [![28-pin RAM socket wiring and track cuts, bottom](images/thumbs/3A/cc784-ram-socket-28pin-bottom.jpg)](images/3A/cc784-ram-socket-28pin-bottom.jpeg) |
 
 `/OE` stays on the '139 output as it is; the `CC784-4` also gates it with the power-fail signal, which changes nothing while `/CE` is gated.
 
@@ -337,6 +343,10 @@ The essential part is the `CC784-4`'s lockout, watching the regulated 5 V instea
 - [ ] The trip point: at this sub-milliamp current the zener conducts a few hundred millivolts below its rating, so Q9 releases somewhere around 4.6–4.8 V on the 5 V rail [M]: the RAM is locked out as soon as the supply sags. Check afterwards that the 5 V rail sits above that with the sign warm, or the store will refuse writes.
 - [ ] Check before inserting chips: with power on, U13 pin 8 reads about 5 V; with the mains off and the 5 V rail below the trip point, it falls to 0 V while `+5VP` stays up.
 - [ ] Check the backup draw: with the mains off and the RAM fitted, the voltage across R4 must be a few millivolts. A volt or more (about 4.5 mA) means the RAM is still selected and drains the backup in under an hour: U13 pins 9 and 10 must sit at `+5VP`. A leaky Q9 holds them near 1 V; on one board studied here, a Q9 corroded by battery electrolyte did exactly that.
+
+| Q9 over U17, its collector wired to U13 pins 9 and 10, and the cut at U13 pin 5 |
+|---|
+| [![Q9 fitted for the power-fail lockout, top](images/thumbs/3A/cc784-power-fail-q9-top.jpg)](images/3A/cc784-power-fail-q9-top.jpeg) |
 
 ### Step 3: Host cable
 
