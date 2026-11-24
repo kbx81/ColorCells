@@ -66,3 +66,14 @@ venv-*/
 # Assembler output
 src/**/*.bin
 *.lst
+
+# Assembler symbol dumps
+*.sym
+
+# KiCad local history, backups and per-user state
+hardware/**/.history/
+hardware/**/*-backups/
+*.kicad_prl
+*.lck
+fp-info-cache
+_autosave-*
