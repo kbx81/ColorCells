@@ -7,7 +7,7 @@ Reverse engineering, documentation and firmware work for the Color Cells / Innov
 - **CC784NET ("NET"):** the `CC784-4` controller board, a newer revision of the `3A` board, with a DB9 in place of the 10-pin header, for a wired keypad or a PC.
 - **CC784NIR ("NIR"):** also the `CC784-4` board, with an infrared remote; with the stock firmware, its DB9 functions only as a serial port.
 
-Each model's firmware source, board notes and wire differences are in the same files. [Firmware notes §1](firmware.md#1-lineage-of-the-stock-firmware-m--from-the-four-roms-their-labels-and-the-boards) traces the line from the original CC784 through the CC710 and the NET to the NIR.
+Each model's firmware source, board notes and wire differences are in the same files. [Firmware notes §1](firmware.md#1-lineage-of-the-stock-firmware-m--from-the-five-roms-their-labels-and-the-boards) traces the line from the original CC784 through the CC710 and the NET to the NIR.
 
 ## The hardware
 
@@ -46,7 +46,7 @@ To turn a NET into a NIR, follow [upgrades.md](upgrades.md) §4.
 
 ## What has been done
 
-- **Firmware dump and reconstruction.** All four signs' ROMs were dumped, disassembled and turned into annotated sources that reassemble byte for byte ([src/stock/](src/stock/)): the NIR, NET, CC710 and original CC784. Every routine and variable is named, with one name per routine across all four; the notes record what each does and how confident the reading is. Comparing them explains the keypad, the factory cable's wiring and the 4 MHz timebase; the original CC784's is the oldest code base of the four.
+- **Firmware dump and reconstruction.** Five ROMs were dumped, disassembled and turned into annotated sources that reassemble byte for byte ([src/stock/](src/stock/)): the NIR, NET, CC710 and two revisions of the original CC784's (`9g` and `9k`). Every routine and variable is named, with one name per routine across all five; the notes record what each does and how confident the reading is. Comparing them explains the keypad, the factory cable's wiring and the 4 MHz timebase; the original CC784's `9g` is the oldest code base of the five.
 - **Serial protocol.** Recovered from the original DOS software (`NETCC.EXE`) and the firmware, verified against the sign.
 - **Thirteen stock firmware bugs** found and documented, from a one-byte typo (`LD (STORE_CURSOR),A` where `HL` was meant) that sends the next insert to a random spot in the store, to the **one that counts as a remote exploit:** a single query frame on the serial line overflows the 64-byte stack into the ROM, the matching pops read ROM bytes back as return addresses, and the CPU runs off into whatever they point at.
 - **An emulator** ([tools/cc784_sim.py](tools/cc784_sim.py), on kosarev's Z80 core) with the serial line, the IR receiver, the mains tick, the watchdog and the EEPROM modeled, used as the regression gate for every firmware change.
@@ -60,7 +60,7 @@ To turn a NET into a NIR, follow [upgrades.md](upgrades.md) §4.
 | Document | Covers |
 |---|---|
 | [hardware.md](hardware.md) | The controller boards: the four signs side by side; the common design (parts, decoding, timebase and watchdog, host port and keypads, display drive and panels, connectors, power and battery) with the differences called out; the `CC784-4`'s NET and NIR builds and factory bodges; the `CC784-3A`'s differences, power-fail fault and the original CC784's modifications; converting a `CC784-3A` to a `CC784-4` |
-| [firmware.md](firmware.md) | The stock firmware as a reference: how the four signs' ROMs descend from one another; the NIR's in full (memory map, execution model, serial link, packet parser and commands, store format, renderer, IR decoder, editor, bugs); the NET, CC710 and original CC784 by their differences |
+| [firmware.md](firmware.md) | The stock firmware as a reference: how the five ROMs descend from one another; the NIR's in full (memory map, execution model, serial link, packet parser and commands, store format, renderer, IR decoder, editor, bugs); the NET, CC710 and both original CC784 revisions by their differences |
 | [protocol.md](protocol.md) | The serial protocol: frames, commands, message bytes, attributes and colors, queries |
 | [patched.md](patched.md) | The patched firmware: memory map, the patch list, what was rejected, what has been verified on the sign, how to rebuild and test |
 | [ota.md](ota.md) | Over-the-air updates: the EEPROM and bank-register hardware, the ROM layout and boot stub, the OTA commands, using the tools, testing, gotchas |
@@ -76,7 +76,7 @@ Source and tools:
 
 | Path | What |
 |---|---|
-| [src/stock/](src/stock/) | The stock firmware of all four signs, each reassembling to its dump: NIR (`md5 c021af14…`), NET (`872c8793…`), CC710 (`f346d39e…`), original CC784 (`3e7a679f…`); same labels throughout |
+| [src/stock/](src/stock/) | The stock firmware, one source per ROM revision, each reassembling to its dump: NIR `9o` (`md5 c021af14…`), NET `9n` (`872c8793…`), CC710 `9l` (`f346d39e…`), original CC784 `9k` (`8429b5a4…`) and `9g` (`3e7a679f…`); same labels throughout |
 | [src/patched/](src/patched/) | The patched firmware; `Build patched ROM` and `Pack OTA image` tasks produce the bank image for `push` and the chip image for a programmer |
 | [tools/cc784.py](tools/cc784.py) | Talk to a sign over serial: messages, clock, sequence, queries, dump; `--channels 10` for stock ten-channel firmware, `--lite` for the patched LITE build |
 | [tools/cc784_esphome.py](tools/cc784_esphome.py) | As above but through an [ESPHome serial proxy](https://esphome.io/components/serial_proxy/) |

@@ -37,7 +37,7 @@ From photos of each board and its rating label. Chip dates are the usual YYWW co
 - **The CC710 shipped without a beeper driver,** and both its bodge targets concern the beeper path (U9's Q7) or stray strobes the beeper would make audible. That may be why it went without [M], cost-cutting aside.
 - **Every board has dipped tantalums at C3, C4 and C18.** The original CC784's C3 failed short and burned on its first power-up ([§4.4](#44-the-original-cc784s-board-h)): replace C3 and C4 before powering any of these.
 - **The rating labels** all read AC 9 V, 30 W nominal, 40 W max, 0–35 °C, the CC710's too despite its shorter panel. The two `CC784-3A` signs name the CC100 keyboard and the two `CC784-4` signs the CC110 NET; the two keypads differ only in their connector ([§2.4](#24-host-port-serial-and-keypad-h)). The NIR's label is the NET's with the part number changed: it names a wired keypad that its stock firmware never scans.
-- **The patent list grows by one country per sign** along the firmware's lineage: US and Australia, then Japan, then Canada ([firmware notes §1](firmware.md#1-lineage-of-the-stock-firmware-m--from-the-four-roms-their-labels-and-the-boards)).
+- **The patent list grows by one country per sign** along the firmware's lineage: US and Australia, then Japan, then Canada ([firmware notes §1](firmware.md#1-lineage-of-the-stock-firmware-m--from-the-five-roms-their-labels-and-the-boards)).
 - **Serial numbers:** the `CC784-4` signs' are low (`A00634` on a 1992 NET, `A 09119` on a 1993 NIR) next to the original CC784's `A23458` from 1990, so the numbering restarted with the new board or each model had its own series [L]. The original CC784's serial sticker repeats its ROM label, `CC784-9E-USA`.
 
 ## 2. Common design

@@ -1,6 +1,6 @@
 ; ============================================================================
 ;  Color Cells CC784NIR LED sign - firmware source, reconstructed from EPROM
-;  Assemble:  sjasmplus cc784nir.asm   (produces cc784nir.bin, 32768 bytes)
+;  Assemble:  sjasmplus cc784nir_9o.asm   (produces cc784nir_9o.bin, 32768 bytes)
 ;  Byte-identical to the original M27C256B dump:
 ;      md5 c021af146a50b93a22d13535201b7eaa
 ;  FROZEN. Annotations may be added; code must not change. The patched
@@ -11,7 +11,7 @@
 ;  interoperability. The labels and comments are MIT, see ../../LICENSE.
 ; ============================================================================
         DEVICE NONE
-        OUTPUT "cc784nir.bin"
+        OUTPUT "cc784nir_9o.bin"
 
 FRAMEBUF             equ 0x4040
 FRAMEBUF_SIZE        equ 0x158   ; column ring: 86 visible + the glyph being written; also the TINY line

@@ -33,7 +33,7 @@ The program sends **one byte at a time with a ~50 ms pause after each byte**. Th
 
 - **Levels:** the sign expects RS-232 polarity; a MAX3232-class driver is the faithful interface, and the [hardware notes §2.4](hardware.md#24-host-port-serial-and-keypad-h) explain why plain TTL may do.
 - **The NIR and the patched firmware** need only the first three lines.
-- **The serial-detect tie** is read at boot by the other stock firmwares; without it they run in keypad mode and ignore serial. With it, the NET talks packets, the CC710 opens terminal mode (packet mode needs more, [§8](#8-the-cc710-on-the-wire)) and the original CC784 takes bytes as keys ([§9](#9-the-original-cc784-on-the-wire)).
+- **The serial-detect tie** is read at boot by the other stock firmwares; without it they run in keypad mode and ignore serial. With it, the NET talks packets, the CC710 opens terminal mode (packet mode needs more, [§8](#8-the-cc710-on-the-wire)) and the original CC784 takes bytes as keys with its `9g` firmware and acts as the CC710 with `9k` ([§9](#9-the-original-cc784-on-the-wire)).
 
 ---
 
@@ -383,5 +383,8 @@ Verified on a CC710 [H]: terminal mode through the host cable ([hardware notes �
 
 ## 9. The original CC784 on the wire
 
-The original keypad CC784 ([firmware notes §16](firmware.md#16-the-original-cc784-firmware-h--from-a-rom-dump-id-9g)) has no packet protocol: none of the frames above reach it. With `PORT_IN` bit 0 low at boot it takes bytes as keys, like the CC710's terminal mode: `01` opens the editor, where bytes are raw ASCII keys echoed on TX and `0D` leaves it; `7E` followed by the byte `MY_ADDRESS` opens the editor, any other byte resets the sign; a `00` resets the sign at any time. Same 300 baud and handshake lines as the CC710. Not tried on the sign.
+The original keypad CC784 has two firmware revisions.
 
+**`9g`** ([firmware notes §16](firmware.md#16-the-original-cc784-firmware-h--from-a-rom-dump-id-9g)) has no packet protocol: none of the frames above reach it. With `PORT_IN` bit 0 low at boot it takes bytes as keys, like the CC710's terminal mode: `01` opens the editor, where bytes are raw ASCII keys echoed on TX and `0D` leaves it; `7E` followed by the byte `MY_ADDRESS` opens the editor, any other byte resets the sign; a `00` resets the sign at any time. Same 300 baud and handshake lines as the CC710. Not tried on the sign.
+
+**`9k`** ([firmware notes §17](firmware.md#17-the-original-cc784-firmware-revision-9k-h--from-a-rom-dump-78409k0111900019)) speaks the CC710's protocol (§8), with the same boot probe, modes and frames. Two replies differ: query `0` returns `78409k`, and query `1` reports a store of `01127` bytes in packet mode. Not tried on the sign.

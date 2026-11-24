@@ -5,7 +5,7 @@
 ;             -DLITE, alone or with -DCC710: an unmodified CC784-3A board (4 MHz,
 ;             2 K RAM, no IR): cc784lite.bin / cc710lite.bin, 16 K for a 27128
 ;  NOT byte-identical to the dump. The untouched reconstruction is
-;  ../stock/cc784nir.asm; diff the two to see the patches.
+;  ../stock/cc784nir_9o.asm; diff the two to see the patches.
 ;
 ;  The original firmware is copyright its owner (Color Cells / Innovative Sign
 ;  Technology, 1993, and successors). The patches, labels and comments are
@@ -13,7 +13,7 @@
 ; ============================================================================
         DEVICE NONE
 
-; Patched build: the stock reconstruction (../stock/cc784nir.asm) plus the
+; Patched build: the stock reconstruction (../stock/cc784nir_9o.asm) plus the
 ; patches in patched.md. Up to the tag patched-v39 the rest was kept
 ; identical to stock; after it the code is restructured freely and the git
 ; history is the changelog. Addresses differ from stock throughout.

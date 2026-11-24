@@ -279,5 +279,5 @@ Fallback: until pin 27 is rewired, refit the original M27C256B. After that, its 
 
 - minipro device name: **`AT28C256`**, no `@DIP28` suffix.
 - Image: `src/patched/cc784nir_chip.bin`, 32768 bytes, from the `Pack OTA image` task. The raw build `cc784nir_patched.bin` has empty trailers and boots without a bank check; never burn it.
-- Stock image for comparison: `src/stock/cc784nir.bin`, md5 `c021af146a50b93a22d13535201b7eaa`.
+- Stock image for comparison: `src/stock/cc784nir_9o.bin`, md5 `c021af146a50b93a22d13535201b7eaa`.
 - The chip's two halves are the two banks; the packed image carries the same application in both, sequence numbers 1 and 0, so the sign boots bank 0 and has a fallback from the first burn.

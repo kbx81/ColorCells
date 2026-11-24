@@ -198,6 +198,8 @@ def assemble(src_dir):
     src_dir = pathlib.Path(src_dir).resolve()
     asm = src_dir / 'cc784nir.asm'
     if not asm.exists():
+        asm = src_dir / 'cc784nir_9o.asm'      # src/stock names sources by ROM revision
+    if not asm.exists():
         sys.exit('no cc784nir.asm in %s' % src_dir)
     with tempfile.TemporaryDirectory() as tmp:
         sym = pathlib.Path(tmp) / 'out.sym'

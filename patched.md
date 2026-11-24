@@ -1,6 +1,6 @@
 # CC784NIR patched firmware
 
-`src/patched/cc784nir.asm`, on the `wip` branch, is the stock reconstruction ([src/stock/cc784nir.asm](src/stock/cc784nir.asm)) plus the patches below. The patch list records what differs from stock and why. At the tag `patched-v39`, `diff src/stock/cc784nir.asm src/patched/cc784nir.asm` shows exactly patches 1–39; from there the source is organized for size and the git history is the changelog. The source is fully relocatable (every ROM address is a label); the addresses quoted in the stock notes apply to the stock build only.
+`src/patched/cc784nir.asm`, on the `wip` branch, is the stock reconstruction ([src/stock/cc784nir_9o.asm](src/stock/cc784nir_9o.asm)) plus the patches below. The patch list records what differs from stock and why. At the tag `patched-v39`, `diff src/stock/cc784nir.asm src/patched/cc784nir.asm` (the stock source's name at that tag) shows exactly patches 1–39; from there the source is organized for size and the git history is the changelog. The source is fully relocatable (every ROM address is a label); the addresses quoted in the stock notes apply to the stock build only.
 
 What the stock firmware does, and the bugs these patches fix, are in [firmware.md](firmware.md); the over-the-air update mechanism the patched build carries is in [ota.md](ota.md); fitting the chips it needs is in [upgrades.md](upgrades.md).
 

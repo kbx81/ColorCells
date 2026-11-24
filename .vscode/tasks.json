@@ -3,9 +3,9 @@
   "tasks": [
     {
       "label": "Build stock ROM",
-      "detail": "Reassembles the untouched reconstructions (NIR, NET, CC710, original CC784). Each must stay byte-identical to its EPROM dump.",
+      "detail": "Reassembles the untouched reconstructions (NIR 9o, NET 9n, CC710 9l, original CC784 9k and 9g). Each must stay byte-identical to its EPROM dump.",
       "type": "shell",
-      "command": "sjasmplus --fullpath --lst=cc784nir.lst cc784nir.asm && sjasmplus --fullpath --lst=cc784net.lst cc784net.asm && sjasmplus --fullpath --lst=cc710.lst cc710.asm && sjasmplus --fullpath --lst=cc784.lst cc784.asm",
+      "command": "for f in cc784nir_9o cc784net_9n cc710_9l cc784_9k cc784_9g; do sjasmplus --fullpath --lst=$f.lst $f.asm || exit 1; done",
       "options": {
         "cwd": "${workspaceFolder}/src/stock"
       },
@@ -14,9 +14,9 @@
     },
     {
       "label": "Verify stock ROM is byte-identical",
-      "detail": "Regression test for any edit to src/stock: NIR c021af146a50b93a22d13535201b7eaa, NET 872c87932339e9e072c5525d30ffb5df, CC710 f346d39e5aa7b49709a717c85d7c7e11, original CC784 3e7a679f77d7dac121926182442f923a.",
+      "detail": "Regression test for any edit to src/stock: NIR c021af146a50b93a22d13535201b7eaa, NET 872c87932339e9e072c5525d30ffb5df, CC710 f346d39e5aa7b49709a717c85d7c7e11, original CC784 9k 8429b5a4436faf434c18c27e822bd9aa and 9g 3e7a679f77d7dac121926182442f923a.",
       "type": "shell",
-      "command": "ok=1; for p in cc784nir:c021af146a50b93a22d13535201b7eaa cc784net:872c87932339e9e072c5525d30ffb5df cc710:f346d39e5aa7b49709a717c85d7c7e11 cc784:3e7a679f77d7dac121926182442f923a; do f=${p%%:*}; h=${p##*:}; if test \"$(md5 -q $f.bin)\" = $h; then echo \"OK: $f.bin byte-identical to the dump\"; else echo \"FAIL: $f.bin no longer matches the dump\"; ok=0; fi; done; test $ok = 1",
+      "command": "ok=1; for p in cc784nir_9o:c021af146a50b93a22d13535201b7eaa cc784net_9n:872c87932339e9e072c5525d30ffb5df cc710_9l:f346d39e5aa7b49709a717c85d7c7e11 cc784_9k:8429b5a4436faf434c18c27e822bd9aa cc784_9g:3e7a679f77d7dac121926182442f923a; do f=${p%%:*}; h=${p##*:}; if test \"$(md5 -q $f.bin)\" = $h; then echo \"OK: $f.bin byte-identical to the dump\"; else echo \"FAIL: $f.bin no longer matches the dump\"; ok=0; fi; done; test $ok = 1",
       "options": {
         "cwd": "${workspaceFolder}/src/stock"
       },
@@ -50,7 +50,7 @@
       "label": "Diff stock vs patched source",
       "detail": "Up to the tag patched-v39 this diff shows exactly what the patches change; after it the code is restructured freely.",
       "type": "shell",
-      "command": "diff -u stock/cc784nir.asm patched/cc784nir.asm; true",
+      "command": "diff -u stock/cc784nir_9o.asm patched/cc784nir.asm; true",
       "options": {
         "cwd": "${workspaceFolder}/src"
       },

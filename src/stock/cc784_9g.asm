@@ -1,6 +1,6 @@
 ; ============================================================================
 ;  Color Cells CC784 LED sign (original model) - firmware source, reconstructed from EPROM
-;  Assemble:  sjasmplus cc784.asm   (produces cc784.bin, 16384 bytes)
+;  Assemble:  sjasmplus cc784_9g.asm   (produces cc784_9g.bin, 16384 bytes)
 ;  Byte-identical to the original EPROM dump:
 ;      md5 3e7a679f77d7dac121926182442f923a
 ;  FROZEN. Annotations may be added; code must not change.
@@ -17,7 +17,7 @@
 ;  See firmware.md section 16.
 ; ============================================================================
         DEVICE NONE
-        OUTPUT "cc784.bin"
+        OUTPUT "cc784_9g.bin"
 
 FRAMEBUF             equ 0x4040
 FRAMEBUF_SIZE        equ 0xac   ; column ring: 86 visible + the glyph being written; also the TINY line
