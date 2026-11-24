@@ -1,13 +1,38 @@
-# Color Cells CC784 LED sign
+# Color Cells CC784 and CC710 LED signs
 
-Reverse engineering, documentation and firmware work for the Color Cells / Innovative Sign Technology **CC700-series** of scrolling LED signs (1990–1993). Four models are covered, oldest first:
+I've had a CC784NIR since the mid-90s. These signs are based on the Z80, a processor I'm quite familiar with thanks to the Texas Instruments line of graphing calculators (in particular the TI-85 and TI-92). Once I realized that, I just had to do some hacking...someday. I've had a few things I've been wanting to "figure out" for quite a long time now:
+- How exactly did that serial packet protocol work?
+- How does the hardware work?
+- Can I add some features of my own to the firmware?
 
-- **Original CC784:** the `CC784-3A` controller board, 10 memory banks, 6 colors, a wired keypad on a 10-pin header.
+In early 2026, I was working on building the [serial proxy component for ESPHome](https://esphome.io/components/serial_proxy/) and I was looking for other hardware to test it with. Of course, the CC784 came to mind...but I knew there were some bits I had to figure out before it could really be useful.
+
+Unfortunately, sorting out everything that's going on in a ROM dump and mapping that all back to the hardware can take quite a bit of time and, even once that part is done, hand-writing assembly language is slow-going. Fortunately for us, it's 2026 and we now have these great AI tools to make figuring out just about anything way faster than was ever possible before.
+
+So I threw the sign's old DOS program (`NETCC.EXE`) and a dump of its EPROM at Claude ("the Clanker") and it had a whole lot to say about it! Naturally I jumped down the rabbit hole and got right to reverse engineering, documenting and other firmware work/patches.
+
+This led me to realize that just one sign wasn't going to be enough: when you tear something apart, some questions get answered but then dozens more surface. Curiosity got the better of me and I jumped right over to eBay to see what I could scrape up. I ended up with five signs covering four models, two of them the original CC784 (oldest first):
+
+- **Original CC784:** the `CC784-3A` controller board, ten channels, six colors, a wired keypad on a 10-pin header.
 - **CC710:** also the `CC784-3A` board, ten channels, a keypad on a 10-pin header, and a shorter 7×59 panel. It appears to be rare: no other unit or documentation has turned up.
 - **CC784NET ("NET"):** the `CC784-4` controller board, a newer revision of the `3A` board, with a DB9 in place of the 10-pin header, for a wired keypad or a PC.
 - **CC784NIR ("NIR"):** also the `CC784-4` board, with an infrared remote; with the stock firmware, its DB9 functions only as a serial port.
 
-Each model's firmware source, board notes and wire differences are in the same files. [Firmware notes §1](FIRMWARE.md#1-lineage-of-the-stock-firmware-m--from-the-five-roms-their-labels-and-the-boards) traces the line from the original CC784 through the CC710 and the NET to the NIR.
+After a non-trivial amount of poking and prodding the Clanker, I turned some ROM dumps and photos of the PCBs into what you see in this repo:
+- Firmware source by model/version
+- Patched firmware which implements quite a bit of new functionality for the signs, including [OTA firmware updates](OTA.md) [**with a hardware mod**](UPGRADES.md#2-eeprom-and-bank-register)
+- Board schematics, notes and their differences, including the factory bodge wires found on most boards
+- [Firmware notes §1](FIRMWARE.md#1-lineage-of-the-stock-firmware-m--from-the-five-roms-their-labels-and-the-boards) to trace the line from the original CC784 through the CC710 and the NET to the NIR
+- The [serial protocol](PROTOCOL.md) and host tools ([tools/](tools/)) to load messages, set the clock and query the sign from a PC or through ESPHome
+- New hardware: an [IR receiver and clock add-in board](hardware/CC784NIR_IR+Clock/) and ESP32-C6 serial dongles for the [10-pin header](hardware/CC784-ESP32-C6_dongle/) and the [DB9](hardware/CC784NET-ESP32-C6_dongle/)
+- Upgrade guides for the [`CC784-4`](UPGRADES.md) and for [converting a `CC784-3A`](HARDWARE.md#5-converting-a-cc784-3a-board-to-a-cc784-4)
+- [Thirteen stock firmware bugs](FIRMWARE.md#11-bugs), including one that lets a single serial frame crash the sign
+- An [emulator](tools/cc784_sim.py) that runs the firmware and serves as the regression gate for every change
+- A [gallery](GALLERY.md) of the boards, as shipped and modified
+
+Today all five run the patched firmware and talk to Home Assistant through ESPHome serial proxies, and the four converted ones update over the air.
+
+Whatever you want to know about these signs, you can probably find it here!
 
 ## The hardware
 
