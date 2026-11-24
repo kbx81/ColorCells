@@ -115,7 +115,7 @@ Source and tools:
 
 ## Branches
 
-Work happens on the **`wip`** branch; `main` is behind it. Check out `wip` for the current state of the sources, tools and notes.
+Work happens on the **`wip`** branch, which holds everything described here. `main` holds only the stock firmware reconstruction ([src/stock/](src/stock/)) with a short README that points back to `wip`.
 
 ## Building and testing
 
