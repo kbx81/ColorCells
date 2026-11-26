@@ -61,128 +61,127 @@ BAUD_STEP            equ RAM_VARS+0x067   ; P30: fifths of an interrupt per inte
 BAUD_CAL_LAST        equ RAM_VARS+0x068   ; P30: the previous second's tick count, for the agreement test
 RX_IDLE              equ RAM_VARS+0x069   ; P30: frames since the last start bit, held at 255 (was TX_BITMASK)
 CAPS_LOCK            equ RAM_VARS+0x06a
-ROW_OUT_PENDING      equ RAM_VARS+0x06b   ; FF = the current row still has to be sent
-DISP_COUNT           equ RAM_VARS+0x06c   ; P26: interrupts to the next display tick (was TICK1_COUNT, a divider by 1)
-NEXT_CHAN            equ RAM_VARS+0x06d   ; channel to show first after the editor (FF = none)
-MAGIC_LAST_CHAR      equ RAM_VARS+0x06e   ; magic mode: last char of the current word (punctuation check)
+NEXT_CHAN            equ RAM_VARS+0x06b   ; channel to show first after the editor (FF = none)
+MAGIC_LAST_CHAR      equ RAM_VARS+0x06c   ; magic mode: last char of the current word (punctuation check)
 IMAGE_LEN            equ BOOT_ZERO-IMAGE
 ; ---- BOOT_ZERO: cleared at boot; its first RENDER_ZERO_LEN bytes again by init_render
-BOOT_ZERO            equ RAM_VARS+0x06f
+BOOT_ZERO            equ RAM_VARS+0x06d
 RENDER_ZERO          equ BOOT_ZERO
-DRAW_NO_GAP          equ RAM_VARS+0x06f   ; FF = butt this DRAW graphic against the previous one
-DRAW_PREV            equ RAM_VARS+0x070   ; FF = previous item was a DRAW graphic
-TINY_RENDER          equ RAM_VARS+0x071   ; FF while attr_tiny drives the display
-TINY_FRAME_READY     equ RAM_VARS+0x072   ; tiny mode: a frame is in FRAMEBUF_TINY
-MAGIC_MODE           equ RAM_VARS+0x073   ; FF between MAGIC (1F) and MAGIC OFF (BD)
-SCROLLING            equ RAM_VARS+0x074   ; FF while the output window is catching up with FB_COLPTR
-CLK_RENDER_STEP      equ RAM_VARS+0x075   ; clock (5F) render step 0..8; FF = finished
-FLASH_BIT            equ RAM_VARS+0x076   ; 0x10 while the current word flashes; OR-ed into color bytes
-MAGIC_COLOR_SET      equ RAM_VARS+0x077   ; magic mode: color set by an attribute, skip the auto change
-REDRAW_MAGIC         equ RAM_VARS+0x078   ; editor redraw: MAGIC seen, font resets at each word
-MAGIC_FONT_SET       equ RAM_VARS+0x079   ; magic mode: font set by an attribute, skip the random pick
-RND_VAL              equ RAM_VARS+0x07a   ; magic mode: words until the next color change
-FRAME_DELAY          equ RAM_VARS+0x07b   ; frames to hold before the next column step (1, 3, 4 or CFG_HOLD)
-FLASH_PENDING        equ RAM_VARS+0x07c   ; 0x10 after FLASH until the next printable char
-TEXT_DRAWN           equ RAM_VARS+0x07d   ; FF once a printable char has been drawn since init_render
-RAINBOW_IDX          equ RAM_VARS+0x07e   ; RAINBOW per-char color index 1..RAINBOW_N, 0 = off; bit 7 = P28 reverse
+DRAW_NO_GAP          equ RAM_VARS+0x06d   ; FF = butt this DRAW graphic against the previous one
+DRAW_PREV            equ RAM_VARS+0x06e   ; FF = previous item was a DRAW graphic
+TINY_RENDER          equ RAM_VARS+0x06f   ; FF while attr_tiny drives the display
+TINY_FRAME_READY     equ RAM_VARS+0x070   ; tiny mode: a frame is in FRAMEBUF_TINY
+MAGIC_MODE           equ RAM_VARS+0x071   ; FF between MAGIC (1F) and MAGIC OFF (BD)
+SCROLLING            equ RAM_VARS+0x072   ; FF while the output window is catching up with FB_COLPTR
+CLK_RENDER_STEP      equ RAM_VARS+0x073   ; clock (5F) render step 0..8; FF = finished
+FLASH_BIT            equ RAM_VARS+0x074   ; 0x10 while the current word flashes; OR-ed into color bytes
+MAGIC_COLOR_SET      equ RAM_VARS+0x075   ; magic mode: color set by an attribute, skip the auto change
+REDRAW_MAGIC         equ RAM_VARS+0x076   ; editor redraw: MAGIC seen, font resets at each word
+MAGIC_FONT_SET       equ RAM_VARS+0x077   ; magic mode: font set by an attribute, skip the random pick
+RND_VAL              equ RAM_VARS+0x078   ; magic mode: words until the next color change
+FRAME_DELAY          equ RAM_VARS+0x079   ; frames to hold before the next column step (1, 3, 4 or CFG_HOLD)
+FLASH_PENDING        equ RAM_VARS+0x07a   ; 0x10 after FLASH until the next printable char
+TEXT_DRAWN           equ RAM_VARS+0x07b   ; FF once a printable char has been drawn since init_render
+RAINBOW_IDX          equ RAM_VARS+0x07c   ; RAINBOW per-char color index 1..RAINBOW_N, 0 = off; bit 7 = P28 reverse
 RAINBOW_REVERSE      equ 0x80
 RAINBOW_N            equ 5           ; RAINBOW's colors, at most 7
-SCROLL_SPEED         equ RAM_VARS+0x07f   ; 0..7 from F0-F7; blank ticks inserted after every frame
-FORCE_BOLD           equ RAM_VARS+0x080   ; editor redraw: FF = effect text is drawn bold (unless THIN)
-TINY_MODE            equ RAM_VARS+0x081   ; FF = menu text: glyphs drawn without bold/big/italic
-FONT_MODE            equ RAM_VARS+0x082   ; bit 1 BOLD, bit 2 ITALIC, bit 3 BIG
-THIN_MODE            equ RAM_VARS+0x083   ; non-zero after THIN (B9): no bold in effects
+SCROLL_SPEED         equ RAM_VARS+0x07d   ; 0..7 from F0-F7; blank ticks inserted after every frame
+FORCE_BOLD           equ RAM_VARS+0x07e   ; editor redraw: FF = effect text is drawn bold (unless THIN)
+TINY_MODE            equ RAM_VARS+0x07f   ; FF = menu text: glyphs drawn without bold/big/italic
+FONT_MODE            equ RAM_VARS+0x080   ; bit 1 BOLD, bit 2 ITALIC, bit 3 BIG
+THIN_MODE            equ RAM_VARS+0x081   ; non-zero after THIN (B9): no bold in effects
 RENDER_ZERO_LEN      equ BGRND_PENDING-RENDER_ZERO
-BGRND_PENDING        equ RAM_VARS+0x084   ; editor: BGRND key pressed, next key is the color digit
-STAGE_OFFSET         equ RAM_VARS+0x085   ; centering offset of the staged text (free columns / 2)
-ROW_PORT             equ RAM_VARS+0x087   ; port group for the row data: 40 first pass, 48 second
-BEEP_TICKS           equ RAM_VARS+0x088   ; beeper on while non-zero (port bit 5); beep_start loads BEEP_LEN
-ASK_CHAN_PROMPT      equ RAM_VARS+0x08a   ; menu_ask_chan prompt string
-GLYPH_WIDTH          equ RAM_VARS+0x08c
-GLYPH_PTR            equ RAM_VARS+0x08d
-MENU_MSG_PTR         equ RAM_VARS+0x08f   ; message the editor is showing (set with MENU_MSG_FLAG)
-CUR_CHAR             equ RAM_VARS+0x091
-CLK_RENDER_PTR       equ RAM_VARS+0x092   ; clock render: next CLK_ digit to emit
-MENU_ACTIVE          equ RAM_VARS+0x094
-INS_PTR              equ RAM_VARS+0x095
-WINDOW_COLOR         equ RAM_VARS+0x097   ; last color byte at the output window start (bit 4 = flash)
-FRAME_COUNT          equ RAM_VARS+0x098   ; frames since LATCH_BIT7 last toggled (mod CFG_FLASH)
-COLOR_PENDING        equ RAM_VARS+0x099   ; editor: COLOR key pressed, next key is the color digit
-GRAPH_PENDING        equ RAM_VARS+0x09a   ; editor: GRAPH key pressed, next key selects A0-AF
-ROW_COLOR            equ RAM_VARS+0x09b   ; color byte sent ahead of each row
-MENU_MSG_FLAG        equ RAM_VARS+0x09c   ; FF = editor has a message to display
-EDIT_KEY             equ RAM_VARS+0x09d   ; key/character the editor is processing (0 = none)
-RX_BYTE              equ RAM_VARS+0x09e
-IR_KEY_CHAR          equ RAM_VARS+0x09f   ; character decoded from the IR key via the CHARSET_ tables
-CTRL_LATCH_SHADOW    equ RAM_VARS+0x0a0
-FB_OUT_LEN           equ RAM_VARS+0x0a1   ; bytes to send from FB_OUT_PTR before wrapping to FRAMEBUF
-FB_EXTRA_LEN         equ RAM_VARS+0x0a3   ; bytes to send from FRAMEBUF after the wrap
-STORE_END            equ RAM_VARS+0x0a5
-EFFECT_ID            equ RAM_VARS+0x0a7   ; 0 LEFT, 1 PAUSE, 2 UP, 3 DOWN, 4 RIGHT, 5 HOLD
-EFFECT_VECTOR        equ RAM_VARS+0x0a8
-CHAN_HINT            equ RAM_VARS+0x0aa   ; P39: the marker chan_select found last (was MENU_TEXT_PTR)
-SHIFT_LABEL          equ RAM_VARS+0x0ac   ; FF = redraw shows the SHIFT indicator
-ROW_INDEX            equ RAM_VARS+0x0ad
-RX_BITS              equ RAM_VARS+0x0ae   ; P30: data bits still to sample (was RX_BITMASK)
-RX_SHIFT             equ RAM_VARS+0x0af
-RX_ACC               equ RAM_VARS+0x0b0   ; P30: fifths of an interrupt to the next sample (was RX_TICKS)
-RX_FIFO              equ RAM_VARS+0x0b1
-RX_COUNT             equ RAM_VARS+0x0b9
-RX_WIDTH             equ RAM_VARS+0x0ba   ; P30: interrupts the start pulse has lasted while it sets the rate
-REDRAW_PTR           equ RAM_VARS+0x0bb   ; editor redraw: byte being rendered
-RX_PHASE             equ RAM_VARS+0x0bd   ; P30: 0 idle, 1 timing the start pulse, 2 sampling bits (was the RX_STATE vector)
-TICK6_CAL            equ RAM_VARS+0x0be   ; P30: low byte of the tick6 runs this second, read and zeroed by baud_calibrate
-CHAN_LOCK            equ RAM_VARS+0x0bf
-SEQ_PTR              equ RAM_VARS+0x0c0
-SEQ_ALL_EMPTY        equ RAM_VARS+0x0c2   ; 10 = every listed channel is empty, play the demo
-SEQ_MENU_ACTIVE      equ RAM_VARS+0x0c3   ; FF while the SEQ MSG? dialogue runs
-SHIFT_STATE          equ RAM_VARS+0x0c4   ; SHIFT latch, toggled by key 29 (see section 9)
-PREV_SPACE           equ RAM_VARS+0x0c5   ; 1 = previous char was a space (two in a row reset the background)
-NMI_COUNT            equ RAM_VARS+0x0c6   ; NMIs this second; magic_short_word also adds it to the random seed
-STORE_TMP            equ RAM_VARS+0x0c7
-REDRAW_FROM          equ RAM_VARS+0x0c9   ; editor redraw: first byte actually displayed (cursor-21, >= INS_PTR)
-TX_BITIDX            equ RAM_VARS+0x0cb
-TX_PENDING           equ RAM_VARS+0x0cc
-TX_ACC               equ RAM_VARS+0x0cd   ; P30: fifths of an interrupt to the next edge (was TX_TICKS)
-TX_SHIFT             equ RAM_VARS+0x0ce
-TX_STATUS            equ RAM_VARS+0x0cf
-SEQ_SET              equ RAM_VARS+0x0d0   ; FF = sequence set by hand; do not auto-add the edited channel
-NMI_PER_SEC          equ RAM_VARS+0x0d1
-CLK_RENDERED         equ RAM_VARS+0x0d2   ; FF just after a clock display; forces LEFT in an effect
-MAGIC_COLOR_IDX      equ RAM_VARS+0x0d3   ; index into MAGIC_COLOR_CYCLE
-EURO_STATE           equ RAM_VARS+0x0d4
-IR_DEBOUNCE          equ RAM_VARS+0x0d5   ; key number | 0x40 seen once, awaiting its second frame; 0 none
-TICK6_COUNT          equ RAM_VARS+0x0d6
-GEN_COUNTDOWN        equ RAM_VARS+0x0d7   ; IR repeat/hold timer, counts down in tick6 (word)
-IR_KEY               equ RAM_VARS+0x0d9   ; last seen key number | 0x40; 0 none
-IR_CODE              equ RAM_VARS+0x0da
-IR_KEYNUM            equ RAM_VARS+0x0db   ; IR_CODE & 3F = key number 0..63
-NEW_MSG_CHAN         equ RAM_VARS+0x0dc   ; channel chosen for a new MAGIC message
-MAGIC_FX_PREV        equ RAM_VARS+0x0dd   ; FF = last byte was a movement attribute (magic mode)
-MAGIC_FLASH_WORD     equ RAM_VARS+0x0de   ; '$' = flash the word that starts with $ (magic mode)
-EDITOR_FIRST_KEY     equ RAM_VARS+0x0df   ; FF until the first key in the editor is processed
-MAGIC_WORD_COUNT     equ RAM_VARS+0x0e0   ; words since the last color change (magic mode)
-RND_SEED             equ RAM_VARS+0x0e1
-MAGIC_MSG_CHAN       equ RAM_VARS+0x0e2   ; channel to announce as MAGIC MSG nn on redraw (0 = none)
-CHAN_D10             equ RAM_VARS+0x0e3
-CHAN_D1              equ RAM_VARS+0x0e4
-MENU_ENTRY_BUF       equ RAM_VARS+0x0e5
-FUNC_PENDING         equ RAM_VARS+0x0ea   ; editor: FUNC (B7) pressed, next key picks the second function
-SPEED_PENDING        equ RAM_VARS+0x0eb   ; editor: SPEED key pressed, next key is the digit
-KEY_ECHO_TX          equ RAM_VARS+0x0ec   ; non-zero = echo accepted keys on serial TX
-    IFNDEF LITE                 ; the IR decoder, the OTA test message and dimming
-TEST_MODE            equ RAM_VARS+0x0ed   ; FF = display TEST_MSG_BUF instead of the sequence; P29: only the OTA parked message sets it
-IR_STATE_CNT         equ RAM_VARS+0x0ee
-IR_BITCNT            equ RAM_VARS+0x0ef
-IR_SHIFT             equ RAM_VARS+0x0f0
-TICK_VECTOR          equ RAM_VARS+0x0f1
-LIT_COUNT            equ RAM_VARS+0x0f3   ; P35: interrupts the lit row has left
-LIT_LIMIT            equ RAM_VARS+0x0f4   ; P35: the row's share of interrupts; 0 = full brightness or parked
-LATCH_PENDING        equ RAM_VARS+0x0f5   ; P35: row select code the ISR latches on its next interrupt; 0 = none
-DISP_ACC             equ RAM_VARS+0x0f6   ; P26: sevenths of an interrupt carried to the next display tick (was BLANK_TIMER)
-BOOT_ZERO_END        equ RAM_VARS+0x0f7
+BGRND_PENDING        equ RAM_VARS+0x082   ; editor: BGRND key pressed, next key is the color digit
+STAGE_OFFSET         equ RAM_VARS+0x083   ; centering offset of the staged text (free columns / 2)
+ROW_PORT             equ RAM_VARS+0x085   ; port group for the row data: 40 first pass, 48 second; 0 = the row is done
+BEEP_TICKS           equ RAM_VARS+0x086   ; beeper on while non-zero (port bit 5); beep_start loads BEEP_LEN
+ASK_CHAN_PROMPT      equ RAM_VARS+0x087   ; menu_ask_chan prompt string
+GLYPH_WIDTH          equ RAM_VARS+0x089
+GLYPH_PTR            equ RAM_VARS+0x08a
+MENU_MSG_PTR         equ RAM_VARS+0x08c   ; message the editor is showing (set with MENU_MSG_FLAG)
+CUR_CHAR             equ RAM_VARS+0x08e
+MENU_ACTIVE          equ RAM_VARS+0x08f
+INS_PTR              equ RAM_VARS+0x090
+WINDOW_COLOR         equ RAM_VARS+0x092   ; last color byte at the output window start (bit 4 = flash)
+FRAME_COUNT          equ RAM_VARS+0x093   ; frames since LATCH_BIT7 last toggled (mod CFG_FLASH)
+COLOR_PENDING        equ RAM_VARS+0x094   ; editor: COLOR key pressed, next key is the color digit
+GRAPH_PENDING        equ RAM_VARS+0x095   ; editor: GRAPH key pressed, next key selects A0-AF
+ROW_COLOR            equ RAM_VARS+0x096   ; color byte sent ahead of each row
+MENU_MSG_FLAG        equ RAM_VARS+0x097   ; FF = editor has a message to display
+EDIT_KEY             equ RAM_VARS+0x098   ; key/character the editor is processing (0 = none)
+RX_BYTE              equ RAM_VARS+0x099
+IR_KEY_CHAR          equ RAM_VARS+0x09a   ; character decoded from the IR key via the CHARSET_ tables
+CTRL_LATCH_SHADOW    equ RAM_VARS+0x09b
+FB_OUT_LEN           equ RAM_VARS+0x09c   ; bytes to send from FB_OUT_PTR before wrapping to FRAMEBUF
+FB_EXTRA_LEN         equ RAM_VARS+0x09d   ; bytes to send from FRAMEBUF after the wrap
+STORE_END            equ RAM_VARS+0x09e
+EFFECT_ID            equ RAM_VARS+0x0a0   ; 0 LEFT, 1 PAUSE, 2 UP, 3 DOWN, 4 RIGHT, 5 HOLD
+EFFECT_VECTOR        equ RAM_VARS+0x0a1
+CHAN_HINT            equ RAM_VARS+0x0a3   ; P39: the marker chan_select found last (was MENU_TEXT_PTR)
+SHIFT_LABEL          equ RAM_VARS+0x0a5   ; FF = redraw shows the SHIFT indicator
+ROW_INDEX            equ RAM_VARS+0x0a6
+RX_BITS              equ RAM_VARS+0x0a7   ; P30: data bits still to sample (was RX_BITMASK)
+RX_SHIFT             equ RAM_VARS+0x0a8
+RX_ACC               equ RAM_VARS+0x0a9   ; P30: fifths of an interrupt to the next sample (was RX_TICKS)
+RX_FIFO              equ RAM_VARS+0x0aa
+RX_COUNT             equ RAM_VARS+0x0b2
+REDRAW_PTR           equ RAM_VARS+0x0b3   ; editor redraw: byte being rendered
+RX_PHASE             equ RAM_VARS+0x0b5   ; P30: 0 idle, 1 timing the start pulse, 2 sampling bits (was the RX_STATE vector)
+TICK6_CAL            equ RAM_VARS+0x0b6   ; P30: low byte of the tick6 runs this second, read and zeroed by baud_calibrate
+CHAN_LOCK            equ RAM_VARS+0x0b7
+SEQ_PTR              equ RAM_VARS+0x0b8
+SEQ_ALL_EMPTY        equ RAM_VARS+0x0ba   ; 10 = every listed channel is empty, play the demo
+SEQ_MENU_ACTIVE      equ RAM_VARS+0x0bb   ; FF while the SEQ MSG? dialogue runs
+SHIFT_STATE          equ RAM_VARS+0x0bc   ; SHIFT latch, toggled by key 29 (see section 9)
+PREV_SPACE           equ RAM_VARS+0x0bd   ; 1 = previous char was a space (two in a row reset the background)
+NMI_COUNT            equ RAM_VARS+0x0be   ; NMIs this second; magic_short_word also adds it to the random seed
+STORE_TMP            equ RAM_VARS+0x0bf
+REDRAW_FROM          equ RAM_VARS+0x0c1   ; editor redraw: first byte actually displayed (cursor-21, >= INS_PTR)
+TX_BITIDX            equ RAM_VARS+0x0c3
+TX_PENDING           equ RAM_VARS+0x0c4
+TX_ACC               equ RAM_VARS+0x0c5   ; P30: fifths of an interrupt to the next edge (was TX_TICKS)
+TX_SHIFT             equ RAM_VARS+0x0c6
+TX_STATUS            equ RAM_VARS+0x0c7
+SEQ_SET              equ RAM_VARS+0x0c8   ; FF = sequence set by hand; do not auto-add the edited channel
+NMI_PER_SEC          equ RAM_VARS+0x0c9
+CLK_RENDERED         equ RAM_VARS+0x0ca   ; FF just after a clock display; forces LEFT in an effect
+MAGIC_COLOR_IDX      equ RAM_VARS+0x0cb   ; index into MAGIC_COLOR_CYCLE
+EURO_STATE           equ RAM_VARS+0x0cc
+IR_DEBOUNCE          equ RAM_VARS+0x0cd   ; key number | 0x40 seen once, awaiting its second frame; 0 none
+GEN_COUNTDOWN        equ RAM_VARS+0x0ce   ; IR repeat/hold timer, counts down in tick6 (word)
+IR_KEY               equ RAM_VARS+0x0d0   ; last seen key number | 0x40; 0 none
+IR_CODE              equ RAM_VARS+0x0d1
+IR_KEYNUM            equ RAM_VARS+0x0d2   ; IR_CODE & 3F = key number 0..63
+MAGIC_FX_PREV        equ RAM_VARS+0x0d3   ; FF = last byte was a movement attribute (magic mode)
+MAGIC_FLASH_WORD     equ RAM_VARS+0x0d4   ; '$' = flash the word that starts with $ (magic mode)
+EDITOR_FIRST_KEY     equ RAM_VARS+0x0d5   ; FF until the first key in the editor is processed
+MAGIC_WORD_COUNT     equ RAM_VARS+0x0d6   ; words since the last color change (magic mode)
+RND_SEED             equ RAM_VARS+0x0d7
+MAGIC_MSG_CHAN       equ RAM_VARS+0x0d8   ; channel to announce as MAGIC MSG nn on redraw (0 = none)
+CHAN_D10             equ RAM_VARS+0x0d9
+CHAN_D1              equ RAM_VARS+0x0da
+SPARKLE_RND          equ CHAN_D10          ; P49: the holds' 16-bit xorshift state, never 0. The prompt's digits are free then: each
+                                           ; hold seeds it, the prompt writes both digits first, and the editor ends any hold
+MENU_ENTRY_BUF       equ RAM_VARS+0x0db
+FUNC_PENDING         equ RAM_VARS+0x0e0   ; editor: FUNC (B7) pressed, next key picks the second function
+SPEED_PENDING        equ RAM_VARS+0x0e1   ; editor: SPEED key pressed, next key is the digit
+KEY_ECHO_TX          equ RAM_VARS+0x0e2   ; non-zero = echo accepted keys on serial TX
+    IFNDEF LITE                 ; the IR decoder, the OTA test message, dimming, the dividers and rate detection
+TEST_MODE            equ RAM_VARS+0x0e3   ; FF = display TEST_MSG_BUF instead of the sequence; P29: only the OTA parked message sets it
+IR_STATE_CNT         equ RAM_VARS+0x0e4
+IR_BITCNT            equ RAM_VARS+0x0e5
+IR_SHIFT             equ RAM_VARS+0x0e6
+TICK_VECTOR          equ RAM_VARS+0x0e7
+LIT_COUNT            equ RAM_VARS+0x0e9   ; P35: interrupts the lit row has left
+LIT_LIMIT            equ RAM_VARS+0x0ea   ; P35: the row's share of interrupts; 0 = full brightness or parked
+LATCH_PENDING        equ RAM_VARS+0x0eb   ; P35: row select code the ISR latches on its next interrupt; 0 = none
+DISP_ACC             equ RAM_VARS+0x0ec   ; P26: sevenths of an interrupt carried to the next display tick (was BLANK_TIMER)
+RX_WIDTH             equ RAM_VARS+0x0ed   ; P30: interrupts the start pulse has lasted while it sets the rate
+DISP_COUNT           equ RAM_VARS+0x0ee   ; P26: interrupts to the next display tick (was TICK1_COUNT, a divider by 1)
+TICK6_COUNT          equ RAM_VARS+0x0ef
+BOOT_ZERO_END        equ RAM_VARS+0x0f0
     ELSE
-BOOT_ZERO_END        equ RAM_VARS+0x0ed
+BOOT_ZERO_END        equ RAM_VARS+0x0e3
     ENDIF
 BOOT_ZERO_LEN        equ BOOT_ZERO_END-BOOT_ZERO
 ; ---- scratch, never initialized
@@ -202,32 +201,36 @@ SEQ_END              equ SEQ_LIST+SEQ_LIST_LEN
     IFNDEF LITE                 ; no receiver
 IR_LEVEL             equ SEQ_END+0x00     ; the IR line as the decoder last saw it, for edge detection
 IR_CELL              equ SEQ_END+0x01     ; the current cell's verdict: FF none yet, 0 or 1
-IR_REJ               equ SEQ_END+0x02     ; remote frames dropped, by reason: four counters the stats query appends
-    ELSE
-IR_REJ               equ SEQ_END          ; kept for the stats query's reply format
-    ENDIF
+STAT_IR              equ SEQ_END+0x02     ; the stats query's remote counters, STAT_IR_LEN bytes
+STAT_IR_OK           equ STAT_IR+0x00     ; remote frames decoded
+STAT_IR_BAD          equ STAT_IR+0x01     ; remote frames dropped after the leader
+IR_REJ               equ STAT_IR+0x02     ; ... by reason:
 IR_REJ_LEADER        equ IR_REJ+0x00      ; no start burst 10-23 ticks after the leader
 IR_REJ_POS           equ IR_REJ+0x01      ; stray rises between the two positions or past the middle (ignored, not drops)
 IR_REJ_CELL          equ IR_REJ+0x02      ; no rise in a cell after a 1
 IR_REJ_BRIDGE        equ IR_REJ+0x03      ; a burst where a gap belongs: high through a cell's first two ticks after a 1, or a rise opening a cell after a 0
 TERM_MODE            equ IR_REJ+0x04      ; FF: the editor was opened by B7 '1' and takes serial bytes as keys
-EDIT_CLOSE           equ IR_REJ+0x05      ; FF: B7 '0' asks the open editor to close
+    ELSE
+TERM_MODE            equ SEQ_END          ; the stats query sends zeros for the remote's counters
+    ENDIF
+STAT_IR_LEN          equ 6
+EDIT_CLOSE           equ TERM_MODE+0x01   ; FF: B7 '0' asks the open editor to close
 ; P20: the clock digits must survive a power cycle, so they live up here next
 ; to the store, out of reach of the stub's library copy (RAM_VARS+00..81).
-CLK_H10              equ IR_REJ+0x06
-CLK_H1               equ IR_REJ+0x07
-CLK_M10              equ IR_REJ+0x08
-CLK_M1               equ IR_REJ+0x09
-CLK_SEC              equ IR_REJ+0x0a
-CLK_PM               equ IR_REJ+0x0b
-BOOT_COUNT           equ IR_REJ+0x0c      ; boots since RAM was last fresh
-STORE_LIMIT          equ IR_REJ+0x0d
-STORE_SIZE           equ IR_REJ+0x0f
-STORE_TEXT_LIMIT     equ IR_REJ+0x11      ; free text bytes; scan bound for store_repair
-STORE_WARN_LIMIT     equ IR_REJ+0x13      ; STORE_END here trips the 100 KEYS LEFT warning
+CLK_H10              equ TERM_MODE+0x02
+CLK_H1               equ TERM_MODE+0x03
+CLK_M10              equ TERM_MODE+0x04
+CLK_M1               equ TERM_MODE+0x05
+CLK_SEC              equ TERM_MODE+0x06
+CLK_PM               equ TERM_MODE+0x07
+BOOT_COUNT           equ TERM_MODE+0x08   ; boots since RAM was last fresh
+STORE_LIMIT          equ TERM_MODE+0x09
+STORE_SIZE           equ TERM_MODE+0x0b
+STORE_TEXT_LIMIT     equ TERM_MODE+0x0d   ; free text bytes; scan bound for store_repair
+STORE_WARN_LIMIT     equ TERM_MODE+0x0f   ; STORE_END here trips the 100 KEYS LEFT warning
 ; P35: the configuration block. Battery-backed like the clock; its signature
 ; and sum are the RAM-validity test (was MY_ADDRESS against its complement).
-CFG                  equ IR_REJ+0x15
+CFG                  equ TERM_MODE+0x11
 CFG_SIG              equ CFG+0            ; CFG_MAGIC while the block is valid
 MY_ADDRESS           equ CFG+1            ; written only by the editor's ADDRESS? dialog
 CFG_FLAGS            equ CFG+2            ; bits 0-1 brightness, 2 muted, 3 mute pending, 4 quiet, 5 locked, 6 wrapped, 7 status
@@ -512,33 +515,29 @@ STAT_STALLS          equ STREAM_AREA+41    ; times the renderer went STALL_FRAME
 STAT_STALL_MAX       equ STREAM_AREA+42    ; longest such gap in frames
 STAT_PKT_OK          equ STREAM_AREA+43    ; frames with a good checksum (own address or broadcast)
 STAT_PKT_BAD         equ STREAM_AREA+44    ; ... with a bad one
-STAT_IR_OK           equ STREAM_AREA+45    ; remote frames decoded
-STAT_IR_BAD          equ STREAM_AREA+46    ; remote frames dropped after the leader
-POLL_AGE             equ STREAM_AREA+47    ; frames since pkt_poll last ran
+POLL_AGE             equ STREAM_AREA+45    ; frames since pkt_poll last ran
 STATS_LEN            equ POLL_AGE-STATS
-STATUS_BUF           equ STREAM_AREA+48    ; P41: the status report being sent, B1 addr 03 'S' channel flags
-RANDBOW_DECK         equ STREAM_AREA+54    ; P46: bit 7 = RANDBOW, bits 0..RAINBOW_N-1 = RAINBOW's colors not yet dealt this round
-ALT_NEXT             equ STREAM_AREA+55    ; P46: the editor inserts this after a FUNC2 key's B2
-ALT_FX               equ STREAM_AREA+56    ; P48: FF = the UP or DOWN (P53: or RIGHT) that follows scrolls instead of wiping
-SPARKLE              equ STREAM_AREA+57    ; P49/P50: the page's hold twinkles (1) or glimmers (2); 0 = a plain hold
-SPARKLE_RND          equ STREAM_AREA+58    ; P49: the holds' 16-bit xorshift state, never 0
-STACK_INIT           equ STREAM_AREA+60    ; P51: ram_probe's choices: the stack's top and bottom,
-STACK_BOT            equ STREAM_AREA+62    ;   and the longest payload the buffer takes
-PKT_MAX              equ STREAM_AREA+64
-ISR_WORK             equ STREAM_AREA+65    ; what the ISR must look at, the WORK bits; with the RX line idle too it takes its short path
+STATUS_BUF           equ STREAM_AREA+46    ; P41: the status report being sent, B1 addr 03 'S' channel flags
+RANDBOW_DECK         equ STREAM_AREA+52    ; P46: bit 7 = RANDBOW, bits 0..RAINBOW_N-1 = RAINBOW's colors not yet dealt this round
+ALT_NEXT             equ STREAM_AREA+53    ; P46: the editor inserts this after a FUNC2 key's B2
+ALT_FX               equ STREAM_AREA+54    ; P48: FF = the UP or DOWN (P53: or RIGHT) that follows scrolls instead of wiping
+SPARKLE              equ STREAM_AREA+55    ; P49/P50: the page's hold twinkles (1) or glimmers (2); 0 = a plain hold
+STACK_INIT           equ STREAM_AREA+56    ; P51: ram_probe's choices: the stack's top
+PKT_MAX              equ STREAM_AREA+58
+ISR_WORK             equ STREAM_AREA+59    ; what the ISR must look at, the WORK bits; with the RX line idle too it takes its short path
 WORK_RX_BIT          equ 0                 ; a byte is arriving
 WORK_TX_BIT          equ 1                 ; a byte is queued or going out
 WORK_LIT_BIT         equ 2                 ; a dimmed row is waiting or lit
 WORK_KP_BIT          equ 3                 ; keypad mode: the RX line (PORT_IN bit 3) idles at space
     IFDEF LITE
-STREAM_AREA_SIZE     equ 66
+STREAM_AREA_SIZE     equ 60
     ELSE
-IR_MASK              equ STREAM_AREA+66    ; PORT_IR; 0 from a start bit to the next frame end, which with IR_QUIET 0 skips the decoder
-IR_QUIET             equ STREAM_AREA+67    ; P35: the line level (0 or PORT_IR) the IR decoder sleeps through, its handler skipped; FF = awake
-FIELD_RET            equ STREAM_AREA+68    ; P54: where the parent resumes after a field; 0 = no field open
-FIELD_MARK           equ STREAM_AREA+70    ; P54: the open field's channel marker
-FIELD_PENDING        equ STREAM_AREA+72    ; P54: editor: FUNC + PROG pressed, next key is the field's digit
-STREAM_AREA_SIZE     equ 73
+IR_MASK              equ STREAM_AREA+60    ; PORT_IR; 0 from a start bit to the next frame end, which with IR_QUIET 0 skips the decoder
+IR_QUIET             equ STREAM_AREA+61    ; P35: the line level (0 or PORT_IR) the IR decoder sleeps through, its handler skipped; FF = awake
+FIELD_RET            equ STREAM_AREA+62    ; P54: where the parent resumes after a field; 0 = no field open
+FIELD_MARK           equ STREAM_AREA+64    ; P54: the open field's channel marker
+FIELD_PENDING        equ STREAM_AREA+66    ; P54: editor: FUNC + PROG pressed, next key is the field's digit
+STREAM_AREA_SIZE     equ 67
     ENDIF
 STACK_TOP            equ STREAM_AREA       ; first PUSH lands two below; SP is STACK_INIT, set at boot
 STORE_TOP            equ STACK_TOP-STACK_SIZE-1 ; with a 32 K chip (16 K usable)
@@ -956,9 +955,11 @@ app_start:
         LD SP,STACK_TOP_2K      ; the buffer's top half: idle until init_vars picks the stack
         CALL init_vars
         LD SP,(STACK_INIT)
-        LD HL,0
-        LD (IR_REJ),HL
-        LD (IR_REJ+2),HL
+    IFNDEF LITE
+        LD HL,STAT_IR
+        LD BC,STAT_IR_LEN*0x100
+        CALL mem_fill
+    ENDIF
         CALL store_init
         CALL ir_init
         CALL init_nmi_rate
@@ -994,7 +995,11 @@ int_rx_start:                   ; out of line, so the idle path below falls stra
         JR int_tx
 
 int_rx_active:
+    IFDEF LITE
+        CALL rx_sample_tick     ; no rate detection: sampling is the only phase
+    ELSE
         CALL rx_phase_run
+    ENDIF
         JR int_tx
 
     IFNDEF LITE                 ; LITE: no dimming, a pass under one interrupt can't be cut
@@ -1066,13 +1071,24 @@ int_lit_count:
     ENDIF
 
 int_lit_on:
+    IFDEF LITE                  ; TICK6_DIV 1: every interrupt is a display tick and a tick6 mark
+        LD HL,SVC_DUE
+        BIT 1,(HL)              ; P40: the last tick still due: this one merges with it
+        LD (HL),3
+        JR z,int_tick6_cal
+        LD HL,STAT_MERGE
+        INC (HL)
+
+int_tick6_cal:
+        LD HL,TICK6_CAL
+        INC (HL)
+    ELSE
+        ASSERT TICK6_COUNT == DISP_COUNT+1
         LD HL,DISP_COUNT
         DEC (HL)
         JR z,int_disp_due
-
-int_tick6:
-        LD HL,TICK6_COUNT       ; counted down: an interrupt that makes no mark
-        DEC (HL)                ; has no service to start
+        INC HL                  ; TICK6_COUNT, counted down: an interrupt that makes
+        DEC (HL)                ; no mark has no service to start
         JR nz,int_vector
 
 int_tick6_mark:
@@ -1081,6 +1097,7 @@ int_tick6_mark:
         INC (HL)                ; service cannot shrink the calibration's second
         LD HL,SVC_DUE
         SET 0,(HL)
+    ENDIF
 
 int_svc:
         LD HL,SVC_ACTIVE
@@ -1110,10 +1127,8 @@ int_vector_done:
         EI
         RET                     ; RETI only matters to Z80 peripherals; the board has none
 
+    IFNDEF LITE                 ; LITE: no stretch, the speed is dark ticks after the frame (row_output)
 int_disp_due:
-    IFDEF LITE
-        LD B,TICK6_DIV          ; no stretch: the speed is dark ticks after the frame (row_output)
-    ELSE
         LD A,(DISP_STRETCH)
         LD C,A
         LD A,(DISP_ACC)
@@ -1129,7 +1144,6 @@ int_disp_carry:
 
 int_disp_reload:
         LD (DISP_ACC),A
-    ENDIF
         LD (HL),B
         LD HL,SVC_DUE
         BIT 1,(HL)              ; P40: the last tick still due: this one merges with it
@@ -1144,6 +1158,7 @@ int_disp_mark:
         DEC (HL)
         JR nz,int_svc
         JR int_tick6_mark
+    ENDIF
 
 ; ---- main_loop: open the next channel, then render it a character at a time.
 ;      P21: pkt_poll runs here, at every render step and in every frame wait,
@@ -1219,12 +1234,12 @@ tick6_engines:
         EI
 
 tick6_beep:
-        LD HL,(BEEP_TICKS)
-        LD A,H
-        OR L
+        ASSERT BEEP_LEN < 256
+        LD HL,BEEP_TICKS
+        LD A,(HL)
+        AND A
         JR z,svc_display
-        DEC HL
-        LD (BEEP_TICKS),HL
+        DEC (HL)
 
 svc_display:
         LD HL,SVC_DUE
@@ -1259,7 +1274,7 @@ row_output:
 
 row_lit:
     ENDIF
-        LD A,(ROW_OUT_PENDING)
+        LD A,(ROW_PORT)
         AND A
         JP z,row_advance
         CALL latch_blank
@@ -1280,29 +1295,24 @@ row_lit:
         OR (HL)
         LD C,A
         LD HL,(FB_OUT_PTR)
-        LD DE,(BEEP_TICKS)
-        LD A,D
-        OR E
+        LD A,(BEEP_TICKS)
+        AND A
         JR z,row_out_color
         SET 5,C                 ; the beeper's bit in the row port
 
 row_out_color:
         LD A,(ROW_COLOR)
         OUT (C),A
-        LD A,B
-        AND A
-        JR z,row_out_wrap
-        BIT 0,B
-        JR z,row_out_data
+        BIT 0,B                 ; FB_OUT_LEN is never 0
+        JR nz,row_out_odd
+        OTIR
+        JR row_out_wrap
+
+row_out_odd:
         DEC B
         JR z,row_out_last
-
-row_out_data:
         OTIR
-        LD A,(FB_OUT_LEN)
-        BIT 0,A
-        JR z,row_out_wrap
-        LD B,1
+        INC B
 
 row_out_last:
         LD A,(HL)
@@ -1336,16 +1346,12 @@ row_select:
         CALL latch_row_dim      ; P35: lit now at full brightness, else by the ISR
 
 row_phase_step:
-        LD A,(ROW_PORT)
+        LD HL,ROW_PORT
+        LD A,(HL)
+        LD (HL),PORT_ROW0       ; the second pass next,
         CP PORT_ROW0
-        JR z,row_phase_done
-        LD A,PORT_ROW0
-        LD (ROW_PORT),A
-        JR row_exit
-
-row_phase_done:
-        XOR A
-        LD (ROW_OUT_PENDING),A
+        JR nz,row_exit
+        LD (HL),0               ; or after it the row is done
 
 row_exit:
         JP tick6_restore
@@ -1433,21 +1439,26 @@ frame_scroll:
         LD A,(SCROLLING)
         AND A
         JR z,frame_check_still
-        LD HL,(FB_COL)
-        LD DE,FRAME_COLS
-        CALL fb_ptr_add
-        LD DE,(FB_COLPTR)
-        OR A
-        SBC HL,DE
+        ASSERT (FRAMEBUF & 0xff) == 0
+        LD A,(FB_COLPTR)        ; the ring lies in one page: the low bytes are its columns.
+        SUB FRAME_COLS          ; The window stops FRAME_COLS short of the write pointer
+        JR nc,frame_scroll_to
+        ADD A,FRAMEBUF_SIZE
+
+frame_scroll_to:
+        LD B,A
+        LD HL,FB_COL
+        LD A,(HL)
+        CP B
         JR z,frame_scroll_stop
-        LD HL,(FB_COL)
-        CALL fb_ptr_inc
-        LD (FB_COL),HL
-        LD DE,FRAME_COLS
-        CALL fb_ptr_add
-        LD DE,(FB_COLPTR)
-        OR A
-        SBC HL,DE
+        INC A
+        CP FRAMEBUF_SIZE
+        JR nz,frame_scroll_put
+        XOR A
+
+frame_scroll_put:
+        LD (HL),A
+        CP B
         JR nz,frame_color
 
 frame_scroll_stop:
@@ -1456,10 +1467,9 @@ frame_scroll_stop:
         JR frame_color
 
 frame_check_still:
-        LD HL,(FB_OUT_PTR)
-        LD DE,(FB_COL)
-        OR A
-        SBC HL,DE
+        LD A,(FB_OUT_PTR)
+        LD HL,FB_COL
+        CP (HL)
         JR z,frame_bit7_tick
 
 frame_color:
@@ -1481,24 +1491,19 @@ frame_set_window:
         LD (ROW_COLOR),A
         LD HL,(FB_COL)
         LD (FB_OUT_PTR),HL
-        EX DE,HL
-        LD HL,FRAMEBUF_END      ; the window runs to the ring's end, then wraps
-        OR A
-        SBC HL,DE
-        LD (FB_OUT_LEN),HL
-        EX DE,HL
-        LD HL,FRAME_COLS
-        SBC HL,DE               ; no borrow came out of the first
-        JR z,frame_window_wrap
-        JR nc,frame_set_extra
-
-frame_window_wrap:
-        LD HL,FRAME_COLS
-        LD (FB_OUT_LEN),HL
-        LD HL,0
+        ASSERT FB_EXTRA_LEN == FB_OUT_LEN+1
+        LD A,FRAMEBUF_END & 0xff ; the window runs to the ring's end, then wraps
+        SUB L
+        LD L,A
+        SUB FRAME_COLS
+        JR c,frame_set_extra
+        LD L,FRAME_COLS
+        XOR A
 
 frame_set_extra:
-        LD (FB_EXTRA_LEN),HL
+        NEG                     ; the columns past the wrap
+        LD H,A
+        LD (FB_OUT_LEN),HL
 
 frame_bit7_tick:
         LD HL,FRAME_COUNT
@@ -1685,8 +1690,6 @@ rx_idle_byte:
 ; ---- tick6_exit
 tick6_exit:
 tick6_arm_row:
-        LD A,0xff
-        LD (ROW_OUT_PENDING),A
         LD A,PORT_40_OUT
         LD (ROW_PORT),A
 
@@ -2216,8 +2219,7 @@ init_vars:
         LD HL,STREAM_AREA       ; P21: no reply in flight, no packet busy
         LD B,STREAM_AREA_SIZE
         CALL mem_fill
-        CALL ram_probe
-        LD HL,(STACK_BOT)       ; P40: lay the canary at the stack's bottom
+        CALL ram_probe          ; P40: lay the canary at the stack's bottom
         LD BC,STACK_CANARY*0x100+CANARY
         CALL mem_fill
         LD HL,INIT_DATA
@@ -2304,26 +2306,17 @@ init_render:
         CALL mem_fill
         LD A,0xff
         LD (DISP_ON),A
-        LD HL,FRAMEBUF
-        LD (FB_OUT_PTR),HL
-        LD (FB_COL),HL
-        LD HL,0
-        LD (FB_EXTRA_LEN),HL
+        CALL fxv_pointers
     IFNDEF LITE
+        LD HL,0
         LD (FIELD_RET),HL       ; P54
     ENDIF
-        LD HL,FRAME_COLS
-        LD (FB_OUT_LEN),HL
         LD A,COLOR_DEFAULT
         LD (WINDOW_COLOR),A
         LD (ROW_COLOR),A
         LD (CUR_COLOR),A
         CALL effect_none
-        LD HL,FRAMEBUF_ROW1
-        LD (FB_COLPTR),HL
-        LD HL,TXBUF
-        LD (STAGE_PTR),HL
-        CALL clear_txbuf
+        CALL fx_reset_txbuf
         CALL clear_glyph_tmp
         LD HL,(STORE_LIMIT)
         LD (HL),MARK_HI
@@ -2333,34 +2326,29 @@ init_render:
 ;      at the next space; two spaces in a row clear the background color
 track_flash_space:
         LD A,(CUR_CHAR)
+        LD HL,PREV_SPACE
         CP ' '
         JR z,space_seen
-        XOR A
-        LD (PREV_SPACE),A
-        LD A,(CUR_CHAR)
+        LD (HL),0
         CALL char_flags
         RET nz
         LD A,0xff
         LD (TEXT_DRAWN),A
-        LD A,(FLASH_PENDING)
+        LD HL,FLASH_PENDING
+        LD A,(HL)
         AND A
         RET z
         LD (FLASH_BIT),A
-        XOR A
-        LD (FLASH_PENDING),A
+        LD (HL),0
         RET
 
 space_seen:
         XOR A
         LD (FLASH_BIT),A
-        LD A,(PREV_SPACE)
+        LD A,(HL)
+        LD (HL),1
         AND A
-        JR nz,double_space
-        LD A,1
-        LD (PREV_SPACE),A
-        RET
-
-double_space:
+        RET z
     IFNDEF LITE
         LD A,(TEST_MODE)
         INC A
@@ -2427,9 +2415,8 @@ class_high:
 ;      columns after it (glyph_bold and glyph_big read one past the end, and a
 ;      graphic is drawn at twice its width), then styled and placed
 glyph_lookup:
-        CALL glyph_addr
+        CALL glyph_addr         ; A = GLYPH_WIDTH
         CALL clear_glyph_tmp
-        LD A,(GLYPH_WIDTH)
         LD C,A
         LD B,0
         LD DE,GLYPH_BUF_ITALIC
@@ -2547,16 +2534,14 @@ blit_columns:
 
 ; ---- glyph_stage: effect active: stage the glyph into TXBUF instead
 glyph_stage:
-        LD HL,(STAGE_PTR)
-        LD A,(GLYPH_WIDTH)
-        LD D,0
-        LD E,A
-        ADD HL,DE
-        LD DE,STAGE_END
-        XOR A
-        SBC HL,DE
-        JP nc,fx_flush_stage
         LD DE,(STAGE_PTR)
+        LD A,(GLYPH_WIDTH)
+        LD L,A
+        LD H,0
+        ADD HL,DE
+        LD BC,-STAGE_END & 0xffff
+        ADD HL,BC
+        JP c,fx_flush_stage     ; no room: show the page first
         LD A,(EFFECT_ID)
         CP FX_RIGHT+FX_SCROLL   ; P53: SCROLL RIGHT's page moves sideways, so
         LD A,COLOR_DEFAULT      ; it is staged in its colors (yellow once it rests)
@@ -2709,19 +2694,17 @@ glyph_addr_test:
         EX DE,HL
         RET
 
-; ---- fetch_char: CUR_CHAR = next store byte (LEFT substituted after a clock)
+; ---- fetch_char: A = CUR_CHAR = next store byte (LEFT substituted after a clock)
 fetch_char:
         PUSH HL
-        PUSH AF
         LD HL,(STORE_CURSOR)
         LD A,(EFFECT_ID)
         AND A
         JR z,fetch_read
         LD A,(CLK_RENDERED)
         AND A
-        JR z,fetch_read
         LD A,ATTR_LEFT
-        JR fetch_store
+        JR nz,fetch_store
 
 fetch_read:
         LD A,(HL)
@@ -2730,9 +2713,8 @@ fetch_store:
         INC HL
         LD (STORE_CURSOR),HL
         LD (CUR_CHAR),A
-        XOR A
-        LD (CLK_RENDERED),A
-        POP AF
+        LD HL,CLK_RENDERED
+        LD (HL),0
         POP HL
         RET
 
@@ -2773,9 +2755,11 @@ rainbow_on:
         LD B,A
         LD A,(NMI_COUNT)
         ADD A,B
+    IFNDEF LITE
         LD B,A
         LD A,(TICK6_COUNT)
         ADD A,B
+    ENDIF
         LD (RND_SEED),A
 
 rainbow_mod5:
@@ -2935,7 +2919,6 @@ attr_remark_check:
 
 remark_skip:
         CALL fetch_char
-        LD A,(CUR_CHAR)
 
 ; ---- attr_remark: 0xB0: skip text until the next 0xB0 (hidden remark)
 attr_remark:
@@ -3023,12 +3006,10 @@ draw_begin:
 
 draw_hex_loop:
         CALL fetch_char
-        LD A,(CUR_CHAR)
         CALL hex_digit_value
         JR c,draw_bad_hex
         PUSH AF
         CALL fetch_char
-        LD A,(CUR_CHAR)
         CALL hex_digit_value
         JR c,draw_pop_odd
         RRD
@@ -3178,17 +3159,13 @@ magic_other:
         RET nc
 
 magic_printable:
-        LD A,(MAGIC_LAST_CHAR)
+        LD HL,MAGIC_LAST_CHAR
+        LD A,(HL)
         CP ' '
-        JR z,magic_word_start
         LD A,(CUR_CHAR)
-        LD (MAGIC_LAST_CHAR),A
-        RET
-
-magic_word_start:
-        LD A,(CUR_CHAR)
-        LD (MAGIC_LAST_CHAR),A
-        CP '$'
+        LD (HL),A
+        RET nz
+        CP '$'                  ; a word starts
         JR nz,magic_pick_font
         LD (MAGIC_FLASH_WORD),A
 
@@ -3504,35 +3481,14 @@ glyph_big:
 big_ret:
         RET
 
-; ---- fb_ptr_inc: HL++ inside the FRAMEBUF ring
+; ---- fb_ptr_inc: HL++ inside the FRAMEBUF ring (A lost)
         ASSERT (FRAMEBUF >> 8) == (FRAMEBUF_END >> 8)   ; the ring lies in one page
 fb_ptr_inc:
-        INC HL
-        PUSH AF
+        INC L
         LD A,L
         CP FRAMEBUF_END & 0xff
-        JR nz,fbinc_ret
+        RET nz
         LD L,FRAMEBUF & 0xff
-
-fbinc_ret:
-        POP AF
-        RET
-
-; ---- fb_ptr_add: HL += DE inside the FRAMEBUF ring
-fb_ptr_add:
-        PUSH AF
-        PUSH DE
-        ADD HL,DE
-        LD DE,-FRAMEBUF_END & 0xffff
-        ADD HL,DE               ; CY: past the end, HL = how far; else add the end back
-        LD DE,FRAMEBUF
-        JR c,fbadd_ret
-        LD E,FRAMEBUF_END & 0xff
-
-fbadd_ret:
-        ADD HL,DE
-        POP DE
-        POP AF
         RET
 
 ; ---- wait_frame_delay: spin, polling for packets, until FRAME_DELAY runs out
@@ -3603,18 +3559,14 @@ crawl_peek:                     ; colors (80-93), BIG..FLASH, MAGIC, THIN and MA
         LD A,(HL)
         CALL char_flags
         JR nz,crawl_wait
-        LD HL,(FB_COLPTR)       ; columns still to scroll in: FB_COLPTR - FB_COL
-        LD DE,(FB_COL)          ; round the ring, less the panel's width
-        OR A
-        SBC HL,DE
+        LD A,(FB_COLPTR)        ; columns still to scroll in: FB_COLPTR - FB_COL
+        LD HL,FB_COL            ; round the ring, less the panel's width
+        SUB (HL)
         JR nc,crawl_lead
-        LD DE,FRAMEBUF_SIZE
-        ADD HL,DE
+        ADD A,FRAMEBUF_SIZE
 
 crawl_lead:
-        LD DE,FRAME_COLS+CRAWL_LEAD+1
-        OR A
-        SBC HL,DE
+        CP FRAME_COLS+CRAWL_LEAD+1
         JR nc,crawl_wait
         JR fx_scroll_done
 
@@ -3671,6 +3623,8 @@ fx_toggle_flush:
 
 fx_reset_stage:
         LD (COL_COUNT),A
+
+fx_reset_txbuf:
         CALL clear_txbuf
         LD HL,TXBUF
         LD (STAGE_PTR),HL
@@ -3772,10 +3726,8 @@ beep_start:
         LD A,(CFG_FLAGS)
         AND CFG_QUIET
         RET nz
-        PUSH HL
-        LD HL,BEEP_LEN
-        LD (BEEP_TICKS),HL
-        POP HL
+        LD A,BEEP_LEN
+        LD (BEEP_TICKS),A
         RET
 
 ; ---- fx_end_of_channel
@@ -3980,52 +3932,44 @@ attr_color_speed:
 render_next_char_jr3:
         JP render_next_char
 
-; ---- attr_fore_color
+; ---- attr_fore_color: the background stays; in MAGIC mode only its bit 6
 attr_fore_color:
-        XOR A
-        LD (RAINBOW_IDX),A
+        LD D,COLOR_BG
         LD A,(MAGIC_MODE)
         AND A
         JR z,fore_set
-        LD A,(CUR_COLOR)
-        AND 0xcf
-        LD (CUR_COLOR),A
+        LD D,COLOR_BG & 0xcf
 
 fore_set:
         LD A,(CUR_CHAR)
         AND 15
         LD E,A
-        LD A,(CUR_COLOR)
-        AND COLOR_BG
-        OR E
-        LD (CUR_COLOR),A
-        LD A,0xff
-        LD (MAGIC_COLOR_SET),A
-        JR render_next_char_jr3
+        JR color_keep
 
-; ---- attr_back_color
+; ---- attr_back_color: the foreground stays; MAGIC mode makes it yellow
 attr_back_color:
-        LD A,(MAGIC_MODE)
-        AND A
-        JR z,back_set
-        LD A,(CUR_COLOR)
-        OR COLOR_FG
-        LD (CUR_COLOR),A
-
-back_set:
-        XOR A
-        LD (RAINBOW_IDX),A
         LD A,(CUR_CHAR)
         AND 3
         RRCA
         RRCA
         RRCA                    ; the background, bits 5-6
-        LD L,A
+        LD E,A
+        LD D,COLOR_FG
+        LD A,(MAGIC_MODE)
+        AND A
+        LD A,COLOR_FG
+        JR nz,color_set
+
+color_keep:
         LD A,(CUR_COLOR)
-        AND COLOR_FG
-        OR L
+        AND D
+
+color_set:
+        OR E
         LD (CUR_COLOR),A
-        LD A,0xff
+        XOR A
+        LD (RAINBOW_IDX),A
+        DEC A
         LD (MAGIC_COLOR_SET),A
         JR render_next_char_jr3
 
@@ -4202,7 +4146,7 @@ rx_consume_jr8:
         JP rx_consume
 
 tiny_row_out:
-        LD A,(ROW_OUT_PENDING)
+        LD A,(ROW_PORT)
         AND A
         JR z,disp_next_row
         CALL latch_blank
@@ -4238,7 +4182,7 @@ tiny_row_select:
 
 tiny_row_done:
         XOR A
-        LD (ROW_OUT_PENDING),A
+        LD (ROW_PORT),A
         JP tick6_restore
 
 ; ---- disp_next_row: ROW_INDEX = (ROW_INDEX+1) mod 7
@@ -4268,10 +4212,8 @@ fxv_prepare:
 fxv_pointers:
         LD HL,FRAMEBUF_ROW1
         LD (FB_COLPTR),HL
-        LD HL,FRAME_COLS
+        LD HL,FRAME_COLS        ; and no FB_EXTRA_LEN
         LD (FB_OUT_LEN),HL
-        LD HL,0
-        LD (FB_EXTRA_LEN),HL
         LD DE,FRAMEBUF
         LD (FB_COL),DE
         LD (FB_OUT_PTR),DE
@@ -4429,10 +4371,10 @@ wipev_next_pass:
 fxv_scroll:
         LD HL,(FB_OUT_PTR)      ; the panel as it stands, unrolled from the ring
         LD DE,GLYPH_BUF
-        LD BC,(FB_OUT_LEN)
+        LD A,(FB_OUT_LEN)
         CALL scroll_copy
         LD HL,FRAMEBUF
-        LD BC,(FB_EXTRA_LEN)
+        LD A,(FB_EXTRA_LEN)
         CALL scroll_copy
         XOR A
         LD (DISP_ON),A
@@ -4459,10 +4401,18 @@ scroll_step:
 
 scroll_col:
         LD A,(DE)
-        CALL scroll_pixels
+        OR A                    ; a color byte has no pixels
+        JP p,scroll_out_pixels
+        XOR A
+
+scroll_out_pixels:
         LD H,A
         LD A,(IX+SCROLL_IN)
-        CALL scroll_pixels
+        OR A
+        JP p,scroll_in_pixels
+        XOR A
+
+scroll_in_pixels:
         LD L,A
         PUSH BC
         LD B,C
@@ -4859,19 +4809,13 @@ twinkle_mul_next:
         POP HL
         RET
 
-; ---- scroll_copy: LDIR that copies nothing for BC = 0
+; ---- scroll_copy: an LDIR of A bytes that copies nothing for 0
 scroll_copy:
-        LD A,B
-        OR C
+        AND A
         RET z
+        LD C,A
+        LD B,0
         LDIR
-        RET
-
-; ---- scroll_pixels: A = a column's pixels; a color byte has none
-scroll_pixels:
-        OR A
-        RET p
-        XOR A
         RET
 
 ; ---- store_clear_all: Reset MSG_STORE: 100 empty channels D0..? then DA
@@ -4907,7 +4851,7 @@ fill_end:
         RET
 
 ; ---- ram_probe (P13, P51): which chip, from where it mirrors FRAMEBUF ->
-;      STORE_LIMIT, STACK_INIT, STACK_BOT and PKT_MAX. FRAMEBUF is scratch at
+;      STORE_LIMIT, STACK_INIT and PKT_MAX; HL = the stack's bottom. FRAMEBUF is scratch at
 ;      boot (the stub's library copy, cleared by init_render).
 ram_probe:
         LD HL,STACK_TOP
@@ -4937,8 +4881,7 @@ ram_probe_done:
         LD (STORE_LIMIT),HL
         LD HL,(STACK_INIT)
         LD DE,-STACK_SIZE
-        ADD HL,DE
-        LD (STACK_BOT),HL
+        ADD HL,DE               ; the stack's bottom, for the canary
         RET
 
 ; ---- ram_mirrors: HL = an address -> Z if it mirrors FRAMEBUF. The byte at
@@ -4983,8 +4926,6 @@ store_init_zero_page:
         LD (HL),A
         INC HL
         DJNZ store_init_zero_page
-        LD (RX_PHASE),A
-        LD (RX_ACC),A
         RET
 
 ; ---- ir_init: clear the IR decoder state, then fall into ir_reset
@@ -5291,6 +5232,12 @@ tx_isr:
         JR z,tx_start_byte
 
 tx_tick:
+    IFDEF LITE                  ; one rate: BAUD_STEP is a constant
+        LD A,(TX_ACC)
+        SUB BAUD_STEP_300
+        JR c,tx_edge
+        CP (BAUD_STEP_300+1)/2
+    ELSE
         LD A,(BAUD_STEP)
         LD C,A
         INC A
@@ -5300,6 +5247,7 @@ tx_tick:
         SUB C
         JR c,tx_edge
         CP B
+    ENDIF
         JR c,tx_edge
         LD (TX_ACC),A
         RET
@@ -5432,10 +5380,12 @@ tx_stream_idle:
 ; ---- baud_bit (P52): A = the bit time in BAUD_STEP units: 3 interrupts at
 ;      2560, else BAUD_T. Flags and A only.
 baud_bit:
+    IFNDEF LITE
         LD A,(BAUD_STEP)
         CP BAUD_STEP_2560
         LD A,3*BAUD_STEP_2560
         RET z
+    ENDIF
         LD A,(BAUD_T)
         RET
 
@@ -5451,20 +5401,22 @@ rx_start:
         RET nz
         LD HL,ISR_WORK
         SET WORK_RX_BIT,(HL)
-        LD (RX_SHIFT),A
-        LD (RX_WIDTH),A
     IFNDEF LITE
+        LD (RX_SHIFT),A         ; a timed pulse may leave fewer than 8 bits to shift in
+        LD (RX_WIDTH),A
         LD (IR_MASK),A          ; P52: the remote decoder off until the next frame end
         LD (IR_QUIET),A
+    ELSE
+        LD (RX_IDLE),A          ; 300 baud only: nothing to time
     ENDIF
         LD A,8
         LD (RX_BITS),A
+    IFNDEF LITE
         LD A,(RX_IDLE)
         CP BAUD_IDLE_FRAMES
         LD A,0
         LD (RX_IDLE),A
         JR c,rx_start_timed
-    IFNDEF LITE                 ; 300 baud only: nothing to time
         LD A,(MENU_ACTIVE)      ; P45: a terminal's keys come seconds apart and need
         LD B,A                  ; not start like B1: the rate stays as B7 '1' set it
         LD A,(TERM_MODE)
@@ -5480,17 +5432,23 @@ rx_start_timed:
         LD C,A
         SRL A
         ADD A,C                 ; 1.5 bits: the middle of bit 0, less the half
-        LD C,A                  ; interrupt the edge was seen late by on average
+                                ; interrupt the edge was seen late by on average
+    IFDEF LITE
+        SUB BAUD_STEP_300/2
+    ELSE
+        LD C,A
         LD A,(BAUD_STEP)
         SRL A
         LD B,A
         LD A,C
         SUB B
+    ENDIF
         LD (RX_ACC),A
         LD A,2
         LD (RX_PHASE),A
         RET
 
+    IFNDEF LITE
 ; ---- rx_phase_run (P30, ISR): A = RX_PHASE, 1 or 2
 rx_phase_run:
         DEC A
@@ -5587,9 +5545,16 @@ rx_acc_set:
 rx_abort:
         POP DE
         JR rx_byte_end
+    ENDIF
 
 ; ---- rx_sample_tick (P30, ISR): phase 2, one sample per bit at the middle
 rx_sample_tick:
+    IFDEF LITE
+        LD A,(RX_ACC)
+        SUB BAUD_STEP_300
+        JR c,rx_sample_now
+        CP (BAUD_STEP_300+1)/2+1
+    ELSE
         LD A,(BAUD_STEP)
         LD C,A
         INC A
@@ -5600,6 +5565,7 @@ rx_sample_tick:
         SUB C
         JR c,rx_sample_now
         CP B
+    ENDIF
         JR c,rx_sample_now      ; within half an interrupt of the middle
         LD (RX_ACC),A
         RET
@@ -5870,15 +5836,16 @@ pkt_flag_restart:
 ; ---- pkt_st_len: store length; reset checksum & PKT_PTR=PKT_BUF; len 0 goes straight to checksum state
 pkt_st_len:
         LD (PKT_LEN),A
-        LD HL,PKT_LEN
+        LD (PKT_REMAIN),A
+        LD C,A
         LD A,(PKT_MAX)
-        CP (HL)
+        CP C
         JR nc,pkt_len_fits
         LD A,0xff               ; P51: longer than the buffer: parse it, keep nothing
         LD (PKT_DISCARD),A
 
 pkt_len_fits:
-        LD A,(HL)
+        LD A,C
         AND A
         LD HL,pkt_st_data
         JR nz,pkt_len_setup
@@ -5890,32 +5857,26 @@ pkt_len_setup:
         LD (PKT_CKSUM),A
         LD HL,PKT_BUF
         LD (PKT_PTR),HL
-        LD A,(PKT_LEN)
-        LD (PKT_REMAIN),A
         RET
 
 ; ---- pkt_st_data: store payload byte, PKT_CKSUM += byte
 pkt_st_data:
         LD C,A
+        LD HL,PKT_CKSUM
+        ADD A,(HL)
+        LD (HL),A
         LD A,(PKT_DISCARD)
         OR A
         LD HL,(PKT_PTR)
-        JR nz,pkt_data_sum      ; P21: a frame that arrived while busy is not stored
+        JR nz,pkt_data_next     ; P21: a frame that arrived while busy is not stored
         LD (HL),C
 
-pkt_data_sum:
-        LD A,(PKT_CKSUM)
-        ADD A,C
-        LD (PKT_CKSUM),A
-        LD A,(PKT_REMAIN)
-        DEC A
-        JR z,pkt_data_last
-        LD (PKT_REMAIN),A
+pkt_data_next:
         INC HL
         LD (PKT_PTR),HL
-        RET
-
-pkt_data_last:
+        LD HL,PKT_REMAIN
+        DEC (HL)
+        RET nz
         LD HL,pkt_st_cksum
         LD (PKT_VECTOR),HL
         RET
@@ -6498,7 +6459,7 @@ newmsg_ask_full:
         JR nc,newmsg_ask_full
 
 newmsg_select:
-        LD (NEW_MSG_CHAN),A
+        PUSH AF
         CALL chan_select
         AND A
         JP nz,pkt_process_end
@@ -6508,8 +6469,8 @@ newmsg_select:
         CALL delete_chan_text
         LD A,ATTR_MAGIC
         LD (EDIT_KEY),A
-        LD A,(NEW_MSG_CHAN)
-        LD E,A
+        POP DE
+        LD E,D                  ; the channel chosen
         JR newmsg_set_seq
 
 newmsg_empty_found:
@@ -6810,7 +6771,6 @@ render_clock:
 
 clock_step:
         LD A,(CLK_RENDER_STEP)
-        LD HL,(CLK_RENDER_PTR)
         AND A
         JR nz,clock_next_step
         LD HL,CLK_H10
@@ -6819,11 +6779,7 @@ clock_step:
         OR (HL)
         LD A,0                  ; the step
         JR nz,clock_next_step
-        INC A
-        LD (CLK_RENDER_STEP),A
-        INC HL
-        LD (CLK_RENDER_PTR),HL
-        JR render_clock
+        INC A                   ; no leading zero: on to H1
 
 clock_next_step:
         INC A
@@ -6857,13 +6813,20 @@ clock_not_ampm:
         JR clock_emit_last
 
 clock_digit:
+        ASSERT ((CLK_H10-2) >> 8) == (CLK_M1 >> 8)
+        LD HL,CLK_H10-1         ; steps 1 and 2 are H10 and H1,
+        CP CLK_STEP_COLON
+        JR c,clock_digit_at
+        DEC HL                  ; 4 and 5 M10 and M1
+
+clock_digit_at:
+        ADD A,L
+        LD L,A
         LD A,(HL)
         AND 15
         OR '0'
         LD (CUR_CHAR),A
-        INC HL
         LD A,(CLK_RENDER_STEP)
-        LD (CLK_RENDER_PTR),HL
         CP CLK_STEP_M1
         JR nz,clock_emit
         LD A,(CLK_PM)
@@ -7216,27 +7179,8 @@ editor_clear_msg:
 ; ---- delete_chan_text: remove the selected channel's text up to its 03
 delete_chan_text:
         LD HL,(STORE_CURSOR)
-        LD DE,MSG_STORE
-        OR A
-        SBC HL,DE
-        LD B,H
-        LD C,L
-        ADD HL,DE
-
-deltext_find_marker:
-        LD A,(HL)
-        CALL is_marker
-        JR c,deltext_marker_end
-
-deltext_back:
-        DEC HL
-        DEC BC
-        LD A,B
-        OR C
-        JP z,pkt_process_end
-        JR deltext_find_marker
-
-deltext_marker_end:
+        INC HL
+        CALL marker_before      ; the marker byte at or below the cursor
         INC HL
         LD A,(HL)
         CALL is_marker
@@ -8143,7 +8087,7 @@ label_search:
 
 label_found:
         CALL show_label
-        JR redraw_next
+        JR redraw_label_close
 
 redraw_speed_label:
         LD HL,STR_S
@@ -8154,6 +8098,8 @@ redraw_speed_label:
 
 redraw_label_digit:
         CALL glyph_put_next
+
+redraw_label_close:
         LD HL,STR_CLOSE
         CALL menu_show_text
         JR redraw_next
@@ -8977,7 +8923,9 @@ pq_stats:
         LD A,(BOOT_COUNT)
         LD (DE),A
         INC DE
-        LD HL,(STACK_BOT)
+        LD HL,(STACK_INIT)
+        LD BC,-STACK_SIZE
+        ADD HL,BC
         LD A,CANARY
         LD B,STACK_CANARY
 
@@ -8995,11 +8943,15 @@ pq_canary_end:
         LD HL,STATS
         LD BC,STATS_LEN
         LDIR
-        LD HL,IR_REJ            ; then the remote's drop reasons
-        LD BC,TERM_MODE-IR_REJ
+    IFNDEF LITE
+        LD HL,STAT_IR           ; then the remote's frames and drop reasons
+    ELSE
+        LD HL,WIDE_SPACE_GLYPH  ; no receiver: zeros
+    ENDIF
+        LD C,STAT_IR_LEN
         LDIR
         LD HL,PKT_BUF+3
-        LD BC,7+STATS_LEN+TERM_MODE-IR_REJ
+        LD BC,7+STATS_LEN+STAT_IR_LEN
         JP pq_reply
 
     IFNDEF LITE
@@ -9547,9 +9499,7 @@ seq_pair_loop:
         JR nc,seq_messages
     ENDIF
         AND 15
-    IF CHANNELS <= 10
-        JR seq_pair_store
-    ENDIF
+    IF CHANNELS > 10
         LD C,A                  ; the tens
         CALL pkt_next_byte
         CP 'D'
@@ -9566,6 +9516,7 @@ seq_pair_loop:
         ADD A,C
         ADD A,A
         ADD A,E
+    ENDIF
         JR seq_pair_store
 
 seq_pair_demo:
@@ -9653,8 +9604,6 @@ INIT_DATA:
         db 0x7f                ; BAUD_CAL_LAST
         db 0xff                ; RX_IDLE
         db 0xff                ; CAPS_LOCK
-        db 0xff                ; ROW_OUT_PENDING
-        db 0x01                ; DISP_COUNT
         db 0xff                ; NEXT_CHAN
         db ' '                 ; MAGIC_LAST_CHAR
         ASSERT $-INIT_DATA == IMAGE_LEN
@@ -9766,64 +9715,62 @@ COMMAND_TABLE_END:
 
 ; ============================================================================
 ;  Editor labels: the text the editor shows for an attribute byte, drawn by
-;  show_label between the bracket glyphs 15 and 16 (the four a digit follows,
-;  SPEED COLOR BGRND GRAPH, carry no 16). They are the sign's own words.
+;  show_label after the bracket glyph 15, STR_CLOSE's 16 after them (the status
+;  line's four a digit follows, SPEED COLOR BGRND GRAPH, get none). They are the sign's own words.
 ;  LABELS is one list searched by redraw_show_label: a key byte, the text, a
 ;  NUL; FF ends it. Speeds F0-F7 are drawn as S plus the digit. Stock indexed
 ;  four pointer tables, 594 bytes with their strings, for the same text.
 ; ============================================================================
 LABELS:
-        db TEXT_END,"END"
-STR_CLOSE:
-        db 0x16,0x00            ; also the closing bracket of a speed label
-        db 0x06,"HALT",0x16,0x00
-        db 0x07,"BEEP",0x16,0x00
-        db 0x0f,"W-RIGHT",0x16,0x00         ; P53
-        db ATTR_BIG,"BIG",0x16,0x00
-        db ATTR_NORM,"NORM",0x16,0x00
-        db ATTR_BOLD,"BOLD",0x16,0x00
-        db ATTR_ITALIC,"ITALIC",0x16,0x00
-        db ATTR_FLASH,"FLASH",0x16,0x00
-        db ATTR_LEFT,"LEFT",0x16,0x00
-        db ATTR_PAUSE,"PAUSE",0x16,0x00
-        db ATTR_UP,"W-UP",0x16,0x00          ; P48: W- wipes, S- scrolls
-        db ATTR_DOWN,"W-DOWN",0x16,0x00
-        db ATTR_MAGIC,"MAGIC",0x16,0x00
-        db COLOR_BASE+0,"BLACK",0x16,0x00
-        db COLOR_BASE+1,"D-GRE",0x16,0x00
-        db COLOR_BASE+2,"M-GRE",0x16,0x00
-        db COLOR_BASE+3,"GREEN",0x16,0x00
-        db COLOR_BASE+4,"D-RED",0x16,0x00
-        db COLOR_BASE+5,"D-YEL",0x16,0x00
-        db COLOR_BASE+6,"D-LIM",0x16,0x00
-        db COLOR_BASE+7,"LIME",0x16,0x00
-        db COLOR_BASE+8,"M-RED",0x16,0x00
-        db COLOR_BASE+9,"D-ORA",0x16,0x00
-        db COLOR_BASE+10,"M-YEL",0x16,0x00
-        db COLOR_BASE+11,"LEMON",0x16,0x00
-        db COLOR_BASE+12,"RED",0x16,0x00
-        db COLOR_BASE+13,"ORANGE",0x16,0x00
-        db COLOR_BASE+14,"GOLD",0x16,0x00
-        db COLOR_BASE+15,"YELLOW",0x16,0x00
-        db BGRND_BASE+0,"B-BLK",0x16,0x00
-        db BGRND_BASE+1,"B-RED",0x16,0x00
-        db BGRND_BASE+2,"B-GRE",0x16,0x00
-        db BGRND_BASE+3,"B-YEL",0x16,0x00
-        db ATTR_REM,"REM",0x16,0x00
-        db ATTR_DRAW,"DRAW",0x16,0x00
-        db ATTR_THIN,"THIN",0x16,0x00
-        db ATTR_WAIT,"WAIT",0x16,0x00
-        db ATTR_HOLD,"HOLD",0x16,0x00
-        db ATTR_RAINBOW,"RAINBOW",0x16,0x00
-        db ATTR_RAINBOW^0x40,"RANDBOW",0x16,0x00   ; P46: B2 BC; a variant's key is its attribute ^ 40
-        db ATTR_UP^0x40,"S-UP",0x16,0x00
-        db ATTR_DOWN^0x40,"S-DOWN",0x16,0x00
-        db 0x0f^0x40,"S-RIGHT",0x16,0x00     ; P53
-        db ATTR_PAUSE^0x40,"TWINKLE",0x16,0x00
-        db ATTR_HOLD^0x40,"GLIMMER",0x16,0x00
-        db ' '^0x40,"FLUSH",0x16,0x00         ; P57
-        db ATTR_MAGIC_OFF,"MAGIC OFF",0x16,0x00
-        db ATTR_TINY,"TINY",0x16,0x00
+        db TEXT_END,"END",0x00
+        db 0x06,"HALT",0x00
+        db 0x07,"BEEP",0x00
+        db 0x0f,"W-RIGHT",0x00         ; P53
+        db ATTR_BIG,"BIG",0x00
+        db ATTR_NORM,"NORM",0x00
+        db ATTR_BOLD,"BOLD",0x00
+        db ATTR_ITALIC,"ITALIC",0x00
+        db ATTR_FLASH,"FLASH",0x00
+        db ATTR_LEFT,"LEFT",0x00
+        db ATTR_PAUSE,"PAUSE",0x00
+        db ATTR_UP,"W-UP",0x00          ; P48: W- wipes, S- scrolls
+        db ATTR_DOWN,"W-DOWN",0x00
+        db ATTR_MAGIC,"MAGIC",0x00
+        db COLOR_BASE+0,"BLACK",0x00
+        db COLOR_BASE+1,"D-GRE",0x00
+        db COLOR_BASE+2,"M-GRE",0x00
+        db COLOR_BASE+3,"GREEN",0x00
+        db COLOR_BASE+4,"D-RED",0x00
+        db COLOR_BASE+5,"D-YEL",0x00
+        db COLOR_BASE+6,"D-LIM",0x00
+        db COLOR_BASE+7,"LIME",0x00
+        db COLOR_BASE+8,"M-RED",0x00
+        db COLOR_BASE+9,"D-ORA",0x00
+        db COLOR_BASE+10,"M-YEL",0x00
+        db COLOR_BASE+11,"LEMON",0x00
+        db COLOR_BASE+12,"RED",0x00
+        db COLOR_BASE+13,"ORANGE",0x00
+        db COLOR_BASE+14,"GOLD",0x00
+        db COLOR_BASE+15,"YELLOW",0x00
+        db BGRND_BASE+0,"B-BLK",0x00
+        db BGRND_BASE+1,"B-RED",0x00
+        db BGRND_BASE+2,"B-GRE",0x00
+        db BGRND_BASE+3,"B-YEL",0x00
+        db ATTR_REM,"REM",0x00
+        db ATTR_DRAW,"DRAW",0x00
+        db ATTR_THIN,"THIN",0x00
+        db ATTR_WAIT,"WAIT",0x00
+        db ATTR_HOLD,"HOLD",0x00
+        db ATTR_RAINBOW,"RAINBOW",0x00
+        db ATTR_RAINBOW^0x40,"RANDBOW",0x00   ; P46: B2 BC; a variant's key is its attribute ^ 40
+        db ATTR_UP^0x40,"S-UP",0x00
+        db ATTR_DOWN^0x40,"S-DOWN",0x00
+        db 0x0f^0x40,"S-RIGHT",0x00     ; P53
+        db ATTR_PAUSE^0x40,"TWINKLE",0x00
+        db ATTR_HOLD^0x40,"GLIMMER",0x00
+        db ' '^0x40,"FLUSH",0x00         ; P57
+        db ATTR_MAGIC_OFF,"MAGIC OFF",0x00
+        db ATTR_TINY,"TINY",0x00
         db 0xff
 ; ---- the status line's labels and the SHIFT indicator (through MENU_MSG_PTR)
     IFNDEF LITE
@@ -9849,7 +9796,9 @@ STR_FUNC2:
 STR_EURO:
         db "EURO",0x00
 STR_SHIFT:
-        db "SHIFT",0x16,0x00
+        db "SHIFT"
+STR_CLOSE:
+        db 0x16,0x00            ; the closing bracket of every label
 STR_BRACKET:
         db 0x15,0x00
 
@@ -10239,8 +10188,10 @@ DEMO_MESSAGE:                   ; P57: hand-colored italic, MAGIC, the model in 
 ; ---- ota_updating_msg: what the panel shows from B5 'B' to the reboot, via the
 ;      test-mode buffer (28 bytes max). PAUSE, THIN, the word, WAIT: parked until
 ;      a key. Last thing before the trailer, so editing it moves nothing else.
+    IFNDEF LITE
 ota_updating_msg:
         db 0x19,0xb9,">FW ^<",0xba,0x03     ; ^ is the up-arrow glyph; fits 59 columns
+    ENDIF
 
 ; ---- trailer page 3FC0-3FFF (OTA.md §2): magic, sequence number, state
 ;      and image CRC, filled in by tools/cc784_ota.py pack. Erased in the build.

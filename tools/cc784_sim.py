@@ -1760,7 +1760,7 @@ def cmd_scroll():
     s.send_frame(b'\x09\x30\x30\x0e\x8cRED CRAWL \x83GREEN\xb2\x0f\x8dORANGE\x19\x80', addr=1)
     s.rx_wait()
     def panel(s):
-        p, ln, ex = (int.from_bytes(s.ram(k, 2), 'little') for k in ('FB_OUT_PTR', 'FB_OUT_LEN', 'FB_EXTRA_LEN'))
+        p = int.from_bytes(s.ram('FB_OUT_PTR', 2), 'little'); ln, ex = s.ram('FB_OUT_LEN', 2)
         return bytes(s.m.memory[p:p + ln]) + bytes(s.m.memory[fb:fb + ex])
     frames, old, c0, last, tears = [], None, None, None, 0
     for _ in range(40000):
@@ -2161,7 +2161,7 @@ def cmd_flush():
     def store(s):
         return bytes(s.m.memory[syms['MSG_STORE']:int.from_bytes(s.ram('STORE_END', 2), 'little')])
     def panel(s):
-        p, ln, ex = (int.from_bytes(s.ram(k, 2), 'little') for k in ('FB_OUT_PTR', 'FB_OUT_LEN', 'FB_EXTRA_LEN'))
+        p = int.from_bytes(s.ram('FB_OUT_PTR', 2), 'little'); ln, ex = s.ram('FB_OUT_LEN', 2)
         return bytes(s.m.memory[p:p + ln]) + bytes(s.m.memory[fb:fb + ex])
     def run(text, ms=40000):
         """the times the panel goes dark in the second pass, and the font when 'D' is fetched"""
@@ -2282,6 +2282,8 @@ def cmd_lite():
     # speed-0 lit time. Brightness is off or full: a pass under one interrupt can't be cut.
     def scan(s, ms=2000):
         """per refresh, in interrupts: dark time, and lit time by latch row code"""
+        global SLICE                    # at 16-cycle slices: at 128 an interrupt waits for the slice's
+        SLICE, coarse = 16, SLICE       # end, and the rows' times follow the handler's length
         s.refreshes = 0; s.frames.clear()
         step, n, dark, lit = CPU_HZ // 15625, 0, 0, {}
         for _ in range(ms * 1000 // 64):
@@ -2289,6 +2291,7 @@ def cmd_lite():
             r = s.latch & 0x0F
             if r == 0x0F: dark += 1
             else: lit[r] = lit.get(r, 0) + 1
+        SLICE = coarse
         per = step / s.tick_t / max(s.refreshes, 1)              # a sample, in interrupts per refresh
         return dark * per, {r: c * per for r, c in lit.items()}, len(s.frames)
     def play(body, n, hold=None):
@@ -2454,12 +2457,12 @@ def cmd_config():
     s.send_frame(b'\x09\x30\x30\x0e\x07BEEP\x04\x30\x30', addr=1, flag=0x80); s.rx_wait()
     beeped = False
     for _ in range(400):
-        s.run_ms(10); beeped |= s.ram('BEEP_TICKS', 2) != b'\x00\x00'
+        s.run_ms(10); beeped |= s.ram('BEEP_TICKS')[0] != 0
     setb(s, 2, 0x00, mask=0x10)
     s.send_frame(b'\x09\x30\x30\x0e\x07BEEP\x04\x30\x30', addr=1, flag=0x80); s.rx_wait()
     beeped_on = False
     for _ in range(400):
-        s.run_ms(10); beeped_on |= s.ram('BEEP_TICKS', 2) != b'\x00\x00'
+        s.run_ms(10); beeped_on |= s.ram('BEEP_TICKS')[0] != 0
     check('beeper off: silent (%s); on: beeps (%s)' % (beeped, beeped_on), not beeped and beeped_on)
 
     # remote lock: STOP opens the editor only when unlocked

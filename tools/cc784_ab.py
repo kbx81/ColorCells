@@ -10,7 +10,8 @@ DIR_A and DIR_B each hold a cc784nir.asm (git show REV:src/patched/cc784nir.asm 
 editor: remote keys, comparing the key processed and the steady frame after each, then the store,
 sequence, address and clock. render: three messages by frame, timing differences filtered as the
 compare gate does. serial: replies and the store after a set of commands. repair: the store after a
-boot on damaged and on fresh RAM. Random effects (RAINBOW's start, MAGIC, TWINKLE, GLIMMER) and the
+boot on damaged and on fresh RAM, each build on its own RAM image; stores are compared up to their DA,
+so the two may differ in RAM map and store size (B4 '1' then reports different sizes). Random effects (RAINBOW's start, MAGIC, TWINKLE, GLIMMER) and the
 scrolls' torn frames differ between any two builds of different speed and are left to their gates.
 For the CC710 put "        DEFINE CC710" on the first line of both copies; for LITE set CC784_LITE=1
 (serial, repair and render only: it has no remote)."""
@@ -91,9 +92,11 @@ R2 = (b'\x09\x30\x30\x0e\x12\x14HELLO \x8c\x19PAUSE \x1aUP \x1bDOWN \x0fRIGHT \x
       b'\xbeTINY TEXT LINE\x11 \x07\x04\x30\x30')
 R3 = (b'\x09\x30\x30\x0e\x12\x19THIS PAGE IS FAR TOO LONG TO FIT \x1aAND THIS ONE HAS MORE WORDS THAN FIT '
       b'\xbbHOLD OVERFLOWS AS WELL HERE \x0fRIGHT TOO WIDE FOR IT \x18TAIL \x04\x30\x30')
+R3_LITE = (b'\x09\x30\x0e\x12\x19THIS PAGE IS FAR TOO LONG TO FIT \x1aAND THIS ONE HAS MORE WORDS '   # R3 is over the 2 K
+           b'\xbbHOLD OVERFLOWS TOO \x0fRIGHT TOO WIDE HERE \x18TAIL \x04\x30')                      # frame limit: it never loads
 def render(rom, syms):
     res = []
-    for name, msg, secs in (('crawl', R1, 40), ('effects', R2, 60), ('overflow', R3, 60)):
+    for name, msg, secs in (('crawl', R1, 40), ('effects', R2, 60), ('overflow', R3_LITE if S.LITE else R3, 60)):
         s = S.Sign(rom, syms, fresh_ram=False); s.run_ms(3000)
         s.send_frame(msg); s.rx_wait(); s.run_ms(1500); s.frames.clear()
         s.run_ms(secs * 1000)
@@ -105,6 +108,11 @@ CMDS = [b'\x09\x30\x30\x0eONE\x15\x00A\x16\x04B\x1e\x07C\x02\x05D', b'\x09\x35TW
         b'\x17\x30\x39\x34\x35\x59', b'\xb6\x03\xff\x30', b'\xb6\x02\xff\x02', b'\x09\x31\x32\x0e', b'\x04\x39\x39\x64\x0d',
         b'\x09\x37\x78\xb8AB\x06\x07']
 QUERIES = [b'\xb4\x30', b'\xb4\x31', b'\xb4\x35', b'\xb4\x36', b'\xb4\x33']
+if S.LITE:      # text straight after 09 lands on the marker; with no channel 99 it is channel 9's, and the reset is the emulator's dead end
+    CMDS = [c for c in CMDS if not c.startswith(b'\x09\x39\x39')]
+def used(store):
+    """the store up to its DA: what a build with a different store size has in common"""
+    return store[:store.index(0xDA) + 1] if 0xDA in store else store
 def serial(rom, syms):
     s = S.Sign(rom, syms, fresh_ram=False); s.run_ms(3000)
     out = []
@@ -158,10 +166,10 @@ if __name__ == '__main__':
     if 'serial' in what or 'repair' in what:
         (oa, sa, ram, fa), (ob, sb, ramb, fb) = serial(*A), serial(*B)
         d = [(x[0], x[1][:60], y[1][:60]) for x, y in zip(oa, ob) if x[1] != y[1]]
-        print('serial: %d exchanges, replies differ: %s; store same %s (%d bytes); faults %d %d' % (len(oa), d or 'none', sa == sb, len(sa), fa, fb))
-        ok &= not d and sa == sb
+        print('serial: %d exchanges, replies differ: %s; store same %s (%d bytes); faults %d %d' % (len(oa), d or 'none', used(sa) == used(sb), len(used(sa)), fa, fb))
+        ok &= not d and used(sa) == used(sb)
     if 'repair' in what:
-        for (n, sa, qa), (_, sb, qb) in zip(repair(A[0], A[1], ram), repair(B[0], B[1], ram)):
-            print('repair %-22s store same %s (%d bytes), seq same %s' % (n, sa == sb, len(sa), qa == qb))
-            ok &= sa == sb and qa == qb
+        for (n, sa, qa), (_, sb, qb) in zip(repair(A[0], A[1], ram), repair(B[0], B[1], ramb)):
+            print('repair %-22s store same %s (%d bytes), seq same %s' % (n, used(sa) == used(sb), len(used(sa)), qa == qb))
+            ok &= used(sa) == used(sb) and qa == qb
     print('A/B:', 'SAME' if ok else 'DIFFERENT')
