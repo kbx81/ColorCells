@@ -1,6 +1,6 @@
 # Color Cells CC784 and CC710 LED signs
 
-I've had a CC784NIR since the mid-90s. These signs are based on the Z80, a processor I'm quite familiar with thanks to the Texas Instruments line of graphing calculators (in particular the TI-85 and TI-92). Once I realized that, I just had to do some hacking...someday. I've had a few things I've been wanting to "figure out" for quite a long time now:
+I've had a CC784NIR since the mid-90s. These signs are based on the Z80, a processor I'm quite familiar with thanks to the Texas Instruments line of graphing calculators (in particular the TI-85 and TI-92). Once I realized that, I just had to do some hacking...someday. Well, that day finally arrived in September of 2026. I've had a few things I've been wanting to "figure out" for quite a long time now:
 - How exactly did that serial packet protocol work?
 - How does the hardware work?
 - Can I add some features of my own to the firmware?
@@ -9,7 +9,7 @@ In early 2026, I was working on building the [serial proxy component for ESPHome
 
 Unfortunately, sorting out everything that's going on in a ROM dump and mapping that all back to the hardware can take quite a bit of time and, even once that part is done, hand-writing assembly language is slow-going. Fortunately for us, it's 2026 and we now have these great AI tools to make figuring out just about anything way faster than was ever possible before.
 
-So I threw the sign's old DOS program (`NETCC.EXE`) and a dump of its EPROM at Claude ("the Clanker") and it had a whole lot to say about it! Naturally I jumped down the rabbit hole and got right to reverse engineering, documenting and other firmware work/patches.
+So I threw the sign's old DOS program (`NETCC.EXE`) and a dump of its EPROM at Claude and it had a whole lot to say about it! Naturally I jumped down the rabbit hole and got right to reverse engineering, documenting and other firmware work/patches.
 
 This led me to realize that just one sign wasn't going to be enough: when you tear something apart, some questions get answered but then dozens more surface. Curiosity got the better of me and I jumped right over to eBay to see what I could scrape up. I ended up with five signs covering four models, two of them the original CC784 (oldest first):
 
@@ -18,7 +18,7 @@ This led me to realize that just one sign wasn't going to be enough: when you te
 - **CC784NET ("NET"):** the `CC784-4` controller board, a newer revision of the `3A` board, with a DB9 in place of the 10-pin header, for a wired keypad or a PC.
 - **CC784NIR ("NIR"):** also the `CC784-4` board, with an infrared remote; with the stock firmware, its DB9 functions only as a serial port.
 
-After a non-trivial amount of poking and prodding the Clanker, I turned some ROM dumps and photos of the PCBs into what you see in this repo:
+After a non-trivial amount of poking and prodding Claude, I turned some ROM dumps and photos of the PCBs into what you see in this repo:
 - Firmware source by model/version
 - Patched firmware which implements quite a bit of new functionality for the signs, including [OTA firmware updates](OTA.md) [**with a hardware mod**](UPGRADES.md#2-eeprom-and-bank-register)
 - Board schematics, notes and their differences, including the factory bodge wires found on most boards
@@ -74,11 +74,41 @@ To turn a NET into a NIR, follow [UPGRADES.md](UPGRADES.md) §4.
 - **Firmware dump and reconstruction.** Five ROMs were dumped, disassembled and turned into annotated sources that reassemble byte for byte ([src/stock/](src/stock/)): the NIR, NET, CC710 and two revisions of the original CC784's (`9g` and `9k`). Every routine and variable is named, with one name per routine across all five; the notes record what each does and how confident the reading is. Comparing them explains the keypad, the factory cable's wiring and the 4 MHz timebase; the original CC784's `9g` is the oldest code base of the five.
 - **Serial protocol.** Recovered from the original DOS software (`NETCC.EXE`) and the firmware, verified against the sign.
 - **Thirteen stock firmware bugs** found and documented, from a one-byte typo (`LD (STORE_CURSOR),A` where `HL` was meant) that sends the next insert to a random spot in the store, to the **one that counts as a remote exploit:** a single query frame on the serial line overflows the 64-byte stack into the ROM, the matching pops read ROM bytes back as return addresses, and the CPU runs off into whatever they point at.
-- **An emulator** ([tools/cc784_sim.py](tools/cc784_sim.py), on kosarev's Z80 core) with the serial line, the IR receiver, the mains tick, the watchdog and the EEPROM modeled, used as the regression gate for every firmware change.
-- **A patched firmware** ([src/patched/cc784nir.asm](src/patched/cc784nir.asm)): patches that fix the bugs, support a 32 K RAM for a 15 K message store, add over-the-air firmware updates through the serial link into an A/B EEPROM layout with a boot stub, trial boots and rollback, process packets without blanking the display or going deaf, run the serial link at 300 to 2560 baud as the host chooses (the stock DOS software still works at 300), slow the crawl by lengthening the panel scan rather than adding dark time, so the slow speeds are no longer dimmer, decode the remote from the edges of its signal rather than fixed sample points, so keys no longer need a second press (stock drops about half the remote's frames), add a 24-hour clock, set the clock to the second, keep a configuration block (brightness, mute, hold and flash timing, beeper, remote lock) that the host can read and write, take the clock from the add-in board's crystal when there is no mains cycle to count, and scan the wired keypad alongside the IR remote, switching between keypad and serial by itself. All signs can run it, though it may require board conversion depending on what you have ([UPGRADES.md](UPGRADES.md) for the `CC784-4`, [hardware notes §5](HARDWARE.md#5-converting-a-cc784-3a-board-to-a-cc784-4) for the `CC784-3A`); a build variant accommodates the CC710's 59-column panel.
-- **Host tools** for loading messages, setting the clock, querying and dumping the sign, pushing firmware, and encoding remote keystrokes, over a USB serial adapter or an [ESPHome serial proxy](https://esphome.io/components/serial_proxy/).
-- **The remote** decoded from a logic-analyzer capture and the firmware: frame format, key map, carrier.
-- **Hardware capture.** Both controller boards, the `CC784-4` and the earlier `CC784-3A`, are captured in KiCad from the PCB, with the factory bodge wires, the DB9 pinout, the panel connector, the battery path and the timebase explained. An add-in board replaces the NIR's IR receiver board with a more modern TSOP38230, improving range and reliability, and adds a 32.768 kHz clock source for signs on a DC supply ([hardware/CC784NIR_IR+Clock/](hardware/CC784NIR_IR+Clock/)).
+- **An emulator** ([tools/cc784_sim.py](tools/cc784_sim.py), on kosarev's Z80 core), used as the regression gate for every firmware change. It models:
+  - the serial line
+  - the IR receiver
+  - the mains tick
+  - the watchdog
+  - the EEPROM
+- **A patched firmware** ([src/patched/cc784nir.asm](src/patched/cc784nir.asm)). All signs can run it, though it may require board conversion depending on what you have ([UPGRADES.md](UPGRADES.md) for the `CC784-4`, [hardware notes §5](HARDWARE.md#5-converting-a-cc784-3a-board-to-a-cc784-4) for the `CC784-3A`); a build variant accommodates the CC710's 59-column panel. Its patches:
+  - fix the bugs
+  - support a 32 K RAM for a 15 K message store
+  - add over-the-air firmware updates through the serial link into an A/B EEPROM layout with a boot stub, trial boots and rollback
+  - process packets without blanking the display or going deaf
+  - run the serial link at 300 to 2560 baud as the host chooses (the stock DOS software still works at 300)
+  - slow the crawl by lengthening the panel scan rather than adding dark time, so the slow speeds are no longer dimmer
+  - decode the remote from the edges of its signal rather than fixed sample points, so keys no longer need a second press (stock drops about half the remote's frames)
+  - add a 24-hour clock
+  - set the clock to the second
+  - keep a configuration block that the host can read and write: brightness, mute, hold and flash timing, beeper, remote lock
+  - take the clock from the [add-in board](hardware/CC784NIR_IR+Clock/)'s crystal when there is no mains cycle to count
+  - scan the wired keypad alongside the IR remote, switching between keypad and serial without cycling power
+- **Host tools**, over a USB serial adapter or an [ESPHome serial proxy](https://esphome.io/components/serial_proxy/), for:
+  - loading messages
+  - setting the clock
+  - querying and dumping the sign
+  - pushing firmware
+  - encoding remote keystrokes
+- **The remote** decoded from a logic-analyzer capture and the firmware:
+  - frame format
+  - key map
+  - carrier
+- **Hardware capture.** Both controller boards, the `CC784-4` and the earlier `CC784-3A`, are captured in KiCad from the PCB. An [add-in board](hardware/CC784NIR_IR+Clock/) replaces the NIR's IR receiver board with a more modern TSOP38230, improving range and reliability, and adds a 32.768 kHz clock source for signs on a DC supply. The captures explain:
+  - the factory bodge wires
+  - the host/keypad connector pinouts (the `CC784-4`'s DB9 and the `CC784-3A`'s 10-pin header)
+  - the LED panel connector
+  - the battery path and the power-fail lockout (the `CC784-3A`'s trips too late, so switching off can corrupt the store)
+  - the timebase
 
 ## Documentation
 
