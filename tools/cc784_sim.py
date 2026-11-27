@@ -1970,7 +1970,7 @@ def cmd_glimmer():
                 continue
             total += 1
             p = [(sl, ph) for sl in (1, -1) for ph in range(8)
-                 if all(d == page[c] & rot(band, ph + sl * k) & 0x7f for k, (c, d) in enumerate(zip(cols, dark)))]
+                 if all(d == page[c] & rot(band, ph + sl * c) & 0x7f for c, d in zip(cols, dark))]
             if p:
                 fits += 1
                 slants.add(p[0][0])

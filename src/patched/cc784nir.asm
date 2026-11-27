@@ -4679,12 +4679,14 @@ glimmer_tick:
         LD A,D
 
 glimmer_col:
-        BIT 7,(HL)              ; a color byte takes no column on the panel
-        JR nz,glimmer_next
         LD C,A
+        BIT 7,(HL)              ; a color byte has no pixels but takes a column
+        JR nz,glimmer_rot
         CPL
         AND (HL)
         LD (HL),A
+
+glimmer_rot:
         LD A,C
         RLCA                    ; a row lower each column to the right
         BIT 7,E
